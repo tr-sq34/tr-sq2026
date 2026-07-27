@@ -23,7 +23,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS:`n              - arn:aws:iam::342998331436:role/GitHubActionsTerraformPlanRole`n              - arn:aws:iam::342998331436:role/GitHubActionsTerraformApplyRole
+              AWS:
+                - arn:aws:iam::342998331436:role/GitHubActionsTerraformPlanRole
+                - arn:aws:iam::342998331436:role/GitHubActionsTerraformApplyRole
             Action: sts:AssumeRole
   CommunityStateAccessRole:
     Type: AWS::IAM::Role
