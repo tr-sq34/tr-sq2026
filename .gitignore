@@ -27,3 +27,9 @@ credentials.*
 Thumbs.db
 .idea/
 .vscode/
+
+# Flutter build artefacts
+.dart_tool/
+.flutter-plugins-dependencies
+build/
+.packages
