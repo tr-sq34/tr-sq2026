@@ -27,8 +27,15 @@ data "archive_file" "email_relay" {
 }
 
 resource "aws_iam_role" "email_relay" {
-  name               = "TurkSquareIdentityEmailRelayRole"
-  assume_role_policy = aws_iam_role.ecs_execution.assume_role_policy
+  name = "TurkSquareIdentityEmailRelayRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "email_relay_logs" {
