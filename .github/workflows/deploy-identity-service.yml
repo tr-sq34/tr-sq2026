@@ -41,8 +41,10 @@ jobs:
 
       - name: Verify private AWS service path
         run: |
+          subnet_id=$(aws ecs describe-services --cluster turksquare-identity --services turksquare-identity --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets[0]' --output text)
+          vpc_id=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[0].VpcId' --output text)
           endpoints=$(aws ec2 describe-vpc-endpoints \
-            --filters 'Name=service-name,Values=com.amazonaws.us-east-1.ecr.api,com.amazonaws.us-east-1.ecr.dkr,com.amazonaws.us-east-1.secretsmanager' \
+            --filters "Name=vpc-id,Values=$vpc_id" 'Name=service-name,Values=com.amazonaws.us-east-1.ecr.api,com.amazonaws.us-east-1.ecr.dkr,com.amazonaws.us-east-1.secretsmanager' \
             --query 'VpcEndpoints[].{service:ServiceName,state:State,privateDns:PrivateDnsEnabled,subnets:SubnetIds}' \
             --output json)
           echo "$endpoints"
