@@ -21,16 +21,7 @@ Mappings:
     '365792980830': { Name: backup }
 
 Resources:
-  GitHubOidcProvider:
-    Type: AWS::IAM::OIDCProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList:
-        - sts.amazonaws.com
-      ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea1
-
-  TerraformPlanRole:
+  TerraformApplyRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Ref RoleName
@@ -41,7 +32,7 @@ Resources:
           - Sid: TrustGitHubActionsEnvironmentOnly
             Effect: Allow
             Principal:
-              Federated: !Ref GitHubOidcProvider
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
