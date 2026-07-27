@@ -6,7 +6,7 @@ variable "vpc_cidr" {
 
 variable "postgres_version" {
   type    = string
-  default = "16.6"
+  default = null
 }
 
 variable "db_instance_class" {
