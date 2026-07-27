@@ -12,6 +12,10 @@ Parameters:
   Branch:
     Type: String
     Default: main
+  StateAccessAccountId:
+    Type: String
+    Default: '626300432889'
+    AllowedPattern: '^[0-9]{12}$'
 
 Resources:
   GitHubOidcProvider:
@@ -43,6 +47,14 @@ Resources:
                 token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${Branch}'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: AllowAssumeScopedTerraformStateRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${StateAccessAccountId}:role/TerraformStateAccess*'
 
 Outputs:
   RoleArn:

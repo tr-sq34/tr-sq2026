@@ -1,0 +1,185 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: TurkSquare per-account Terraform state access roles in the Management account.
+
+Parameters:
+  StateBucketName:
+    Type: String
+    Default: turksquare-terraform-state-626300432889
+  StateLockTableName:
+    Type: String
+    Default: turksquare-terraform-lock
+  StateKmsKeyArn:
+    Type: String
+    Default: arn:aws:kms:us-east-1:626300432889:key/bc05d6ec-8e88-498d-b8ec-2bc18e10fb60
+
+Resources:
+  IdentityStateAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TerraformStateAccessIdentity
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::342998331436:role/GitHubActionsTerraformPlanRole
+            Action: sts:AssumeRole
+  CommunityStateAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TerraformStateAccessCommunity
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::936706105958:role/GitHubActionsTerraformPlanRole
+            Action: sts:AssumeRole
+  VaultStateAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TerraformStateAccessVault
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::800554367992:role/GitHubActionsTerraformPlanRole
+            Action: sts:AssumeRole
+  BackupStateAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TerraformStateAccessBackup
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::365792980830:role/GitHubActionsTerraformPlanRole
+            Action: sts:AssumeRole
+
+  IdentityStatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: TerraformStateAccessIdentity
+      Roles: [!Ref IdentityStateAccessRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListOnlyIdentityStatePrefix
+            Effect: Allow
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
+            Condition:
+              StringLike:
+                s3:prefix: identity/*
+          - Sid: ReadWriteOnlyIdentityStateObjects
+            Effect: Allow
+            Action:
+              - s3:DeleteObject
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}/identity/*'
+          - Sid: LockState
+            Effect: Allow
+            Action:
+              - dynamodb:DeleteItem
+              - dynamodb:DescribeTable
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+            Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StateLockTableName}'
+          - Sid: UseStateKey
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey
+            Resource: !Ref StateKmsKeyArn
+  CommunityStatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: TerraformStateAccessCommunity
+      Roles: [!Ref CommunityStateAccessRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListOnlyCommunityStatePrefix
+            Effect: Allow
+            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
+            Condition: { StringLike: { s3:prefix: community/* } }
+          - Sid: ReadWriteOnlyCommunityStateObjects
+            Effect: Allow
+            Action: [s3:DeleteObject, s3:GetObject, s3:PutObject]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}/community/*'
+          - Sid: LockState
+            Effect: Allow
+            Action: [dynamodb:DeleteItem, dynamodb:DescribeTable, dynamodb:GetItem, dynamodb:PutItem]
+            Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StateLockTableName}'
+          - Sid: UseStateKey
+            Effect: Allow
+            Action: [kms:Decrypt, kms:DescribeKey, kms:Encrypt, kms:GenerateDataKey]
+            Resource: !Ref StateKmsKeyArn
+  VaultStatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: TerraformStateAccessVault
+      Roles: [!Ref VaultStateAccessRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListOnlyVaultStatePrefix
+            Effect: Allow
+            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
+            Condition: { StringLike: { s3:prefix: vault/* } }
+          - Sid: ReadWriteOnlyVaultStateObjects
+            Effect: Allow
+            Action: [s3:DeleteObject, s3:GetObject, s3:PutObject]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}/vault/*'
+          - Sid: LockState
+            Effect: Allow
+            Action: [dynamodb:DeleteItem, dynamodb:DescribeTable, dynamodb:GetItem, dynamodb:PutItem]
+            Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StateLockTableName}'
+          - Sid: UseStateKey
+            Effect: Allow
+            Action: [kms:Decrypt, kms:DescribeKey, kms:Encrypt, kms:GenerateDataKey]
+            Resource: !Ref StateKmsKeyArn
+  BackupStatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: TerraformStateAccessBackup
+      Roles: [!Ref BackupStateAccessRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListOnlyBackupStatePrefix
+            Effect: Allow
+            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
+            Condition: { StringLike: { s3:prefix: backup/* } }
+          - Sid: ReadWriteOnlyBackupStateObjects
+            Effect: Allow
+            Action: [s3:DeleteObject, s3:GetObject, s3:PutObject]
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}/backup/*'
+          - Sid: LockState
+            Effect: Allow
+            Action: [dynamodb:DeleteItem, dynamodb:DescribeTable, dynamodb:GetItem, dynamodb:PutItem]
+            Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StateLockTableName}'
+          - Sid: UseStateKey
+            Effect: Allow
+            Action: [kms:Decrypt, kms:DescribeKey, kms:Encrypt, kms:GenerateDataKey]
+            Resource: !Ref StateKmsKeyArn
+
+Outputs:
+  IdentityStateRoleArn: { Value: !GetAtt IdentityStateAccessRole.Arn }
+  CommunityStateRoleArn: { Value: !GetAtt CommunityStateAccessRole.Arn }
+  VaultStateRoleArn: { Value: !GetAtt VaultStateAccessRole.Arn }
+  BackupStateRoleArn: { Value: !GetAtt BackupStateAccessRole.Arn }
