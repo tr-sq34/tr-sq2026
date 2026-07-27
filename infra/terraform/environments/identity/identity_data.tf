@@ -81,3 +81,22 @@ output "identity_database_endpoint" {
 output "identity_service_config_secret_arn" {
   value = aws_secretsmanager_secret.identity_service_config.arn
 }
+
+resource "random_password" "identity_jwt_secret" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret_version" "identity_service_config" {
+  secret_id = aws_secretsmanager_secret.identity_service_config.id
+  secret_string = jsonencode({
+    JWT_SECRET           = random_password.identity_jwt_secret.result
+    JWT_ISSUER           = "https://api.turksquare.com"
+    JWT_AUDIENCE         = "turksquare-mobile"
+    WEBAUTHN_RP_ID       = "turksquare.com"
+    WEBAUTHN_ORIGIN      = "https://turksquare.com"
+    EMAIL_FROM           = "TurkSquare <noreply@notify.turksquare.com>"
+    AUTH_ACTION_BASE_URL = "https://turksquare.com/auth/action"
+    PWNED_PASSWORDS_MODE = "required"
+  })
+}

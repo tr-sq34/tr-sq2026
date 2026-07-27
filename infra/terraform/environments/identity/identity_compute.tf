@@ -112,7 +112,7 @@ resource "aws_iam_role_policy" "ecs_execution_runtime_secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.identity_service_config.arn]
+      Resource = [aws_secretsmanager_secret.identity_service_config.arn, aws_db_instance.identity.master_user_secret[0].secret_arn]
       }, {
       Effect   = "Allow"
       Action   = ["kms:Decrypt"]
@@ -221,11 +221,24 @@ resource "aws_ecs_task_definition" "identity" {
     essential              = true
     readonlyRootFilesystem = true
     portMappings           = [{ containerPort = 8080, protocol = "tcp" }]
-    environment            = [{ name = "NODE_ENV", value = "production" }, { name = "PORT", value = "8080" }, { name = "EMAIL_RELAY_FUNCTION_NAME", value = aws_lambda_function.email_relay.function_name }]
-    secrets = [
-      for key in ["DATABASE_URL", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE"] :
-      { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
+    environment = [
+      { name = "NODE_ENV", value = "production" },
+      { name = "PORT", value = "8080" },
+      { name = "DATABASE_NAME", value = "identity_db" },
+      { name = "EMAIL_RELAY_FUNCTION_NAME", value = aws_lambda_function.email_relay.function_name },
     ]
+    secrets = concat(
+      [
+        for key in ["JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE"] :
+        { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
+      ],
+      [
+        { name = "DATABASE_HOST", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:host::" },
+        { name = "DATABASE_PORT", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:port::" },
+        { name = "DATABASE_USER", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:username::" },
+        { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:password::" },
+      ],
+    )
     logConfiguration = {
       logDriver = "awslogs"
       options = {
