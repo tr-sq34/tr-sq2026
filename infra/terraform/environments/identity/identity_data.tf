@@ -52,7 +52,7 @@ resource "aws_db_instance" "identity" {
   storage_type                    = "gp3"
   storage_encrypted               = true
   kms_key_id                      = aws_kms_key.identity.arn
-  db_name                         = "identity"
+  db_name                         = "identity_db"
   username                        = "identity_admin"
   manage_master_user_password     = true
   multi_az                        = true
