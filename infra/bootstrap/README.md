@@ -24,7 +24,7 @@ Create a CloudFormation StackSet from `github-oidc-plan-role.yaml` in the Manage
 - Verification Vault: `800554367992`
 - Backup/Security Log: `365792980830`
 
-Use the default `GitHubRepository` value only if the GitHub Actions workflow runs from `tr-sq34/tr-sq2026`. The role is intentionally read-only and maps each approved workload account to exactly one GitHub Environment (`identity`, `community`, `vault`, or `backup`). Each GitHub Environment is restricted to `main`, so the role remains main-branch scoped without accepting branch-subject tokens. Do not attach `AdministratorAccess` and do not use permanent AWS access keys.
+The role is intentionally read-only and maps each approved workload account to exactly one GitHub Environment (`identity`, `community`, `vault`, or `backup`). `GitHubOidcSubjectPrefix` uses the canonical owner and repository IDs emitted by GitHub OIDC; update it only after an explicit OIDC claim diagnostic if repository ownership changes. Each GitHub Environment is restricted to `main`, so the role remains main-branch scoped without accepting branch-subject tokens. Do not attach `AdministratorAccess` and do not use permanent AWS access keys.
 
 After StackSet completion, save each non-secret role ARN in the matching protected GitHub Environment (`identity`, `community`, `vault`, `backup`). Apply roles are a separate, reviewed change after least-privilege policies are defined.
 

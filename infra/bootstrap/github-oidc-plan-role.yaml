@@ -5,10 +5,9 @@ Parameters:
   RoleName:
     Type: String
     Default: GitHubActionsTerraformPlanRole
-  GitHubRepository:
+  GitHubOidcSubjectPrefix:
     Type: String
-    Default: tr-sq34/tr-sq2026
-    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    Default: repo:tr-sq34@309652758/tr-sq2026@1313519494
   StateAccessAccountId:
     Type: String
     Default: '626300432889'
@@ -48,8 +47,9 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:sub: !Sub
-                  - 'repo:${GitHubRepository}:environment:${EnvironmentName}'
+                  - '${SubjectPrefix}:environment:${EnvironmentName}'
                   - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+                    SubjectPrefix: !Ref GitHubOidcSubjectPrefix
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
       Policies:
