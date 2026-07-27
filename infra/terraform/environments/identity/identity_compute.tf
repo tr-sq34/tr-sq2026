@@ -107,6 +107,10 @@ resource "aws_ecs_task_definition" "identity" {
 }
 
 resource "aws_ecs_service" "identity" {
+  # ECS refuses to attach a target group until a listener associates it with
+  # the ALB.  This explicit dependency also prevents a first-apply race.
+  depends_on = [aws_lb_listener.https]
+
   name            = "turksquare-identity"
   cluster         = aws_ecs_cluster.identity.id
   task_definition = aws_ecs_task_definition.identity.arn
