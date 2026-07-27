@@ -70,11 +70,13 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: GetStateBucketLocation
+            Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
           - Sid: ListOnlyIdentityStatePrefix
             Effect: Allow
-            Action:
-              - s3:GetBucketLocation
-              - s3:ListBucket
+            Action: s3:ListBucket
             Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
             Condition:
               StringLike:
@@ -110,9 +112,13 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: GetStateBucketLocation
+            Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
           - Sid: ListOnlyCommunityStatePrefix
             Effect: Allow
-            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Action: s3:ListBucket
             Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
             Condition: { StringLike: { s3:prefix: community/* } }
           - Sid: ReadWriteOnlyCommunityStateObjects
@@ -135,9 +141,13 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: GetStateBucketLocation
+            Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
           - Sid: ListOnlyVaultStatePrefix
             Effect: Allow
-            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Action: s3:ListBucket
             Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
             Condition: { StringLike: { s3:prefix: vault/* } }
           - Sid: ReadWriteOnlyVaultStateObjects
@@ -160,9 +170,13 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: GetStateBucketLocation
+            Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
           - Sid: ListOnlyBackupStatePrefix
             Effect: Allow
-            Action: [s3:GetBucketLocation, s3:ListBucket]
+            Action: s3:ListBucket
             Resource: !Sub 'arn:${AWS::Partition}:s3:::${StateBucketName}'
             Condition: { StringLike: { s3:prefix: backup/* } }
           - Sid: ReadWriteOnlyBackupStateObjects
