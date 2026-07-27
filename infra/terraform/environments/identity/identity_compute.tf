@@ -66,7 +66,7 @@ resource "aws_security_group_rule" "endpoint_https_from_service" {
 }
 
 resource "aws_vpc_endpoint" "identity_interface" {
-  for_each            = toset(["ecr.api", "ecr.dkr", "email", "logs", "secretsmanager", "sts"])
+  for_each            = toset(["ecr.api", "ecr.dkr", "email", "logs", "secretsmanager", "sqs", "sts"])
   vpc_id              = aws_vpc.identity.id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
   vpc_endpoint_type   = "Interface"
@@ -181,6 +181,10 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
       Action   = ["kms:Decrypt"]
       Resource = [aws_kms_key.identity.arn]
       }, {
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.identity_email.arn
+      }, {
       Effect    = "Allow"
       Action    = ["ses:SendEmail"]
       Resource  = ["arn:aws:ses:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:identity/${var.email_domain}"]
@@ -205,7 +209,7 @@ resource "aws_ecs_task_definition" "identity" {
     essential              = true
     readonlyRootFilesystem = true
     portMappings           = [{ containerPort = 8080, protocol = "tcp" }]
-    environment            = [{ name = "NODE_ENV", value = "production" }, { name = "PORT", value = "8080" }]
+    environment            = [{ name = "NODE_ENV", value = "production" }, { name = "PORT", value = "8080" }, { name = "EMAIL_QUEUE_URL", value = aws_sqs_queue.identity_email.url }]
     secrets = [
       for key in ["DATABASE_URL", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE"] :
       { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
