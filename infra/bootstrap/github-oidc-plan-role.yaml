@@ -9,9 +9,10 @@ Parameters:
     Type: String
     Default: tr-sq34/tr-sq2026
     AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-  Branch:
+  GitHubEnvironment:
     Type: String
-    Default: main
+    Default: identity
+    AllowedValues: [identity, community, vault, backup]
   StateAccessAccountId:
     Type: String
     Default: '626300432889'
@@ -35,7 +36,7 @@ Resources:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: TrustGitHubActionsMainOnly
+          - Sid: TrustGitHubActionsEnvironmentOnly
             Effect: Allow
             Principal:
               Federated: !Ref GitHubOidcProvider
@@ -43,8 +44,8 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${Branch}'
+              StringEquals:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:${GitHubEnvironment}'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
       Policies:

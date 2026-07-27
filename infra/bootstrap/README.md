@@ -24,7 +24,7 @@ Create a CloudFormation StackSet from `github-oidc-plan-role.yaml` in the Manage
 - Verification Vault: `800554367992`
 - Backup/Security Log: `365792980830`
 
-Use the default `GitHubRepository` value only if the GitHub Actions workflow runs from `tr-sq34/tr-sq2026`. The role is intentionally read-only and accepts GitHub OIDC tokens for `main` only. Do not attach `AdministratorAccess` and do not use permanent AWS access keys.
+Use the default `GitHubRepository` value only if the GitHub Actions workflow runs from `tr-sq34/tr-sq2026`. The role is intentionally read-only and accepts a single GitHub Environment subject. Create one stack instance per account with the matching `GitHubEnvironment` parameter: `identity`, `community`, `vault`, or `backup`. Each GitHub Environment is restricted to `main`, so the role remains main-branch scoped without accepting branch-subject tokens. Do not attach `AdministratorAccess` and do not use permanent AWS access keys.
 
 After StackSet completion, save each non-secret role ARN in the matching protected GitHub Environment (`identity`, `community`, `vault`, `backup`). Apply roles are a separate, reviewed change after least-privilege policies are defined.
 
