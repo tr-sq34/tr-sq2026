@@ -76,11 +76,23 @@ resource "aws_lambda_function" "email_relay" {
   depends_on = [aws_iam_role_policy_attachment.email_relay_logs, aws_cloudwatch_log_group.email_relay]
 }
 
+// Bump this deliberately when the SQS poller must be recreated after a
+// permissions/encryption change.  An event-source mapping owns long-lived
+// polling workers, so in-place IAM changes alone are not a reliable reset.
+resource "terraform_data" "email_relay_mapping_revision" {
+  input = "2026-07-27-kms-poller-reset-v1"
+}
+
 resource "aws_lambda_event_source_mapping" "email_relay" {
   event_source_arn = aws_sqs_queue.identity_email.arn
   function_name    = aws_lambda_function.email_relay.arn
-  batch_size       = 2
+  batch_size       = 1
+  enabled          = true
   depends_on       = [aws_kms_grant.email_relay_queue_decrypt]
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.email_relay_mapping_revision]
+  }
 }
 
 output "resend_api_key_secret_arn" { value = aws_secretsmanager_secret.resend_api_key.arn }
