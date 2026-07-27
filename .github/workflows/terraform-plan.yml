@@ -1,0 +1,57 @@
+name: Terraform plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target AWS account environment
+        required: true
+        type: choice
+        options: [identity, community, vault, backup]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.target }}
+    concurrency:
+      group: terraform-plan-${{ inputs.target }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.15.8'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: turksquare-terraform-plan-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Format check
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Initialize backend
+        working-directory: infra/terraform/environments/${{ inputs.target }}
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: Validate configuration
+        working-directory: infra/terraform/environments/${{ inputs.target }}
+        run: terraform validate -no-color
+
+      - name: Create plan
+        working-directory: infra/terraform/environments/${{ inputs.target }}
+        run: |
+          terraform plan -input=false -lock-timeout=5m -out=tfplan
+          terraform show -no-color tfplan >> "$GITHUB_STEP_SUMMARY"
