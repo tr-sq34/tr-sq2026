@@ -9,14 +9,17 @@ Parameters:
     Type: String
     Default: tr-sq34/tr-sq2026
     AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-  GitHubEnvironment:
-    Type: String
-    Default: identity
-    AllowedValues: [identity, community, vault, backup]
   StateAccessAccountId:
     Type: String
     Default: '626300432889'
     AllowedPattern: '^[0-9]{12}$'
+
+Mappings:
+  AccountEnvironment:
+    '342998331436': { Name: identity }
+    '936706105958': { Name: community }
+    '800554367992': { Name: vault }
+    '365792980830': { Name: backup }
 
 Resources:
   GitHubOidcProvider:
@@ -44,8 +47,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringEquals:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:environment:${GitHubEnvironment}'
+                token.actions.githubusercontent.com:sub: !Sub
+                  - 'repo:${GitHubRepository}:environment:${EnvironmentName}'
+                  - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
       Policies:
