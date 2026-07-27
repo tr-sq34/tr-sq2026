@@ -13,11 +13,17 @@ async function resendKey() {
 
 export const handler = async (event) => {
   const key = await resendKey();
-  for (const record of event.Records ?? []) {
-    const message = JSON.parse(record.body);
+  const messages = event.Records
+    ? event.Records.map((record) => JSON.parse(record.body))
+    : [event];
+  for (const message of messages) {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': message.idempotencyKey,
+      },
       body: JSON.stringify({
         from: message.from,
         to: [message.recipient],

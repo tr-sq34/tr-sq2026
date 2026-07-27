@@ -3,7 +3,7 @@ import argon2 from 'argon2';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { jwtVerify, SignJWT } from 'jose';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
@@ -24,8 +24,8 @@ const rpID = required('WEBAUTHN_RP_ID');
 const expectedOrigin = required('WEBAUTHN_ORIGIN');
 const emailFrom = required('EMAIL_FROM');
 const authActionBaseUrl = required('AUTH_ACTION_BASE_URL');
-const emailQueueUrl = required('EMAIL_QUEUE_URL');
-const emailQueue = new SQSClient({});
+const emailRelayFunctionName = required('EMAIL_RELAY_FUNCTION_NAME');
+const emailRelay = new LambdaClient({});
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
 
 const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128) });
@@ -134,17 +134,17 @@ async function deliverActionLink(email: string, kind: 'verify_email' | 'reset_pa
     ? 'E-posta adresinizi doğrulamak için bağlantıyı açın.'
     : 'Parolanızı sıfırlamak için bağlantıyı açın.';
   try {
-    await emailQueue.send(new SendMessageCommand({
-      QueueUrl: emailQueueUrl,
-      MessageBody: JSON.stringify({
+    await emailRelay.send(new InvokeCommand({
+      FunctionName: emailRelayFunctionName,
+      InvocationType: 'Event',
+      Payload: new TextEncoder().encode(JSON.stringify({
         recipient: email,
         from: emailFrom,
         subject,
         text: `${instruction}\n\n${url.toString()}\n\nBu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
         category: kind,
-      }),
-      MessageGroupId: email,
-      MessageDeduplicationId: `${kind}:${hashOpaque(token)}`,
+        idempotencyKey: `${kind}:${hashOpaque(token)}`,
+      })),
     }));
   } catch (error) {
     // Tokens and recipient addresses must never be added to application logs.
