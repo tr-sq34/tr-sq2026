@@ -225,6 +225,8 @@ resource "aws_ecs_task_definition" "identity" {
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = "8080" },
       { name = "DATABASE_NAME", value = "identity_db" },
+      { name = "DATABASE_HOST", value = aws_db_instance.identity.address },
+      { name = "DATABASE_PORT", value = tostring(aws_db_instance.identity.port) },
       { name = "EMAIL_RELAY_FUNCTION_NAME", value = aws_lambda_function.email_relay.function_name },
     ]
     secrets = concat(
@@ -233,8 +235,6 @@ resource "aws_ecs_task_definition" "identity" {
         { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
       ],
       [
-        { name = "DATABASE_HOST", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:host::" },
-        { name = "DATABASE_PORT", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:port::" },
         { name = "DATABASE_USER", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:username::" },
         { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.identity.master_user_secret[0].secret_arn}:password::" },
       ],
