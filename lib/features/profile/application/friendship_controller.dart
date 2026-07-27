@@ -1,0 +1,5 @@
+import 'package:flutter/foundation.dart';
+import '../domain/entities/friendship.dart';
+import '../domain/repositories/friendship_repository.dart';
+
+class FriendshipController extends ChangeNotifier { FriendshipController({required FriendshipRepository repository}):_repository=repository; final FriendshipRepository _repository; final Map<String,FriendshipStatus> _statuses={}; FriendshipStatus statusOf(String userId)=>_statuses[userId]??FriendshipStatus.none; Future<void> load(String id)async{_statuses[id]=await _repository.getStatus(id);notifyListeners();} Future<void> send(String id)async{await _repository.sendRequest(id);_statuses[id]=FriendshipStatus.pendingOutgoing;notifyListeners();} Future<void> respond(String id,bool accepted)async{await _repository.respond(id,accepted);_statuses[id]=accepted?FriendshipStatus.friends:FriendshipStatus.none;notifyListeners();} Future<void> block(String id)async{await _repository.block(id);_statuses[id]=FriendshipStatus.blocked;notifyListeners();} }
