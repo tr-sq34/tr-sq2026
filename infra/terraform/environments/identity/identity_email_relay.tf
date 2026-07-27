@@ -43,6 +43,11 @@ resource "aws_iam_role_policy_attachment" "email_relay_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_cloudwatch_log_group" "email_relay" {
+  name              = "/aws/lambda/turksquare-identity-email-relay"
+  retention_in_days = 90
+}
+
 resource "aws_iam_role_policy" "email_relay" {
   name   = "consume-identity-email-queue"
   role   = aws_iam_role.email_relay.id
@@ -58,6 +63,7 @@ resource "aws_lambda_function" "email_relay" {
   source_code_hash = data.archive_file.email_relay.output_base64sha256
   timeout          = 30
   environment { variables = { RESEND_API_KEY_SECRET_ARN = aws_secretsmanager_secret.resend_api_key.arn } }
+  depends_on = [aws_iam_role_policy_attachment.email_relay_logs, aws_cloudwatch_log_group.email_relay]
 }
 
 resource "aws_lambda_event_source_mapping" "email_relay" {

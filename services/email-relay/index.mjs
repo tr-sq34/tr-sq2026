@@ -27,5 +27,6 @@ export const handler = async (event) => {
       }),
     });
     if (!response.ok) throw new Error(`Resend delivery failed with HTTP ${response.status}`);
+    console.info(JSON.stringify({ event: 'transactional_email_accepted', category: message.category, status: response.status }));
   }
 };
