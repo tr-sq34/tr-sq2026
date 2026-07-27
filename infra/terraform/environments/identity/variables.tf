@@ -13,3 +13,7 @@ variable "db_instance_class" {
   type    = string
   default = "db.t4g.medium"
 }
+variable "api_domain_name" {
+  type    = string
+  default = "api.turksquare.com"
+}
