@@ -54,4 +54,4 @@ Resources:
 
 Outputs:
   RoleArn:
-    Value: !GetAtt TerraformPlanRole.Arn
+    Value: !GetAtt TerraformApplyRole.Arn
