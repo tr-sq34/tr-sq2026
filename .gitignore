@@ -1,0 +1,30 @@
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Terraform local state and execution artefacts
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Certificates, private keys, and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials
+credentials.*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
