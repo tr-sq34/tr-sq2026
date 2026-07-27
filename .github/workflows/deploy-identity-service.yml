@@ -1,0 +1,100 @@
+name: Deploy Identity service
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DEPLOY_IDENTITY_PRODUCTION to continue'
+        required: true
+        type: string
+      start_service:
+        description: 'Start one production task after a successful migration'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: identity-production-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirmation == 'DEPLOY_IDENTITY_PRODUCTION'
+    runs-on: ubuntu-24.04
+    environment: identity-production
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_IDENTITY_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-identity-release-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push immutable image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: turksquare/identity-service
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          image="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build --pull --tag "$image" services/auth-service
+          docker push "$image"
+          echo "uri=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Read current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition turksquare-identity-service \
+            --query taskDefinition > task-definition.json
+
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: task_definition
+        with:
+          task-definition: task-definition.json
+          container-name: identity
+          image: ${{ steps.image.outputs.uri }}
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        id: deploy_task_definition
+        with:
+          task-definition: ${{ steps.task_definition.outputs.task-definition }}
+          service: turksquare-identity
+          cluster: turksquare-identity
+          wait-for-service-stability: false
+
+      - name: Run schema migrations exactly once
+        id: migrate
+        run: |
+          network=$(aws ecs describe-services --cluster turksquare-identity --services turksquare-identity --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
+          subnets=$(jq -r '.subnets | join(",")' <<< "$network")
+          security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
+          task_arn=$(aws ecs run-task \
+            --cluster turksquare-identity \
+            --launch-type FARGATE \
+            --task-definition '${{ steps.deploy_task_definition.outputs.task-definition-arn }}' \
+            --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"identity","command":["node","dist/migrate.js"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          test -n "$task_arn" && test "$task_arn" != "None"
+          aws ecs wait tasks-stopped --cluster turksquare-identity --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks --cluster turksquare-identity --tasks "$task_arn" --query 'tasks[0].containers[?name==`identity`].exitCode | [0]' --output text)
+          test "$exit_code" = "0"
+
+      - name: Start service only after migration success
+        if: inputs.start_service
+        run: |
+          aws ecs update-service --cluster turksquare-identity --service turksquare-identity --desired-count 1 --force-new-deployment
+          aws ecs wait services-stable --cluster turksquare-identity --services turksquare-identity
