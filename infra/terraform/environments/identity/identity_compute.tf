@@ -40,6 +40,16 @@ resource "aws_security_group_rule" "database_from_identity_service" {
   protocol                 = "tcp"
 }
 
+resource "aws_security_group_rule" "identity_service_from_alb" {
+  type                     = "ingress"
+  security_group_id        = aws_security_group.identity_service.id
+  source_security_group_id = aws_security_group.identity_alb.id
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  description              = "Only the Identity ALB may reach application tasks"
+}
+
 resource "aws_security_group" "endpoints" {
   name        = "turksquare-identity-endpoints"
   description = "AWS PrivateLink endpoints for identity tasks"
@@ -82,9 +92,79 @@ resource "aws_iam_role_policy_attachment" "ecs_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role_policy" "ecs_execution_runtime_secrets" {
+  name = "read-identity-runtime-secrets"
+  role = aws_iam_role.ecs_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [aws_secretsmanager_secret.identity_service_config.arn]
+      }, {
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = [aws_kms_key.identity.arn]
+    }]
+  })
+}
+
 resource "aws_iam_role" "identity_task" {
   name               = "TurkSquareIdentityTaskRole"
   assume_role_policy = aws_iam_role.ecs_execution.assume_role_policy
+}
+
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+resource "aws_iam_role" "github_identity_deploy" {
+  name                 = "GitHubActionsIdentityDeployRole"
+  max_session_duration = 3600
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:tr-sq34@309652758/tr-sq2026@1313519494:environment:identity-production"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "github_identity_deploy" {
+  name = "deploy-identity-container-only"
+  role = aws_iam_role.github_identity_deploy.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "PushIdentityImage"
+      Effect   = "Allow"
+      Action   = ["ecr:GetAuthorizationToken"]
+      Resource = "*"
+      }, {
+      Sid      = "ManageIdentityRepositoryImages"
+      Effect   = "Allow"
+      Action   = ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"]
+      Resource = aws_ecr_repository.identity.arn
+      }, {
+      Sid      = "DeployIdentityService"
+      Effect   = "Allow"
+      Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:UpdateService"]
+      Resource = "*"
+      }, {
+      Sid       = "PassOnlyIdentityTaskRoles"
+      Effect    = "Allow"
+      Action    = ["iam:PassRole"]
+      Resource  = [aws_iam_role.ecs_execution.arn, aws_iam_role.identity_task.arn]
+      Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
+    }]
+  })
 }
 
 resource "aws_iam_role_policy" "identity_task_secrets" {
@@ -103,7 +183,26 @@ resource "aws_ecs_task_definition" "identity" {
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.identity_task.arn
-  container_definitions    = jsonencode([{ name = "identity", image = "${aws_ecr_repository.identity.repository_url}:bootstrap", essential = true, portMappings = [{ containerPort = 8080, protocol = "tcp" }], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.identity.name, awslogs-region = data.aws_region.current.name, awslogs-stream-prefix = "identity" } } }])
+  container_definitions = jsonencode([{
+    name                   = "identity"
+    image                  = "${aws_ecr_repository.identity.repository_url}:bootstrap"
+    essential              = true
+    readonlyRootFilesystem = true
+    portMappings           = [{ containerPort = 8080, protocol = "tcp" }]
+    environment            = [{ name = "NODE_ENV", value = "production" }, { name = "PORT", value = "8080" }]
+    secrets = [
+      for key in ["DATABASE_URL", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_DELIVERY_WEBHOOK", "PWNED_PASSWORDS_MODE"] :
+      { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.identity.name
+        awslogs-region        = data.aws_region.current.name
+        awslogs-stream-prefix = "identity"
+      }
+    }
+  }])
 }
 
 resource "aws_ecs_service" "identity" {
@@ -111,11 +210,16 @@ resource "aws_ecs_service" "identity" {
   # the ALB.  This explicit dependency also prevents a first-apply race.
   depends_on = [aws_lb_listener.https]
 
-  name            = "turksquare-identity"
-  cluster         = aws_ecs_cluster.identity.id
-  task_definition = aws_ecs_task_definition.identity.arn
-  desired_count   = 0
-  launch_type     = "FARGATE"
+  name                              = "turksquare-identity"
+  cluster                           = aws_ecs_cluster.identity.id
+  task_definition                   = aws_ecs_task_definition.identity.arn
+  desired_count                     = 0
+  launch_type                       = "FARGATE"
+  health_check_grace_period_seconds = 60
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
   load_balancer {
     target_group_arn = aws_lb_target_group.identity.arn
     container_name   = "identity"
@@ -126,4 +230,8 @@ resource "aws_ecs_service" "identity" {
     security_groups  = [aws_security_group.identity_service.id]
     assign_public_ip = false
   }
+}
+
+output "identity_deploy_role_arn" {
+  value = aws_iam_role.github_identity_deploy.arn
 }

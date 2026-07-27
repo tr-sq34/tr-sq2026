@@ -164,6 +164,18 @@ async function consumeWebAuthnChallenge(challenge: string, purpose: 'registratio
 await app.register(helmet, { global: true });
 await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
 
+// This endpoint intentionally discloses no infrastructure details. The ALB
+// uses it to route traffic only to tasks that can reach the Identity database.
+app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => {
+  try {
+    await db.query('SELECT 1');
+    return { status: 'ok' };
+  } catch (error) {
+    app.log.warn({ err: error }, 'Identity health check failed');
+    return reply.code(503).send({ status: 'unavailable' });
+  }
+});
+
 app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = registerSchema.parse(request.body);
   const passwordValidation = await validateNewPassword(input.password, { email: input.email, name: input.name });
@@ -319,3 +331,13 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
 });
 
 await app.listen({ port: Number(process.env.PORT ?? 8080), host: '0.0.0.0' });
+
+const shutdown = async (signal: string) => {
+  app.log.info({ signal }, 'Identity service stopping');
+  await app.close();
+  await db.end();
+  process.exit(0);
+};
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
