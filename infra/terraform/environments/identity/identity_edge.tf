@@ -108,7 +108,10 @@ resource "aws_lb_target_group" "identity" {
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.identity.id
-  health_check { path = "/health" matcher = "200" }
+  health_check {
+    path    = "/health"
+    matcher = "200"
+  }
 }
 
 resource "aws_lb_listener" "https" {
@@ -116,5 +119,8 @@ resource "aws_lb_listener" "https" {
   port              = 443
   protocol          = "HTTPS"
   certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
-  default_action { type = "forward" target_group_arn = aws_lb_target_group.identity.arn }
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.identity.arn
+  }
 }
