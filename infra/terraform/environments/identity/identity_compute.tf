@@ -23,7 +23,6 @@ resource "aws_ecr_repository" "identity" {
 resource "aws_cloudwatch_log_group" "identity" {
   name              = "/turksquare/identity-service"
   retention_in_days = 90
-  kms_key_id        = aws_kms_key.identity.arn
 }
 
 resource "aws_security_group" "identity_service" {
