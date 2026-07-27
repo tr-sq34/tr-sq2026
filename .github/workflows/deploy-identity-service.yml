@@ -43,9 +43,10 @@ jobs:
         run: |
           subnet_id=$(aws ecs describe-services --cluster turksquare-identity --services turksquare-identity --query 'services[0].networkConfiguration.awsvpcConfiguration.subnets[0]' --output text)
           vpc_id=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query 'Subnets[0].VpcId' --output text)
+          aws ec2 describe-vpcs --vpc-ids "$vpc_id" --query 'Vpcs[0].{dnsSupport:EnableDnsSupport.Value,dnsHostnames:EnableDnsHostnames.Value,dhcpOptions:DhcpOptionsId}' --output json
           endpoints=$(aws ec2 describe-vpc-endpoints \
             --filters "Name=vpc-id,Values=$vpc_id" 'Name=service-name,Values=com.amazonaws.us-east-1.ecr.api,com.amazonaws.us-east-1.ecr.dkr,com.amazonaws.us-east-1.secretsmanager' \
-            --query 'VpcEndpoints[].{service:ServiceName,state:State,privateDns:PrivateDnsEnabled,subnets:SubnetIds}' \
+            --query 'VpcEndpoints[].{service:ServiceName,state:State,privateDns:PrivateDnsEnabled,dns:DnsEntries,subnets:SubnetIds}' \
             --output json)
           echo "$endpoints"
           test "$(jq '[.[] | select(.state == "available" and .privateDns == true)] | length' <<< "$endpoints")" = "3"
