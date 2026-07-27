@@ -9,6 +9,7 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
 import pg from 'pg';
 import { z } from 'zod';
+import { databaseConnectionString } from './database.js';
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -16,7 +17,7 @@ const required = (name: string) => {
   return value;
 };
 
-const db = new pg.Pool({ connectionString: required('DATABASE_URL'), max: 10, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : undefined });
+const db = new pg.Pool({ connectionString: databaseConnectionString(), max: 10, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : undefined });
 const jwtKey = new TextEncoder().encode(required('JWT_SECRET'));
 const issuer = required('JWT_ISSUER');
 const audience = required('JWT_AUDIENCE');
