@@ -1,0 +1,34 @@
+name: Identity service CI
+
+on:
+  pull_request:
+    paths:
+      - "services/auth-service/**"
+      - ".github/workflows/identity-service-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/auth-service/**"
+      - ".github/workflows/identity-service-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: services/auth-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/auth-service/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - name: Build non-root runtime image
+        run: docker build --tag turksquare/identity-service:ci .
