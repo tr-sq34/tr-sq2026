@@ -1,0 +1,29 @@
+name: Apply Identity Terraform
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type APPLY_IDENTITY_PRODUCTION to continue'
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  apply:
+    if: inputs.confirmation == 'APPLY_IDENTITY_PRODUCTION'
+    runs-on: ubuntu-24.04
+    environment: identity-production
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/identity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: us-east-1
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform plan -out=tfplan
+      - run: terraform apply -auto-approve tfplan
