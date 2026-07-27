@@ -54,6 +54,16 @@ resource "aws_iam_role_policy" "email_relay" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.identity_email.arn }, { Effect = "Allow", Action = ["secretsmanager:GetSecretValue", "kms:Decrypt"], Resource = [aws_secretsmanager_secret.resend_api_key.arn, aws_kms_key.identity.arn] }] })
 }
 
+# The event-source poller must decrypt messages before it can invoke the
+# function. An explicit KMS grant avoids relying on eventual IAM policy
+# propagation for this cross-service path.
+resource "aws_kms_grant" "email_relay_queue_decrypt" {
+  name              = "identity-email-relay-queue-decrypt"
+  key_id            = aws_kms_key.identity.key_id
+  grantee_principal = aws_iam_role.email_relay.arn
+  operations        = ["Decrypt"]
+}
+
 resource "aws_lambda_function" "email_relay" {
   function_name    = "turksquare-identity-email-relay"
   role             = aws_iam_role.email_relay.arn
@@ -69,7 +79,8 @@ resource "aws_lambda_function" "email_relay" {
 resource "aws_lambda_event_source_mapping" "email_relay" {
   event_source_arn = aws_sqs_queue.identity_email.arn
   function_name    = aws_lambda_function.email_relay.arn
-  batch_size       = 1
+  batch_size       = 2
+  depends_on       = [aws_kms_grant.email_relay_queue_decrypt]
 }
 
 output "resend_api_key_secret_arn" { value = aws_secretsmanager_secret.resend_api_key.arn }
