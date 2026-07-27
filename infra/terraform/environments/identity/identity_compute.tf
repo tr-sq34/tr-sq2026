@@ -65,6 +65,18 @@ resource "aws_security_group_rule" "endpoint_https_from_service" {
   protocol                 = "tcp"
 }
 
+# Keep task egress explicit: application containers can reach AWS control-plane
+# services only through the PrivateLink endpoint security group on HTTPS.
+resource "aws_security_group_rule" "identity_service_https_to_endpoints" {
+  type                     = "egress"
+  security_group_id        = aws_security_group.identity_service.id
+  source_security_group_id = aws_security_group.endpoints.id
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  description              = "HTTPS only to Identity PrivateLink endpoints"
+}
+
 resource "aws_vpc_endpoint" "identity_interface" {
   for_each            = toset(["ecr.api", "ecr.dkr", "email", "lambda", "logs", "secretsmanager", "sts"])
   vpc_id              = aws_vpc.identity.id
@@ -155,7 +167,7 @@ resource "aws_iam_role_policy" "github_identity_deploy" {
       }, {
       Sid      = "DeployIdentityService"
       Effect   = "Allow"
-      Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:UpdateService"]
+      Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:UpdateService", "logs:FilterLogEvents"]
       Resource = "*"
       }, {
       Sid       = "PassOnlyIdentityTaskRoles"
