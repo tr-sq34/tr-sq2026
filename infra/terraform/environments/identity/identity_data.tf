@@ -9,7 +9,7 @@ locals {
 resource "aws_kms_key" "identity" {
   description             = "TurkSquare Identity restricted-data encryption"
   deletion_window_in_days = 30
-  enable_key_rotation     = true
+  enable_key_rotation     = true`r`n  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = "arn:aws:iam::342998331436:root" }, Action = "kms:*", Resource = "*" }, { Effect = "Allow", Principal = { Service = "logs.us-east-1.amazonaws.com" }, Action = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"], Resource = "*", Condition = { ArnLike = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:us-east-1:342998331436:*" } } }] })
 }
 
 resource "aws_kms_alias" "identity" {
