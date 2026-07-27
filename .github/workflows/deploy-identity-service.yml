@@ -78,6 +78,15 @@ jobs:
       - name: Run schema migrations exactly once
         id: migrate
         run: |
+          describe_migration_task() {
+            echo 'Migration task diagnostics:'
+            aws ecs describe-tasks \
+              --cluster turksquare-identity \
+              --tasks "$task_arn" \
+              --query 'tasks[0].{lastStatus:lastStatus,stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[].{name:name,lastStatus:lastStatus,exitCode:exitCode,reason:reason}}' \
+              --output json || true
+            aws logs tail /turksquare/identity-service --since 15m --format short || true
+          }
           network=$(aws ecs describe-services --cluster turksquare-identity --services turksquare-identity --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
           subnets=$(jq -r '.subnets | join(",")' <<< "$network")
           security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
@@ -87,9 +96,13 @@ jobs:
             --task-definition '${{ steps.deploy_task_definition.outputs.task-definition-arn }}' \
             --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" \
             --overrides '{"containerOverrides":[{"name":"identity","command":["node","dist/migrate.js"]}]}' \
-            --query 'tasks[0].taskArn' --output text)
+          --query 'tasks[0].taskArn' --output text)
           test -n "$task_arn" && test "$task_arn" != "None"
-          aws ecs wait tasks-stopped --cluster turksquare-identity --tasks "$task_arn"
+          if ! aws ecs wait tasks-stopped --cluster turksquare-identity --tasks "$task_arn"; then
+            describe_migration_task
+            exit 1
+          fi
+          describe_migration_task
           exit_code=$(aws ecs describe-tasks --cluster turksquare-identity --tasks "$task_arn" --query 'tasks[0].containers[?name==`identity`].exitCode | [0]' --output text)
           test "$exit_code" = "0"
 
