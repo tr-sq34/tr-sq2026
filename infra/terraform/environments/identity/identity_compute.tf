@@ -112,6 +112,7 @@ resource "aws_ecs_service" "identity" {
   task_definition = aws_ecs_task_definition.identity.arn
   desired_count   = 0
   launch_type     = "FARGATE"
+  load_balancer { target_group_arn = aws_lb_target_group.identity.arn container_name = "identity" container_port = 8080 }
   network_configuration {
     subnets          = aws_subnet.identity_private[*].id
     security_groups  = [aws_security_group.identity_service.id]

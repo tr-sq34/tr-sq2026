@@ -98,3 +98,23 @@ output "api_certificate_dns_validation_records" {
 }
 
 output "identity_alb_dns_name" { value = aws_lb.identity.dns_name }
+resource "aws_acm_certificate_validation" "api" {
+  certificate_arn = aws_acm_certificate.api.arn
+}
+
+resource "aws_lb_target_group" "identity" {
+  name        = "turksquare-identity"
+  port        = 8080
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = aws_vpc.identity.id
+  health_check { path = "/health" matcher = "200" }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.identity.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
+  default_action { type = "forward" target_group_arn = aws_lb_target_group.identity.arn }
+}
