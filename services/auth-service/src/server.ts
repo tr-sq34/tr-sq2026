@@ -3,6 +3,7 @@ import argon2 from 'argon2';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { jwtVerify, SignJWT } from 'jose';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
@@ -21,6 +22,9 @@ const issuer = required('JWT_ISSUER');
 const audience = required('JWT_AUDIENCE');
 const rpID = required('WEBAUTHN_RP_ID');
 const expectedOrigin = required('WEBAUTHN_ORIGIN');
+const emailFrom = required('EMAIL_FROM');
+const authActionBaseUrl = required('AUTH_ACTION_BASE_URL');
+const ses = new SESv2Client({});
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
 
 const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128) });
@@ -119,13 +123,31 @@ async function createActionToken(userId: string, kind: 'verify_email' | 'reset_p
 }
 
 async function deliverActionLink(email: string, kind: 'verify_email' | 'reset_password', token: string) {
-  const endpoint = process.env.EMAIL_DELIVERY_WEBHOOK;
-  if (!endpoint) {
-    if (process.env.NODE_ENV === 'production') throw new Error('EMAIL_DELIVERY_WEBHOOK is required in production');
-    return; // Development must obtain tokens from a test-mail provider, never logs.
+  const url = new URL(authActionBaseUrl);
+  url.searchParams.set('action', kind);
+  url.searchParams.set('token', token);
+  const subject = kind === 'verify_email'
+    ? 'TurkSquare e-posta doğrulaması'
+    : 'TurkSquare parola sıfırlama';
+  const instruction = kind === 'verify_email'
+    ? 'E-posta adresinizi doğrulamak için bağlantıyı açın.'
+    : 'Parolanızı sıfırlamak için bağlantıyı açın.';
+  try {
+    await ses.send(new SendEmailCommand({
+      FromEmailAddress: emailFrom,
+      Destination: { ToAddresses: [email] },
+      Content: {
+        Simple: {
+          Subject: { Data: subject, Charset: 'UTF-8' },
+          Body: { Text: { Data: `${instruction}\n\n${url.toString()}\n\nBu isteği siz yapmadıysanız bu e-postayı yok sayın.`, Charset: 'UTF-8' } },
+        },
+      },
+    }));
+  } catch (error) {
+    // Tokens and recipient addresses must never be added to application logs.
+    app.log.error({ err: error, kind }, 'Identity transactional email delivery failed');
+    throw new Error('Email delivery failed');
   }
-  const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, kind, token }) });
-  if (!response.ok) throw new Error('Email delivery failed');
 }
 
 async function consumeActionToken(token: string, kind: 'verify_email' | 'reset_password') {

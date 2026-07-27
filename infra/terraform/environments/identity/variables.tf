@@ -17,3 +17,15 @@ variable "api_domain_name" {
   type    = string
   default = "api.turksquare.com"
 }
+
+variable "email_domain" {
+  type        = string
+  description = "Verified SES domain used for transactional Identity email."
+  default     = "turksquare.com"
+}
+
+variable "email_from_local_part" {
+  type        = string
+  description = "Local part of the transactional sender address."
+  default     = "noreply"
+}

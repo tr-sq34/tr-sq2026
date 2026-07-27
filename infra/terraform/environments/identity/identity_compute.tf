@@ -66,7 +66,7 @@ resource "aws_security_group_rule" "endpoint_https_from_service" {
 }
 
 resource "aws_vpc_endpoint" "identity_interface" {
-  for_each            = toset(["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sts"])
+  for_each            = toset(["ecr.api", "ecr.dkr", "email", "logs", "secretsmanager", "sts"])
   vpc_id              = aws_vpc.identity.id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
   vpc_endpoint_type   = "Interface"
@@ -168,9 +168,25 @@ resource "aws_iam_role_policy" "github_identity_deploy" {
 }
 
 resource "aws_iam_role_policy" "identity_task_secrets" {
-  name   = "read-identity-runtime-secrets"
-  role   = aws_iam_role.identity_task.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.identity_service_config.arn, aws_db_instance.identity.master_user_secret[0].secret_arn] }, { Effect = "Allow", Action = ["kms:Decrypt"], Resource = [aws_kms_key.identity.arn] }] })
+  name = "read-identity-runtime-secrets"
+  role = aws_iam_role.identity_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = [aws_secretsmanager_secret.identity_service_config.arn, aws_db_instance.identity.master_user_secret[0].secret_arn]
+      }, {
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = [aws_kms_key.identity.arn]
+      }, {
+      Effect    = "Allow"
+      Action    = ["ses:SendEmail"]
+      Resource  = ["arn:aws:ses:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:identity/${var.email_domain}"]
+      Condition = { StringEquals = { "ses:FromAddress" = "${var.email_from_local_part}@${var.email_domain}" } }
+    }]
+  })
 }
 
 resource "aws_ecs_cluster" "identity" { name = "turksquare-identity" }
@@ -191,7 +207,7 @@ resource "aws_ecs_task_definition" "identity" {
     portMappings           = [{ containerPort = 8080, protocol = "tcp" }]
     environment            = [{ name = "NODE_ENV", value = "production" }, { name = "PORT", value = "8080" }]
     secrets = [
-      for key in ["DATABASE_URL", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_DELIVERY_WEBHOOK", "PWNED_PASSWORDS_MODE"] :
+      for key in ["DATABASE_URL", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE"] :
       { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
     ]
     logConfiguration = {
