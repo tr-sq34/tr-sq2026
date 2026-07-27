@@ -167,7 +167,7 @@ resource "aws_iam_role_policy" "github_identity_deploy" {
       }, {
       Sid      = "DeployIdentityService"
       Effect   = "Allow"
-      Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:UpdateService", "logs:FilterLogEvents"]
+      Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:UpdateService", "logs:FilterLogEvents", "ec2:DescribeVpcEndpoints", "ec2:DescribeRouteTables"]
       Resource = "*"
       }, {
       Sid       = "PassOnlyIdentityTaskRoles"

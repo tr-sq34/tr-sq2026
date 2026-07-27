@@ -39,6 +39,15 @@ jobs:
           role-session-name: turksquare-identity-release-${{ github.run_id }}
           mask-aws-account-id: true
 
+      - name: Verify private AWS service path
+        run: |
+          endpoints=$(aws ec2 describe-vpc-endpoints \
+            --filters 'Name=service-name,Values=com.amazonaws.us-east-1.ecr.api,com.amazonaws.us-east-1.ecr.dkr,com.amazonaws.us-east-1.secretsmanager' \
+            --query 'VpcEndpoints[].{service:ServiceName,state:State,privateDns:PrivateDnsEnabled,subnets:SubnetIds}' \
+            --output json)
+          echo "$endpoints"
+          test "$(jq '[.[] | select(.state == "available" and .privateDns == true)] | length' <<< "$endpoints")" = "3"
+
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
