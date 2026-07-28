@@ -235,6 +235,20 @@ app.post('/v1/auth/email/verify', { config: { rateLimit: { max: 10, timeWindow: 
   return reply.code(204).send();
 });
 
+// Always return the same response to prevent account enumeration.  For an
+// existing unverified account, invalidate prior links and issue a fresh one.
+app.post('/v1/auth/email/verification/resend', { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const input = emailSchema.parse(request.body);
+  const result = await db.query<{ id: string; email: string }>('SELECT id,email FROM users WHERE email=$1 AND email_verified_at IS NULL', [input.email.toLowerCase()]);
+  const user = result.rows[0];
+  if (user) {
+    await db.query("UPDATE account_action_tokens SET consumed_at=now() WHERE user_id=$1 AND kind='verify_email' AND consumed_at IS NULL", [user.id]);
+    const token = await createActionToken(user.id, 'verify_email', '15 minutes');
+    await deliverActionLink(user.email, 'verify_email', token);
+  }
+  return reply.code(202).send({ data: { accepted: true } });
+});
+
 // Email links open in a browser, so verification is completed here rather than
 // depending on an unrelated website host.  The token remains single-use.
 app.get('/v1/auth/action', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
