@@ -81,6 +81,18 @@ resource "aws_security_group_rule" "identity_service_https_to_endpoints" {
   description              = "HTTPS only to Identity PrivateLink endpoints"
 }
 
+# Database traffic is strictly one-way from Identity tasks to the private RDS
+# security group; no CIDR-based or public database access is permitted.
+resource "aws_security_group_rule" "identity_service_to_database" {
+  type                     = "egress"
+  security_group_id        = aws_security_group.identity_service.id
+  source_security_group_id = aws_security_group.identity_database.id
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  description              = "PostgreSQL only to Identity database"
+}
+
 # ECR image layers are served through pre-signed S3 URLs.  This allows the
 # task to reach only AWS's regional S3 prefix list through the S3 gateway
 # endpoint; it is not general internet egress.
