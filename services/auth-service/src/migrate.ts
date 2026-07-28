@@ -3,14 +3,14 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import pg from 'pg';
-import { databaseConnectionString } from './database.js';
+import { databaseConnectionString, databaseSslOptions } from './database.js';
 
 const databaseUrl = databaseConnectionString();
 
 const migrationsDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations');
 const pool = new pg.Pool({
   connectionString: databaseUrl,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : undefined,
+  ssl: databaseSslOptions(),
 });
 
 const migrations = (await readdir(migrationsDirectory))
