@@ -96,7 +96,7 @@ resource "aws_secretsmanager_secret_version" "identity_service_config" {
     WEBAUTHN_RP_ID       = "turksquare.com"
     WEBAUTHN_ORIGIN      = "https://turksquare.com"
     EMAIL_FROM           = "TurkSquare <noreply@notify.turksquare.com>"
-    AUTH_ACTION_BASE_URL = "https://turksquare.com/auth/action"
+    AUTH_ACTION_BASE_URL = "https://api.turksquare.com/v1/auth/action"
     PWNED_PASSWORDS_MODE = "required"
   })
 }

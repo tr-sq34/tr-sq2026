@@ -235,6 +235,19 @@ app.post('/v1/auth/email/verify', { config: { rateLimit: { max: 10, timeWindow: 
   return reply.code(204).send();
 });
 
+// Email links open in a browser, so verification is completed here rather than
+// depending on an unrelated website host.  The token remains single-use.
+app.get('/v1/auth/action', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  const query = request.query as { action?: string; token?: string };
+  if (query.action !== 'verify_email' || !query.token) {
+    return reply.code(400).type('text/html').send('<h1>Invalid link</h1>');
+  }
+  const userId = await consumeActionToken(query.token, 'verify_email');
+  if (!userId) return reply.code(400).type('text/html').send('<h1>Link expired or already used</h1>');
+  await db.query('UPDATE users SET email_verified_at=COALESCE(email_verified_at, now()), updated_at=now() WHERE id=$1', [userId]);
+  return reply.type('text/html').send('<!doctype html><title>TurkSquare</title><main><h1>Email verified</h1><p>You can return to TurkSquare and sign in.</p></main>');
+});
+
 app.post('/v1/auth/password-reset/request', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = emailSchema.parse(request.body);
   const result = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [input.email.toLowerCase()]);
