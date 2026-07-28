@@ -69,6 +69,34 @@ resource "aws_lambda_function" "email_relay" {
   depends_on = [aws_iam_role_policy_attachment.email_relay_logs, aws_cloudwatch_log_group.email_relay]
 }
 
+data "archive_file" "password_safety" {
+  type        = "zip"
+  source_file = abspath("${path.module}/../../../../services/password-breach-check/index.mjs")
+  output_path = "${path.module}/.terraform/password-safety.zip"
+}
+resource "aws_iam_role" "password_safety" {
+  name               = "TurkSquareIdentityPasswordSafetyRole"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+}
+resource "aws_iam_role_policy_attachment" "password_safety_logs" {
+  role       = aws_iam_role.password_safety.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+resource "aws_cloudwatch_log_group" "password_safety" {
+  name              = "/aws/lambda/turksquare-identity-password-safety"
+  retention_in_days = 90
+}
+resource "aws_lambda_function" "password_safety" {
+  function_name    = "turksquare-identity-password-safety"
+  role             = aws_iam_role.password_safety.arn
+  handler          = "index.handler"
+  runtime          = "nodejs22.x"
+  filename         = data.archive_file.password_safety.output_path
+  source_code_hash = data.archive_file.password_safety.output_base64sha256
+  timeout          = 5
+  depends_on       = [aws_iam_role_policy_attachment.password_safety_logs, aws_cloudwatch_log_group.password_safety]
+}
+
 // Bump this deliberately when the SQS poller must be recreated after a
 // permissions/encryption change.  An event-source mapping owns long-lived
 // polling workers, so in-place IAM changes alone are not a reliable reset.
