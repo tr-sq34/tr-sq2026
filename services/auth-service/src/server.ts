@@ -26,6 +26,7 @@ const expectedOrigin = required('WEBAUTHN_ORIGIN');
 const emailFrom = required('EMAIL_FROM');
 const authActionBaseUrl = required('AUTH_ACTION_BASE_URL');
 const emailRelayFunctionName = required('EMAIL_RELAY_FUNCTION_NAME');
+const passwordSafetyFunctionName = required('PASSWORD_SAFETY_FUNCTION_NAME');
 const emailRelay = new LambdaClient({});
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
 
@@ -74,19 +75,11 @@ async function checkBreachedPassword(password: string): Promise<BreachCheckResul
   const digest = createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
   const prefix = digest.slice(0, 5);
   const suffix = digest.slice(5);
-  const endpoint = process.env.PWNED_PASSWORDS_RANGE_URL ?? 'https://api.pwnedpasswords.com/range';
   try {
-    const response = await fetch(`${endpoint}/${prefix}`, {
-      headers: { 'Add-Padding': 'true', 'User-Agent': 'AmericaHubAuth/1.0' },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) return 'unavailable';
-    const found = (await response.text()).split(/\r?\n/).some((line) => {
-      const [candidate] = line.split(':', 1);
-      return candidate?.length === suffix.length &&
-        timingSafeEqual(Buffer.from(candidate), Buffer.from(suffix));
-    });
-    return found ? 'breached' : 'safe';
+    const result = await emailRelay.send(new InvokeCommand({ FunctionName: passwordSafetyFunctionName, InvocationType: 'RequestResponse', Payload: new TextEncoder().encode(JSON.stringify({ prefix, suffix })) }));
+    if (result.FunctionError || !result.Payload) return 'unavailable';
+    const payload = JSON.parse(new TextDecoder().decode(result.Payload)) as { breached?: boolean };
+    return payload.breached === true ? 'breached' : 'safe';
   } catch {
     return 'unavailable';
   }

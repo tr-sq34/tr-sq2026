@@ -224,7 +224,7 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
       }, {
       Effect   = "Allow"
       Action   = ["lambda:InvokeFunction"]
-      Resource = aws_lambda_function.email_relay.arn
+      Resource = [aws_lambda_function.email_relay.arn, aws_lambda_function.password_safety.arn]
       }, {
       Effect    = "Allow"
       Action    = ["ses:SendEmail"]
@@ -257,6 +257,7 @@ resource "aws_ecs_task_definition" "identity" {
       { name = "DATABASE_HOST", value = aws_db_instance.identity.address },
       { name = "DATABASE_PORT", value = tostring(aws_db_instance.identity.port) },
       { name = "EMAIL_RELAY_FUNCTION_NAME", value = aws_lambda_function.email_relay.function_name },
+      { name = "PASSWORD_SAFETY_FUNCTION_NAME", value = aws_lambda_function.password_safety.function_name },
     ]
     secrets = concat(
       [
