@@ -1,5 +1,9 @@
 data "aws_region" "current" {}
 
+data "aws_prefix_list" "s3" {
+  name = "com.amazonaws.${data.aws_region.current.name}.s3"
+}
+
 resource "aws_route_table" "identity_private" {
   vpc_id = aws_vpc.identity.id
 }
@@ -75,6 +79,19 @@ resource "aws_security_group_rule" "identity_service_https_to_endpoints" {
   to_port                  = 443
   protocol                 = "tcp"
   description              = "HTTPS only to Identity PrivateLink endpoints"
+}
+
+# ECR image layers are served through pre-signed S3 URLs.  This allows the
+# task to reach only AWS's regional S3 prefix list through the S3 gateway
+# endpoint; it is not general internet egress.
+resource "aws_security_group_rule" "identity_service_https_to_s3" {
+  type              = "egress"
+  security_group_id = aws_security_group.identity_service.id
+  prefix_list_ids   = [data.aws_prefix_list.s3.id]
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  description       = "HTTPS to regional S3 through gateway endpoint for ECR layers"
 }
 
 resource "aws_vpc_endpoint" "identity_interface" {
