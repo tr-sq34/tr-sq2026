@@ -254,8 +254,16 @@ app.post('/v1/auth/email/verification/resend', { config: { rateLimit: { max: 3, 
 app.get('/v1/auth/action', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
   const query = request.query as { action?: string; token?: string };
   if (query.action !== 'verify_email' || !query.token) {
-    return reply.code(400).type('text/html').send('<h1>Invalid link</h1>');
+    return reply.code(400).type('text/html').send('<!doctype html><title>TurkSquare</title><main><h1>Invalid link</h1></main>');
   }
+  // A GET must not consume the one-time token: mailbox security scanners often
+  // pre-open links.  The user explicitly confirms with the POST below.
+  return reply.type('text/html').send(`<!doctype html><title>TurkSquare</title><meta name="viewport" content="width=device-width,initial-scale=1"><main style="font-family:system-ui;max-width:420px;margin:12vh auto;padding:32px"><h1>TurkSquare</h1><h2>E-postanı doğrula</h2><p>Hesabını etkinleştirmek için aşağıdaki düğmeye dokun.</p><form method="post" action="/v1/auth/action?action=verify_email&amp;token=${encodeURIComponent(query.token)}"><button style="padding:14px 20px;border:0;border-radius:10px;background:#7057ee;color:white;font-weight:700">E-postamı Doğrula</button></form></main>`);
+});
+
+app.post('/v1/auth/action', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  const query = request.query as { action?: string; token?: string };
+  if (query.action !== 'verify_email' || !query.token) return reply.code(400).type('text/html').send('<!doctype html><title>TurkSquare</title><main><h1>Invalid link</h1></main>');
   const userId = await consumeActionToken(query.token, 'verify_email');
   if (!userId) return reply.code(400).type('text/html').send('<h1>Link expired or already used</h1>');
   await db.query('UPDATE users SET email_verified_at=COALESCE(email_verified_at, now()), updated_at=now() WHERE id=$1', [userId]);
