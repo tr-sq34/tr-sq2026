@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import argon2 from 'argon2';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
+import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { jwtVerify, SignJWT } from 'jose';
@@ -181,6 +182,20 @@ async function consumeWebAuthnChallenge(challenge: string, purpose: 'registratio
 }
 
 await app.register(helmet, { global: true });
+await app.register(cors, {
+  origin: (origin, callback) => {
+    // Native clients do not send Origin. Browser access is restricted to the
+    // public site and local Flutter web development, never wildcarded.
+    if (!origin || origin === 'https://turksquare.com' || origin === 'https://www.turksquare.com' || /^http:\/\/localhost:\d+$/.test(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type'],
+  maxAge: 600,
+});
 await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
 
 // This endpoint intentionally discloses no infrastructure details. The ALB
