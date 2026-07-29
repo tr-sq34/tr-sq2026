@@ -287,6 +287,15 @@ resource "aws_ecs_service" "community" {
     security_groups  = [aws_security_group.community_service.id]
     assign_public_ip = false
   }
+
+  # Terraform owns the service's private network and security boundary.
+  # The protected release workflow owns the immutable image revision and
+  # desired count after the migration gate has passed. Without this boundary,
+  # a later infrastructure apply could roll a healthy service back to the
+  # bootstrap image or scale it down to zero.
+  lifecycle {
+    ignore_changes = [task_definition, desired_count]
+  }
 }
 
 output "community_ecr_repository_url" { value = aws_ecr_repository.community.repository_url }
