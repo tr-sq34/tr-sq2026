@@ -66,13 +66,27 @@ jobs:
           service: turksquare-community
           cluster: turksquare-community
           wait-for-service-stability: false
+      - name: Render migration task definition
+        run: aws ecs describe-task-definition --task-definition turksquare-community-migration --query taskDefinition > migration-task-definition.json
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: migration_task_definition
+        with:
+          task-definition: migration-task-definition.json
+          container-name: community-migration
+          image: ${{ steps.image.outputs.uri }}
+      - name: Register migration task definition
+        id: deploy_migration_task_definition
+        run: |
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' '${{ steps.migration_task_definition.outputs.task-definition }}' > migration-task-definition-register.json
+          arn=$(aws ecs register-task-definition --cli-input-json file://migration-task-definition-register.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task-definition-arn=$arn" >> "$GITHUB_OUTPUT"
       - name: Run schema migrations exactly once
         shell: bash
         run: |
           network=$(aws ecs describe-services --cluster turksquare-community --services turksquare-community --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
           subnets=$(jq -r '.subnets | join(",")' <<< "$network")
           security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
-          run_response=$(aws ecs run-task --cluster turksquare-community --launch-type FARGATE --task-definition '${{ steps.deploy_task_definition.outputs.task-definition-arn }}' --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" --overrides '{"containerOverrides":[{"name":"community","command":["node","dist/migrate.js"]}]}' --output json)
+          run_response=$(aws ecs run-task --cluster turksquare-community --launch-type FARGATE --task-definition '${{ steps.deploy_migration_task_definition.outputs.task-definition-arn }}' --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" --output json)
           task_arn=$(jq -r '.tasks[0].taskArn // empty' <<< "$run_response")
           if [[ -z "$task_arn" ]]; then
             echo "ECS could not start the migration task:" >&2
@@ -81,11 +95,11 @@ jobs:
           fi
           aws ecs wait tasks-stopped --cluster turksquare-community --tasks "$task_arn"
           task=$(aws ecs describe-tasks --cluster turksquare-community --tasks "$task_arn" --query 'tasks[0]' --output json)
-          exit_code=$(jq -r '.containers[] | select(.name == "community") | .exitCode // empty' <<< "$task")
+          exit_code=$(jq -r '.containers[] | select(.name == "community-migration") | .exitCode // empty' <<< "$task")
           if [[ "$exit_code" != "0" ]]; then
             echo "Community migration task failed:" >&2
-            jq '{StoppedReason: .stoppedReason, StopCode: .stopCode, Container: (.containers[] | select(.name == "community") | {reason,exitCode,lastStatus})}' <<< "$task" >&2
-            log_stream=$(jq -r '.containers[] | select(.name == "community") | .logStreamName // empty' <<< "$task")
+            jq '{StoppedReason: .stoppedReason, StopCode: .stopCode, Container: (.containers[] | select(.name == "community-migration") | {reason,exitCode,lastStatus})}' <<< "$task" >&2
+            log_stream=$(jq -r '.containers[] | select(.name == "community-migration") | .logStreamName // empty' <<< "$task")
             if [[ -n "$log_stream" ]]; then
               echo "Migration log stream: $log_stream" >&2
               aws logs filter-log-events --log-group-name /turksquare/community-service --log-stream-names "$log_stream" --limit 50 --query 'events[*].message' --output text || true

@@ -192,6 +192,45 @@ resource "aws_ecs_task_definition" "community" {
   }])
 }
 
+# Migrations are intentionally a separate, short-lived task. Reusing the API
+# task definition would also run the HTTP health check against a process that
+# correctly exits after applying SQL, which can turn a successful migration
+# into a false unhealthy deployment.
+resource "aws_ecs_task_definition" "community_migration" {
+  family                   = "turksquare-community-migration"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.community_execution.arn
+  task_role_arn            = aws_iam_role.community_task.arn
+  container_definitions = jsonencode([{
+    name                   = "community-migration"
+    image                  = "${aws_ecr_repository.community.repository_url}:bootstrap"
+    essential              = true
+    readonlyRootFilesystem = true
+    command                = ["node", "dist/migrate.js"]
+    environment = [
+      { name = "NODE_ENV", value = "production" },
+      { name = "DATABASE_HOST", value = aws_db_instance.community.address },
+      { name = "DATABASE_PORT", value = tostring(aws_db_instance.community.port) },
+      { name = "DATABASE_NAME", value = "community_db" }
+    ]
+    secrets = [
+      { name = "DATABASE_USER", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:username::" },
+      { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:password::" }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.community.name
+        awslogs-region        = data.aws_region.current.name
+        awslogs-stream-prefix = "community-migration"
+      }
+    }
+  }])
+}
+
 resource "aws_ecs_task_definition" "profile_projection_worker" {
   family                   = "turksquare-community-profile-projection-worker"
   requires_compatibilities = ["FARGATE"]
