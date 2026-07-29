@@ -14,10 +14,13 @@ Parameters:
     AllowedPattern: '^[0-9]{12}$'
 
 Mappings:
+  # Plan roles are intentionally bound to the dedicated non-production
+  # GitHub Environments.  Apply roles use the separate production
+  # environments, so a pull-request plan can never inherit apply access.
   AccountEnvironment:
     '342998331436': { Name: identity }
-    '936706105958': { Name: community }
-    '800554367992': { Name: vault }
+    '936706105958': { Name: community-plan }
+    '800554367992': { Name: vault-plan }
     '365792980830': { Name: backup }
 
 Resources:
