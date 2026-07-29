@@ -210,6 +210,21 @@ app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => 
   }
 });
 
+// This endpoint powers the two-step sign-in experience. It deliberately
+// returns only a boolean, never account metadata or verification state. It is
+// rate-limited more aggressively than general auth endpoints because the UX
+// decision to branch on account existence carries an enumeration risk.
+app.post('/v1/auth/email/status', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request) => {
+  const input = emailSchema.parse(request.body);
+  const result = await db.query<{ exists: boolean }>(
+    'SELECT EXISTS(SELECT 1 FROM users WHERE email=$1) AS exists',
+    [input.email.toLowerCase()],
+  );
+  const exists = result.rows[0]?.exists === true;
+  app.log.info({ event: 'email_status_checked', exists }, 'Email status checked');
+  return { data: { exists } };
+});
+
 app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = registerSchema.parse(request.body);
   const passwordValidation = await validateNewPassword(input.password, { email: input.email, name: input.name });
