@@ -1,0 +1,32 @@
+name: Plan Verification Vault Terraform
+
+on:
+  pull_request:
+    paths:
+      - 'infra/terraform/environments/vault/**'
+      - '.github/workflows/terraform-plan-vault.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    environment: vault-plan
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-vault-plan-${{ github.run_id }}
+          mask-aws-account-id: true
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform validate
+      - run: terraform plan -lock-timeout=5m -no-color

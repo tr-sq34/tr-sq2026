@@ -1,0 +1,39 @@
+name: Apply Verification Vault Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type APPLY_VERIFICATION_VAULT_PRODUCTION to continue'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: verification-vault-production-infrastructure
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: inputs.confirmation == 'APPLY_VERIFICATION_VAULT_PRODUCTION'
+    runs-on: ubuntu-24.04
+    environment: verification-vault-production
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-vault-apply-${{ github.run_id }}
+          mask-aws-account-id: true
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform validate
+      - run: terraform plan -lock-timeout=5m -out=tfplan
+      - run: terraform apply -auto-approve tfplan

@@ -1,11 +1,13 @@
-import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import argon2 from 'argon2';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import { GetPublicKeyCommand, KMSClient, SignCommand } from '@aws-sdk/client-kms';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { jwtVerify, SignJWT } from 'jose';
+import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { exportJWK, importSPKI, jwtVerify } from 'jose';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
 import pg from 'pg';
@@ -19,9 +21,11 @@ const required = (name: string) => {
 };
 
 const db = new pg.Pool({ connectionString: databaseConnectionString(), max: 10, ssl: databaseSslOptions() });
-const jwtKey = new TextEncoder().encode(required('JWT_SECRET'));
 const issuer = required('JWT_ISSUER');
 const audience = required('JWT_AUDIENCE');
+const jwtSigningKeyId = required('JWT_SIGNING_KMS_KEY_ID');
+const jwtKeyId = required('JWT_KEY_ID');
+const emailCodeHmacKey = required('EMAIL_CODE_HMAC_SECRET');
 const rpID = required('WEBAUTHN_RP_ID');
 const expectedOrigin = required('WEBAUTHN_ORIGIN');
 const emailFrom = required('EMAIL_FROM');
@@ -29,6 +33,9 @@ const authActionBaseUrl = required('AUTH_ACTION_BASE_URL');
 const emailRelayFunctionName = required('EMAIL_RELAY_FUNCTION_NAME');
 const passwordSafetyFunctionName = required('PASSWORD_SAFETY_FUNCTION_NAME');
 const emailRelay = new LambdaClient({});
+const kms = new KMSClient({});
+const communityProjectionQueueUrl = process.env.COMMUNITY_PROFILE_PROJECTION_QUEUE_URL;
+const communityOutbox = new SQSClient({});
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
 
 const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128) });
@@ -40,12 +47,18 @@ const emailSchema = z.object({ email: z.string().trim().email().max(254) });
 const emailVerificationCodeSchema = emailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
 const resetSchema = actionSchema.extend({ password: z.string().min(12).max(128) });
 const webauthnSchema = z.object({ credential: z.record(z.unknown()) });
+const onboardingSchema = z.object({
+  city: z.string().trim().min(2).max(100),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/),
+  interests: z.array(z.string().trim().min(2).max(40)).min(1).max(8).transform((values) => [...new Set(values.map((value) => value.toLocaleLowerCase('tr-TR')))]),
+  primaryIntent: z.enum(['community', 'marketplace', 'networking', 'events']),
+});
 
 const opaqueToken = () => randomBytes(48).toString('base64url');
 const hashOpaque = (token: string) => createHash('sha256').update(token).digest('hex');
 const createEmailVerificationCode = () => randomInt(0, 1000000).toString().padStart(6, '0');
 const hashEmailVerificationCode = (userId: string, code: string) =>
-  createHmac('sha256', jwtKey).update(`${userId}:${code}`).digest('hex');
+  createHmac('sha256', emailCodeHmacKey).update(`${userId}:${code}`).digest('hex');
 let dummyPasswordHash: Promise<string> | undefined;
 
 function passwordError(password: string, identity: { email: string; name: string }) {
@@ -112,8 +125,61 @@ async function validateNewPassword(password: string, identity: { email: string; 
   if (breachResult === 'unavailable') return { code: 'PASSWORD_CHECK_UNAVAILABLE', message: 'Parola güvenlik kontrolü şu anda tamamlanamadı.' };
   return null;
 }
-const signAccessToken = async (user: { id: string; email: string }) => new SignJWT({ email: user.email })
-  .setProtectedHeader({ alg: 'HS256', typ: 'JWT' }).setIssuer(issuer).setAudience(audience).setSubject(user.id).setIssuedAt().setExpirationTime('15m').sign(jwtKey);
+const kmsPublicKey = await (async () => {
+  const response = await kms.send(new GetPublicKeyCommand({ KeyId: jwtSigningKeyId }));
+  if (!response.PublicKey) throw new Error('KMS signing key has no public key');
+  const key = createPublicKey({ key: Buffer.from(response.PublicKey), format: 'der', type: 'spki' });
+  return importSPKI(key.export({ format: 'pem', type: 'spki' }).toString(), 'RS256');
+})();
+
+const jwk = await exportJWK(kmsPublicKey);
+const publicJwk = { ...jwk, kid: jwtKeyId, use: 'sig', alg: 'RS256' };
+
+async function signAccessToken(user: { id: string }) {
+  const now = Math.floor(Date.now() / 1000);
+  const protectedHeader = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: jwtKeyId })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    sub: user.id,
+    iss: issuer,
+    aud: audience,
+    iat: now,
+    exp: now + (15 * 60),
+  })).toString('base64url');
+  const signingInput = `${protectedHeader}.${payload}`;
+  const signature = await kms.send(new SignCommand({
+    KeyId: jwtSigningKeyId,
+    Message: Buffer.from(signingInput),
+    MessageType: 'RAW',
+    SigningAlgorithm: 'RSASSA_PKCS1_V1_5_SHA_256',
+  }));
+  if (!signature.Signature) throw new Error('KMS did not return a JWT signature');
+  return `${signingInput}.${Buffer.from(signature.Signature).toString('base64url')}`;
+}
+
+// The database is the source of truth: an onboarding update first commits an
+// outbox record, then this publisher delivers it to Community. A crash between
+// those two operations is safe because pending records are retried. Consumers
+// use the event id as their idempotency key, so duplicate SQS delivery is safe.
+async function publishCommunityProfileOutbox() {
+  if (!communityProjectionQueueUrl) return;
+  const pending = await db.query<{ id: string; payload: unknown }>(
+    `SELECT id,payload FROM identity_outbox_events
+     WHERE published_at IS NULL AND event_type='community.profile_upserted'
+     ORDER BY created_at ASC LIMIT 20`,
+  );
+  for (const event of pending.rows) {
+    try {
+      await communityOutbox.send(new SendMessageCommand({
+        QueueUrl: communityProjectionQueueUrl,
+        MessageBody: JSON.stringify({ eventId: event.id, eventType: 'community.profile_upserted', payload: event.payload }),
+      }));
+      await db.query('UPDATE identity_outbox_events SET published_at=now(),attempts=attempts+1 WHERE id=$1 AND published_at IS NULL', [event.id]);
+    } catch (error) {
+      await db.query('UPDATE identity_outbox_events SET attempts=attempts+1 WHERE id=$1', [event.id]);
+      app.log.warn({ err: error, eventId: event.id }, 'Community profile outbox delivery deferred');
+    }
+  }
+}
 
 async function issueSession(user: { id: string; email: string }, existingFamilyId?: string) {
   const client = await db.connect();
@@ -266,7 +332,7 @@ async function consumeActionToken(token: string, kind: 'verify_email' | 'reset_p
 async function requireUser(request: { headers: { authorization?: string } }) {
   const token = request.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) throw new Error('UNAUTHORIZED');
-  const verified = await jwtVerify(token, jwtKey, { issuer, audience });
+  const verified = await jwtVerify(token, kmsPublicKey, { issuer, audience, algorithms: ['RS256'] });
   const userId = verified.payload.sub;
   if (!userId) throw new Error('UNAUTHORIZED');
   const result = await db.query<{ id: string; email: string; display_name: string }>('SELECT id,email,display_name FROM users WHERE id=$1 AND email_verified_at IS NOT NULL', [userId]);
@@ -300,6 +366,22 @@ await app.register(cors, {
 });
 await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
 
+// This is intentionally public. It contains only the RSA public key and lets
+// Community, Matrix and future OIDC relying parties verify access tokens
+// without receiving an Identity secret or calling the Identity database.
+app.get('/.well-known/jwks.json', { config: { rateLimit: false } }, async (_request, reply) => {
+  reply.header('cache-control', 'public, max-age=300, stale-while-revalidate=300');
+  return { keys: [publicJwk] };
+});
+
+app.get('/.well-known/openid-configuration', { config: { rateLimit: false } }, async () => ({
+  issuer,
+  jwks_uri: new URL('/.well-known/jwks.json', issuer).toString(),
+  response_types_supported: ['token'],
+  subject_types_supported: ['public'],
+  id_token_signing_alg_values_supported: ['RS256'],
+}));
+
 // This endpoint intentionally discloses no infrastructure details. The ALB
 // uses it to route traffic only to tasks that can reach the Identity database.
 app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => {
@@ -309,6 +391,53 @@ app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => 
   } catch (error) {
     app.log.warn({ err: error }, 'Identity health check failed');
     return reply.code(503).send({ status: 'unavailable' });
+  }
+});
+
+app.get('/v1/auth/onboarding', async (request, reply) => {
+  try {
+    const user = await requireUser(request);
+    const result = await db.query<{ city: string; region_code: string; interests: string[]; primary_intent: string; completed_at: Date }>(
+      'SELECT city,region_code,interests,primary_intent,completed_at FROM user_onboarding WHERE user_id=$1',
+      [user.id],
+    );
+    const value = result.rows[0];
+    return { data: value ? { completed: true, city: value.city, regionCode: value.region_code, interests: value.interests, primaryIntent: value.primary_intent, completedAt: value.completed_at.toISOString() } : { completed: false } };
+  } catch {
+    return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
+  }
+});
+
+app.put('/v1/auth/onboarding', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const user = await requireUser(request);
+    const input = onboardingSchema.parse(request.body);
+    const regionCode = input.regionCode.toUpperCase();
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO user_onboarding(user_id,city,region_code,interests,primary_intent)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(user_id) DO UPDATE SET city=EXCLUDED.city,region_code=EXCLUDED.region_code,interests=EXCLUDED.interests,primary_intent=EXCLUDED.primary_intent,updated_at=now()`,
+        [user.id, input.city, regionCode, input.interests, input.primaryIntent],
+      );
+      await client.query(
+        `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
+         VALUES('user_onboarding',$1,'community.profile_upserted',$2::jsonb)`,
+        [user.id, JSON.stringify({ userId: user.id, displayName: user.display_name, city: input.city, regionCode, interests: input.interests })],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    return reply.code(204).send();
+  } catch (error) {
+    if (error instanceof z.ZodError) return reply.code(400).send({ error: { code: 'INVALID_ONBOARDING', message: 'Onboarding bilgileri geçersiz.' } });
+    return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
   }
 });
 
@@ -323,7 +452,7 @@ app.post('/v1/auth/email/status', { config: { rateLimit: { max: 8, timeWindow: '
     [input.email.toLowerCase()],
   );
   const exists = result.rows[0]?.exists === true;
-  app.log.info({ event: 'email_status_checked', exists }, 'Email status checked');
+  app.log.info({ event: 'email_status_checked' }, 'Email status checked');
   return { data: { exists } };
 });
 
@@ -453,7 +582,7 @@ app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 m
     const replacement = opaqueToken();
     await client.query('INSERT INTO refresh_tokens(family_id, token_hash, expires_at) VALUES($1,$2,now() + interval \'30 days\')', [row.family_id, hashOpaque(replacement)]);
     await client.query('COMMIT');
-    return { data: { user: { id: row.user_id, email: row.email }, accessToken: await signAccessToken({ id: row.user_id, email: row.email }), refreshToken: replacement } };
+    return { data: { user: { id: row.user_id, email: row.email }, accessToken: await signAccessToken({ id: row.user_id }), refreshToken: replacement } };
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 });
 
@@ -531,6 +660,14 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
 });
 
 await app.listen({ port: Number(process.env.PORT ?? 8080), host: '0.0.0.0' });
+
+if (communityProjectionQueueUrl) {
+  void publishCommunityProfileOutbox();
+  const outboxTimer = setInterval(() => void publishCommunityProfileOutbox(), 5000);
+  outboxTimer.unref();
+} else {
+  app.log.warn('Community projection queue is not configured; onboarding events remain durable in the Identity outbox');
+}
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'Identity service stopping');

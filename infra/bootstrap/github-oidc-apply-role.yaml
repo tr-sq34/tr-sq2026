@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: TurkSquare GitHub Actions OIDC approved Terraform apply role. Deploy as a StackSet to workload accounts.
+Description: TurkSquare GitHub Actions OIDC Terraform apply role. Deploy as a StackSet to workload accounts.
 
 Parameters:
   RoleName:
@@ -38,12 +38,35 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:sub: !Sub
-                  - '${SubjectPrefix}:environment:identity-production'
+                  - '${SubjectPrefix}:environment:${EnvironmentName}'
                   - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
                     SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+      # PowerUserAccess excludes IAM administration.  The narrow inline policy
+      # below grants only the named service roles Terraform needs to maintain.
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AdministratorAccess
+        - arn:aws:iam::aws:policy/PowerUserAccess
       Policies:
+        - PolicyName: ManageTurkSquareServiceRolesOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
         - PolicyName: AllowAssumeScopedTerraformStateRole
           PolicyDocument:
             Version: '2012-10-17'

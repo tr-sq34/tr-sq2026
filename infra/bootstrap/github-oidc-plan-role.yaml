@@ -14,10 +14,13 @@ Parameters:
     AllowedPattern: '^[0-9]{12}$'
 
 Mappings:
+  # Plan roles are intentionally bound to the dedicated non-production
+  # GitHub Environments.  Apply roles use the separate production
+  # environments, so a pull-request plan can never inherit apply access.
   AccountEnvironment:
     '342998331436': { Name: identity }
-    '936706105958': { Name: community }
-    '800554367992': { Name: vault }
+    '936706105958': { Name: community-plan }
+    '800554367992': { Name: vault-plan }
     '365792980830': { Name: backup }
 
 Resources:
@@ -46,10 +49,18 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub
-                  - '${SubjectPrefix}:environment:${EnvironmentName}'
-                  - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
-                    SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                # GitHub supports both the conventional repository subject
+                # and the repository-ID subject configured by some orgs. Both
+                # entries remain exact matches for this repository and this
+                # account's dedicated plan environment; no wildcard is used.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub
+                    - '${SubjectPrefix}:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+                      SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                  - !Sub
+                    - 'repo:tr-sq34/tr-sq2026:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
       Policies:

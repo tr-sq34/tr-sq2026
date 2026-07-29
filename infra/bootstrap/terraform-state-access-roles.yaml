@@ -37,7 +37,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: arn:aws:iam::936706105958:role/GitHubActionsTerraformPlanRole
+              AWS:
+                - arn:aws:iam::936706105958:role/GitHubActionsTerraformPlanRole
+                - arn:aws:iam::936706105958:role/GitHubActionsTerraformApplyRole
             Action: sts:AssumeRole
   VaultStateAccessRole:
     Type: AWS::IAM::Role
@@ -49,7 +51,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: arn:aws:iam::800554367992:role/GitHubActionsTerraformPlanRole
+              AWS:
+                - arn:aws:iam::800554367992:role/GitHubActionsTerraformPlanRole
+                - arn:aws:iam::800554367992:role/GitHubActionsTerraformApplyRole
             Action: sts:AssumeRole
   BackupStateAccessRole:
     Type: AWS::IAM::Role
@@ -61,7 +65,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: arn:aws:iam::365792980830:role/GitHubActionsTerraformPlanRole
+              AWS:
+                - arn:aws:iam::365792980830:role/GitHubActionsTerraformPlanRole
+                - arn:aws:iam::365792980830:role/GitHubActionsTerraformApplyRole
             Action: sts:AssumeRole
 
   IdentityStatePolicy:

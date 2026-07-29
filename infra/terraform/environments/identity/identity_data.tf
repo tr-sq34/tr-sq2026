@@ -17,6 +17,44 @@ resource "aws_kms_alias" "identity" {
   target_key_id = aws_kms_key.identity.key_id
 }
 
+# Access tokens are signed inside KMS. The private RSA key is non-exportable:
+# Community, Matrix, Flarum and mobile clients receive only the public JWKS.
+resource "aws_kms_key" "identity_jwt_signing" {
+  description              = "TurkSquare Identity RS256 access-token signing"
+  deletion_window_in_days  = 30
+  customer_master_key_spec = "RSA_2048"
+  key_usage                = "SIGN_VERIFY"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "IdentityAccountKeyAdministration"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid    = "CommunityServicesReadOnlyPublicKey"
+        Effect = "Allow"
+        Principal = {
+          AWS = [
+            "arn:aws:iam::936706105958:role/TurkSquareCommunityTaskRole",
+            "arn:aws:iam::936706105958:role/TurkSquareMessagingTaskRole"
+          ]
+        }
+        Action   = ["kms:GetPublicKey"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_alias" "identity_jwt_signing" {
+  name          = "alias/turksquare/identity-jwt-signing"
+  target_key_id = aws_kms_key.identity_jwt_signing.key_id
+}
+
 resource "aws_vpc" "identity" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -82,7 +120,11 @@ output "identity_service_config_secret_arn" {
   value = aws_secretsmanager_secret.identity_service_config.arn
 }
 
-resource "random_password" "identity_jwt_secret" {
+output "identity_jwt_signing_kms_key_arn" {
+  value = aws_kms_key.identity_jwt_signing.arn
+}
+
+resource "random_password" "identity_email_code_hmac" {
   length  = 64
   special = false
 }
@@ -90,13 +132,16 @@ resource "random_password" "identity_jwt_secret" {
 resource "aws_secretsmanager_secret_version" "identity_service_config" {
   secret_id = aws_secretsmanager_secret.identity_service_config.id
   secret_string = jsonencode({
-    JWT_SECRET           = random_password.identity_jwt_secret.result
-    JWT_ISSUER           = "https://api.turksquare.com"
-    JWT_AUDIENCE         = "turksquare-mobile"
-    WEBAUTHN_RP_ID       = "turksquare.com"
-    WEBAUTHN_ORIGIN      = "https://turksquare.com"
-    EMAIL_FROM           = "TurkSquare <noreply@notify.turksquare.com>"
-    AUTH_ACTION_BASE_URL = "https://api.turksquare.com/v1/auth/action"
-    PWNED_PASSWORDS_MODE = "required"
+    JWT_ISSUER                             = "https://api.turksquare.com"
+    JWT_AUDIENCE                           = "turksquare-mobile"
+    JWT_SIGNING_KMS_KEY_ID                 = aws_kms_key.identity_jwt_signing.arn
+    JWT_KEY_ID                             = "identity-rs256-2026-01"
+    EMAIL_CODE_HMAC_SECRET                 = random_password.identity_email_code_hmac.result
+    WEBAUTHN_RP_ID                         = "turksquare.com"
+    WEBAUTHN_ORIGIN                        = "https://turksquare.com"
+    EMAIL_FROM                             = "TurkSquare <noreply@notify.turksquare.com>"
+    AUTH_ACTION_BASE_URL                   = "https://api.turksquare.com/v1/auth/action"
+    PWNED_PASSWORDS_MODE                   = "required"
+    COMMUNITY_PROFILE_PROJECTION_QUEUE_URL = var.community_profile_projection_queue_url
   })
 }

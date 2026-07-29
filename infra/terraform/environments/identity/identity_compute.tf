@@ -107,7 +107,7 @@ resource "aws_security_group_rule" "identity_service_https_to_s3" {
 }
 
 resource "aws_vpc_endpoint" "identity_interface" {
-  for_each            = toset(["ecr.api", "ecr.dkr", "email", "lambda", "logs", "secretsmanager", "sts"])
+  for_each            = toset(["ecr.api", "ecr.dkr", "email", "kms", "lambda", "logs", "secretsmanager", "sts", "sqs"])
   vpc_id              = aws_vpc.identity.id
   service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
   vpc_endpoint_type   = "Interface"
@@ -146,6 +146,10 @@ resource "aws_iam_role_policy" "ecs_execution_runtime_secrets" {
       Effect   = "Allow"
       Action   = ["kms:Decrypt"]
       Resource = [aws_kms_key.identity.arn]
+      }, {
+      Effect   = "Allow"
+      Action   = ["kms:GetPublicKey", "kms:Sign"]
+      Resource = [aws_kms_key.identity_jwt_signing.arn]
     }]
   })
 }
@@ -213,7 +217,7 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
   role = aws_iam_role.identity_task.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
       Resource = [aws_secretsmanager_secret.identity_service_config.arn, aws_db_instance.identity.master_user_secret[0].secret_arn]
@@ -230,7 +234,11 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
       Action    = ["ses:SendEmail"]
       Resource  = ["arn:aws:ses:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:identity/${var.email_domain}"]
       Condition = { StringEquals = { "ses:FromAddress" = "${var.email_from_local_part}@${var.email_domain}" } }
-    }]
+      }], var.community_profile_projection_queue_arn == null ? [] : [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = [var.community_profile_projection_queue_arn]
+    }])
   })
 }
 
@@ -261,7 +269,7 @@ resource "aws_ecs_task_definition" "identity" {
     ]
     secrets = concat(
       [
-        for key in ["JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE"] :
+        for key in ["JWT_ISSUER", "JWT_AUDIENCE", "JWT_SIGNING_KMS_KEY_ID", "JWT_KEY_ID", "EMAIL_CODE_HMAC_SECRET", "WEBAUTHN_RP_ID", "WEBAUTHN_ORIGIN", "EMAIL_FROM", "AUTH_ACTION_BASE_URL", "PWNED_PASSWORDS_MODE", "COMMUNITY_PROFILE_PROJECTION_QUEUE_URL"] :
         { name = key, valueFrom = "${aws_secretsmanager_secret.identity_service_config.arn}:${key}::" }
       ],
       [

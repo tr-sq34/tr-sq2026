@@ -26,9 +26,15 @@ Create a CloudFormation StackSet from `github-oidc-plan-role.yaml` in the Manage
 
 The role is intentionally read-only and maps each approved workload account to exactly one GitHub Environment (`identity`, `community`, `vault`, or `backup`). `GitHubOidcSubjectPrefix` uses the canonical owner and repository IDs emitted by GitHub OIDC; update it only after an explicit OIDC claim diagnostic if repository ownership changes. Each GitHub Environment is restricted to `main`, so the role remains main-branch scoped without accepting branch-subject tokens. Do not attach `AdministratorAccess` and do not use permanent AWS access keys.
 
-After StackSet completion, save each non-secret role ARN in the matching protected GitHub Environment (`identity`, `community`, `vault`, `backup`). Apply roles are a separate, reviewed change after least-privilege policies are defined.
+After StackSet completion, save each non-secret role ARN in the matching protected GitHub Environment (`identity`, `community`, `vault`, `backup`).
 
-## 3. Cross-account Terraform state access
+## 3. GitHub Actions apply role
+
+After the plan role has been reviewed, deploy `github-oidc-apply-role.yaml` as a StackSet to the same workload accounts. It trusts only the matching `*-production` GitHub Environment. It uses `PowerUserAccess` plus a narrow IAM policy for TurkSquare service roles; it does not receive `AdministratorAccess`.
+
+Save the Community role ARN in the protected `community-production` GitHub Environment as `AWS_APPLY_ROLE_ARN`. The workflow requires the exact confirmation phrase before it can apply Terraform.
+
+## 4. Cross-account Terraform state access
 
 The plan roles live in workload accounts while the Terraform state backend lives in the Management account. Deploy `terraform-state-access-roles.yaml` from Management CloudShell before enabling the Terraform plan workflow:
 
@@ -40,4 +46,4 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
-Then update the StackSet from the current `github-oidc-plan-role.yaml` so workload plan roles are permitted to assume only the matching Management-account state role. Each state role has a strict trust relationship to one workload plan role and can read or write only its own S3 state prefix (`identity/`, `community/`, `vault/`, or `backup/`).
+The state roles trust only the matching workload account's plan and apply roles and can read or write only their own S3 state prefix (`identity/`, `community/`, `vault/`, or `backup/`). Update this stack after apply roles are provisioned.

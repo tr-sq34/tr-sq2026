@@ -1,0 +1,78 @@
+name: Deploy Community service
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DEPLOY_COMMUNITY_PRODUCTION to continue'
+        required: true
+        type: string
+      start_service:
+        description: 'Start one private service task after migration'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: community-production-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirmation == 'DEPLOY_COMMUNITY_PRODUCTION'
+    runs-on: ubuntu-24.04
+    environment: community-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-community-release-${{ github.run_id }}
+          mask-aws-account-id: true
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build and push immutable image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: turksquare/community-service
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          image="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build --pull --tag "$image" services/community-service
+          docker push "$image"
+          echo "uri=$image" >> "$GITHUB_OUTPUT"
+      - name: Render task definition
+        run: aws ecs describe-task-definition --task-definition turksquare-community-service --query taskDefinition > task-definition.json
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: task_definition
+        with:
+          task-definition: task-definition.json
+          container-name: community
+          image: ${{ steps.image.outputs.uri }}
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        id: deploy_task_definition
+        with:
+          task-definition: ${{ steps.task_definition.outputs.task-definition }}
+          service: turksquare-community
+          cluster: turksquare-community
+          wait-for-service-stability: false
+      - name: Run schema migrations exactly once
+        shell: bash
+        run: |
+          network=$(aws ecs describe-services --cluster turksquare-community --services turksquare-community --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
+          subnets=$(jq -r '.subnets | join(",")' <<< "$network")
+          security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
+          task_arn=$(aws ecs run-task --cluster turksquare-community --launch-type FARGATE --task-definition '${{ steps.deploy_task_definition.outputs.task-definition-arn }}' --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" --overrides '{"containerOverrides":[{"name":"community","command":["node","dist/migrate.js"]}]}' --query 'tasks[0].taskArn' --output text)
+          test -n "$task_arn" && test "$task_arn" != "None"
+          aws ecs wait tasks-stopped --cluster turksquare-community --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks --cluster turksquare-community --tasks "$task_arn" --query 'tasks[0].containers[?name==`community`].exitCode | [0]' --output text)
+          test "$exit_code" = "0"
+      - name: Start service only after migration success
+        if: inputs.start_service
+        run: aws ecs update-service --cluster turksquare-community --service turksquare-community --desired-count 1 --force-new-deployment
