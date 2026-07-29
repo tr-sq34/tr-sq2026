@@ -74,6 +74,7 @@ Resources:
                   - iam:UntagRole
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsIdentityDeployRole'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
               # Terraform refreshes inline and attached policies before it
@@ -87,6 +88,7 @@ Resources:
                   - iam:ListInstanceProfilesForRole
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsIdentityDeployRole'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
               # IAM's provider-list action cannot be resource-scoped. The
