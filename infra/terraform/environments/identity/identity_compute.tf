@@ -234,10 +234,10 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
       Action    = ["ses:SendEmail"]
       Resource  = ["arn:aws:ses:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:identity/${var.email_domain}"]
       Condition = { StringEquals = { "ses:FromAddress" = "${var.email_from_local_part}@${var.email_domain}" } }
-      }], var.community_profile_projection_queue_arn == null ? [] : [{
+      }], local.community_projection_queue_arn == "" ? [] : [{
       Effect   = "Allow"
       Action   = ["sqs:SendMessage"]
-      Resource = [var.community_profile_projection_queue_arn]
+      Resource = [local.community_projection_queue_arn]
     }])
   })
 }

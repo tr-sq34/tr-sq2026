@@ -116,13 +116,16 @@ resource "aws_sqs_queue" "identity_profile_projection" {
   message_retention_seconds  = 345600
   receive_wait_time_seconds  = 20
   sqs_managed_sse_enabled    = true
-  redrive_policy = jsonencode({ deadLetterTargetArn = aws_sqs_queue.identity_profile_projection_dlq.arn, maxReceiveCount = 5 })
+  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.identity_profile_projection_dlq.arn, maxReceiveCount = 5 })
 }
 resource "aws_sqs_queue_policy" "identity_profile_projection" {
   queue_url = aws_sqs_queue.identity_profile_projection.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Sid = "IdentityCanOnlySend", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${var.identity_account_id}:role/TurkSquareIdentityTaskRole" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.identity_profile_projection.arn },
-    { Sid = "VerificationCanOnlySendCapabilities", Effect = "Allow", Principal = { AWS = "arn:aws:iam::800554367992:role/TurkSquareVerificationVaultTaskRole" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.identity_profile_projection.arn },
+    # The source task roles are created in later foundations.  Account
+    # principals keep this queue policy free of creation-order dependencies;
+    # source-role IAM policies independently limit SendMessage to this queue.
+    { Sid = "IdentityAccountCanOnlySend", Effect = "Allow", Principal = { AWS = "arn:aws:iam::${var.identity_account_id}:root" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.identity_profile_projection.arn },
+    { Sid = "VerificationAccountCanOnlySendCapabilities", Effect = "Allow", Principal = { AWS = "arn:aws:iam::800554367992:root" }, Action = "sqs:SendMessage", Resource = aws_sqs_queue.identity_profile_projection.arn },
     { Sid = "CommunityWorkerConsumes", Effect = "Allow", Principal = { AWS = aws_iam_role.community_task.arn }, Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.identity_profile_projection.arn }
   ] })
 }

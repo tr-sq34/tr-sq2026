@@ -21,6 +21,8 @@ jobs:
     if: inputs.confirmation == 'APPLY_COMMUNITY_PRODUCTION'
     runs-on: ubuntu-24.04
     environment: community-production
+    env:
+      TF_VAR_identity_jwt_signing_kms_key_arn: ${{ vars.IDENTITY_JWT_SIGNING_KMS_KEY_ARN }}
     defaults:
       run:
         working-directory: infra/terraform/environments/community
@@ -33,6 +35,8 @@ jobs:
           aws-region: us-east-1
           role-session-name: turksquare-community-apply-${{ github.run_id }}
           mask-aws-account-id: true
+      - name: Validate required production inputs
+        run: bash ../../../scripts/validate-production-inputs.sh community
       - run: terraform init -backend-config=backend.hcl
       - run: terraform validate
       - run: terraform plan -lock-timeout=5m -out=tfplan

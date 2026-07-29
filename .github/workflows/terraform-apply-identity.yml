@@ -9,11 +9,19 @@ on:
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: identity-production-infrastructure
+  cancel-in-progress: false
+
 jobs:
   apply:
     if: inputs.confirmation == 'APPLY_IDENTITY_PRODUCTION'
     runs-on: ubuntu-24.04
     environment: identity-production
+    env:
+      TF_VAR_community_profile_projection_queue_arn: ${{ vars.COMMUNITY_PROFILE_PROJECTION_QUEUE_ARN }}
+      TF_VAR_community_profile_projection_queue_url: ${{ vars.COMMUNITY_PROFILE_PROJECTION_QUEUE_URL }}
     defaults:
       run:
         working-directory: infra/terraform/environments/identity
@@ -24,6 +32,14 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
           aws-region: us-east-1
+      - name: Validate optional Community outbox inputs
+        run: bash ../../../scripts/validate-production-inputs.sh identity
       - run: terraform init -backend-config=backend.hcl
-      - run: terraform plan -out=tfplan
+      - run: terraform validate
+      - run: terraform plan -lock-timeout=5m -out=tfplan
       - run: terraform apply -auto-approve tfplan
+      - name: Verify Identity signing foundation
+        run: |
+          key_arn="$(terraform output -raw identity_jwt_signing_kms_key_arn)"
+          test "$(aws kms describe-key --key-id "$key_arn" --query 'KeyMetadata.KeyState' --output text)" = "Enabled"
+          echo "Identity signing key is enabled."

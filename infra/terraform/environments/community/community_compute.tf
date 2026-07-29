@@ -182,7 +182,7 @@ resource "aws_ecs_task_definition" "profile_projection_worker" {
   execution_role_arn       = aws_iam_role.community_execution.arn
   task_role_arn            = aws_iam_role.community_task.arn
   container_definitions = jsonencode([{
-    name = "profile-projection-worker", image = "${aws_ecr_repository.community.repository_url}:bootstrap", essential = true, readonlyRootFilesystem = true,
+    name    = "profile-projection-worker", image = "${aws_ecr_repository.community.repository_url}:bootstrap", essential = true, readonlyRootFilesystem = true,
     command = ["node", "dist/profile_projection_worker.js"],
     environment = [
       { name = "NODE_ENV", value = "production" }, { name = "DATABASE_HOST", value = aws_db_instance.community.address },
