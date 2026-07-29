@@ -12,26 +12,34 @@ resource "aws_cloudwatch_log_group" "community" {
   retention_in_days = 90
   kms_key_id        = aws_kms_key.community.arn
 }
-resource "aws_secretsmanager_secret" "community_service_config" {
-  name                    = "turksquare/community/service-config"
-  kms_key_id              = aws_kms_key.community.arn
-  recovery_window_in_days = 30
+# This configuration secret was created during the initial bootstrap.  It
+# contained a generated token and consequently put a runtime secret in the
+# Terraform state.  Runtime secrets must never be Terraform-managed: plan
+# roles need state read access.  Keep the existing remote object untouched
+# while removing every related state record; it can be retired separately
+# after its consumers have been audited.
+removed {
+  from = aws_secretsmanager_secret.community_service_config
+
+  lifecycle {
+    destroy = false
+  }
 }
-resource "random_password" "community_internal_token" {
-  length  = 64
-  special = false
+
+removed {
+  from = aws_secretsmanager_secret_version.community_service_config
+
+  lifecycle {
+    destroy = false
+  }
 }
-resource "aws_secretsmanager_secret_version" "community_service_config" {
-  secret_id = aws_secretsmanager_secret.community_service_config.id
-  secret_string = jsonencode({
-    DATABASE_HOST                    = aws_db_instance.community.address
-    DATABASE_PORT                    = "5432"
-    DATABASE_NAME                    = "community_db"
-    JWT_ISSUER                       = "https://api.turksquare.com"
-    JWT_AUDIENCE                     = "turksquare-mobile"
-    IDENTITY_JWT_SIGNING_KMS_KEY_ARN = var.identity_jwt_signing_kms_key_arn
-    INTERNAL_SERVICE_TOKEN           = random_password.community_internal_token.result
-  })
+
+removed {
+  from = random_password.community_internal_token
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "aws_iam_role" "community_execution" {
@@ -46,8 +54,10 @@ resource "aws_iam_role_policy" "community_execution_secrets" {
   name = "read-community-runtime-secrets"
   role = aws_iam_role.community_execution.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.community_service_config.arn, aws_db_instance.community.master_user_secret[0].secret_arn] },
-    { Effect = "Allow", Action = ["kms:Decrypt"], Resource = [aws_kms_key.community.arn] }
+    # The RDS-managed master credential is the only application secret
+    # injected by ECS. Non-sensitive JWT configuration is supplied below as
+    # ordinary task environment configuration.
+    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_db_instance.community.master_user_secret[0].secret_arn] }
   ] })
 }
 resource "aws_iam_role" "community_task" {
@@ -150,13 +160,12 @@ resource "aws_ecs_task_definition" "community" {
       { name = "PORT", value = "8081" },
       { name = "DATABASE_HOST", value = aws_db_instance.community.address },
       { name = "DATABASE_PORT", value = tostring(aws_db_instance.community.port) },
-      { name = "DATABASE_NAME", value = "community_db" }
+      { name = "DATABASE_NAME", value = "community_db" },
+      { name = "JWT_ISSUER", value = "https://api.turksquare.com" },
+      { name = "JWT_AUDIENCE", value = "turksquare-mobile" },
+      { name = "IDENTITY_JWT_SIGNING_KMS_KEY_ARN", value = var.identity_jwt_signing_kms_key_arn }
     ]
     secrets = concat(
-      [
-        for key in ["JWT_ISSUER", "JWT_AUDIENCE", "IDENTITY_JWT_SIGNING_KMS_KEY_ARN"] :
-        { name = key, valueFrom = "${aws_secretsmanager_secret.community_service_config.arn}:${key}::" }
-      ],
       [
         { name = "DATABASE_USER", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:username::" },
         { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:password::" }
@@ -187,12 +196,11 @@ resource "aws_ecs_task_definition" "profile_projection_worker" {
     environment = [
       { name = "NODE_ENV", value = "production" }, { name = "DATABASE_HOST", value = aws_db_instance.community.address },
       { name = "DATABASE_PORT", value = tostring(aws_db_instance.community.port) }, { name = "DATABASE_NAME", value = "community_db" },
-      { name = "IDENTITY_PROFILE_PROJECTION_QUEUE_URL", value = aws_sqs_queue.identity_profile_projection.id }
+      { name = "IDENTITY_PROFILE_PROJECTION_QUEUE_URL", value = aws_sqs_queue.identity_profile_projection.id },
+      { name = "JWT_ISSUER", value = "https://api.turksquare.com" }, { name = "JWT_AUDIENCE", value = "turksquare-mobile" },
+      { name = "IDENTITY_JWT_SIGNING_KMS_KEY_ARN", value = var.identity_jwt_signing_kms_key_arn }
     ],
-    secrets = concat([
-      for key in ["JWT_ISSUER", "JWT_AUDIENCE", "IDENTITY_JWT_SIGNING_KMS_KEY_ARN"] :
-      { name = key, valueFrom = "${aws_secretsmanager_secret.community_service_config.arn}:${key}::" }
-    ], [{ name = "DATABASE_USER", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:username::" }, { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:password::" }]),
+    secrets          = [{ name = "DATABASE_USER", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:username::" }, { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:password::" }],
     logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.community.name, awslogs-region = data.aws_region.current.name, awslogs-stream-prefix = "profile-projection-worker" } }
   }])
 }
@@ -232,6 +240,5 @@ resource "aws_ecs_service" "community" {
   }
 }
 
-output "community_service_config_secret_arn" { value = aws_secretsmanager_secret.community_service_config.arn }
 output "community_ecr_repository_url" { value = aws_ecr_repository.community.repository_url }
 output "community_deploy_role_arn" { value = aws_iam_role.github_community_deploy.arn }
