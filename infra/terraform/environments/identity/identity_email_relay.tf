@@ -93,7 +93,7 @@ resource "aws_lambda_function" "password_safety" {
   runtime          = "nodejs22.x"
   filename         = data.archive_file.password_safety.output_path
   source_code_hash = data.archive_file.password_safety.output_base64sha256
-  timeout          = 5
+  timeout          = 10
   depends_on       = [aws_iam_role_policy_attachment.password_safety_logs, aws_cloudwatch_log_group.password_safety]
 }
 

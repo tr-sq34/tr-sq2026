@@ -82,10 +82,24 @@ async function checkBreachedPassword(password: string): Promise<BreachCheckResul
   const suffix = digest.slice(5);
   try {
     const result = await emailRelay.send(new InvokeCommand({ FunctionName: passwordSafetyFunctionName, InvocationType: 'RequestResponse', Payload: new TextEncoder().encode(JSON.stringify({ prefix, suffix })) }));
-    if (result.FunctionError || !result.Payload) return 'unavailable';
+    if (result.FunctionError || !result.Payload) {
+      app.log.error(
+        {
+          passwordSafetyFunctionName,
+          functionError: result.FunctionError,
+          statusCode: result.StatusCode,
+        },
+        'Password safety Lambda returned an error',
+      );
+      return 'unavailable';
+    }
     const payload = JSON.parse(new TextDecoder().decode(result.Payload)) as { breached?: boolean };
     return payload.breached === true ? 'breached' : 'safe';
-  } catch {
+  } catch (error) {
+    app.log.error(
+      { err: error, passwordSafetyFunctionName },
+      'Password safety Lambda invocation failed',
+    );
     return 'unavailable';
   }
 }
