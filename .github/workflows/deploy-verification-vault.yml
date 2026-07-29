@@ -31,11 +31,15 @@ jobs:
     if: inputs.confirmation == 'DEPLOY_VERIFICATION_VAULT_PRODUCTION'
     runs-on: ubuntu-24.04
     environment: verification-vault-production
+    env:
+      AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN: ${{ vars.AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate GitHub deployment environment contract
+        run: bash infra/scripts/validate-github-environment.sh service-deploy vault "$AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN"
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
           role-session-name: turksquare-verification-release-${{ github.run_id }}
           mask-aws-account-id: true

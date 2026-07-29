@@ -26,11 +26,15 @@ jobs:
     if: inputs.confirmation == 'DEPLOY_COMMUNITY_PRODUCTION'
     runs-on: ubuntu-24.04
     environment: community-production
+    env:
+      AWS_COMMUNITY_DEPLOY_ROLE_ARN: ${{ vars.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate GitHub deployment environment contract
+        run: bash infra/scripts/validate-github-environment.sh service-deploy community "$AWS_COMMUNITY_DEPLOY_ROLE_ARN"
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
           role-session-name: turksquare-community-release-${{ github.run_id }}
           mask-aws-account-id: true

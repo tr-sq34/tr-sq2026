@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment: identity-production
     env:
+      AWS_APPLY_ROLE_ARN: ${{ vars.AWS_APPLY_ROLE_ARN }}
       TF_VAR_community_profile_projection_queue_arn: ${{ vars.COMMUNITY_PROFILE_PROJECTION_QUEUE_ARN }}
       TF_VAR_community_profile_projection_queue_url: ${{ vars.COMMUNITY_PROFILE_PROJECTION_QUEUE_URL }}
     defaults:
@@ -28,12 +29,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+      - name: Validate GitHub production environment contract
+        run: |
+          bash ../../../scripts/validate-github-environment.sh terraform-apply identity "$AWS_APPLY_ROLE_ARN"
+          bash ../../../scripts/validate-production-inputs.sh identity
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_APPLY_ROLE_ARN }}
           aws-region: us-east-1
-      - name: Validate optional Community outbox inputs
-        run: bash ../../../scripts/validate-production-inputs.sh identity
       - run: terraform init -backend-config=backend.hcl
       - run: terraform validate
       - run: terraform plan -lock-timeout=5m -out=tfplan

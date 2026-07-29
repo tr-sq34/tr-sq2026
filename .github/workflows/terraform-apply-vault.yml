@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment: verification-vault-production
     env:
+      AWS_APPLY_ROLE_ARN: ${{ vars.AWS_APPLY_ROLE_ARN }}
       TF_VAR_identity_jwt_signing_kms_key_arn: ${{ vars.IDENTITY_JWT_SIGNING_KMS_KEY_ARN }}
       TF_VAR_community_capability_queue_arn: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_ARN }}
       TF_VAR_community_capability_queue_url: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_URL }}
@@ -31,14 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+      - name: Validate GitHub production environment contract
+        run: |
+          bash ../../../scripts/validate-github-environment.sh terraform-apply vault "$AWS_APPLY_ROLE_ARN"
+          bash ../../../scripts/validate-production-inputs.sh vault
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_APPLY_ROLE_ARN }}
           aws-region: us-east-1
           role-session-name: turksquare-vault-apply-${{ github.run_id }}
           mask-aws-account-id: true
-      - name: Validate required production inputs
-        run: bash ../../../scripts/validate-production-inputs.sh vault
       - run: terraform init -backend-config=backend.hcl
       - run: terraform validate
       - run: terraform plan -lock-timeout=5m -out=tfplan
