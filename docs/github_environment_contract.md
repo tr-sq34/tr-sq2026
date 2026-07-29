@@ -16,3 +16,13 @@ immediate, actionable failure rather than a multi-minute AWS retry.
 
 `us-east-1` is source-controlled in all foundation workflows. It is not an
 Environment variable and must not be silently changed per deployment.
+
+## Terraform state locking
+
+All environments use the S3 backend's native `use_lockfile = true` locking.
+The Management state-access roles already have least-privilege object access
+only within their own `identity/`, `community/`, `vault/` or `backup/` prefix;
+the corresponding `.tflock` object is therefore covered without widening S3
+permissions. The legacy DynamoDB lock table is retained during the migration
+and can be removed only after every environment has completed a successful
+lockfile-backed plan or apply.
