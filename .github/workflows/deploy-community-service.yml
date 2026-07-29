@@ -85,8 +85,13 @@ jobs:
           if [[ "$exit_code" != "0" ]]; then
             echo "Community migration task failed:" >&2
             jq '{StoppedReason: .stoppedReason, StopCode: .stopCode, Container: (.containers[] | select(.name == "community") | {reason,exitCode,lastStatus})}' <<< "$task" >&2
-            task_id="${task_arn##*/}"
-            aws logs filter-log-events --log-group-name /turksquare/community-service --log-stream-name-prefix "community/community/${task_id}" --limit 50 --query 'events[*].message' --output text || true
+            log_stream=$(jq -r '.containers[] | select(.name == "community") | .logStreamName // empty' <<< "$task")
+            if [[ -n "$log_stream" ]]; then
+              echo "Migration log stream: $log_stream" >&2
+              aws logs filter-log-events --log-group-name /turksquare/community-service --log-stream-names "$log_stream" --limit 50 --query 'events[*].message' --output text || true
+            else
+              echo "ECS did not report a migration log stream." >&2
+            fi
             exit 1
           fi
       - name: Start service only after migration success
