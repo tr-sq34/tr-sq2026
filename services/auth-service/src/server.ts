@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import argon2 from 'argon2';
 import Fastify from 'fastify';
 import helmet from '@fastify/helmet';
@@ -37,11 +37,15 @@ const refreshSchema = z.object({ refreshToken: z.string().min(32).max(512) });
 const logoutSchema = z.object({ refreshToken: z.string().min(32).max(512) });
 const actionSchema = z.object({ token: z.string().min(32).max(512) });
 const emailSchema = z.object({ email: z.string().trim().email().max(254) });
+const emailVerificationCodeSchema = emailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
 const resetSchema = actionSchema.extend({ password: z.string().min(12).max(128) });
 const webauthnSchema = z.object({ credential: z.record(z.unknown()) });
 
 const opaqueToken = () => randomBytes(48).toString('base64url');
 const hashOpaque = (token: string) => createHash('sha256').update(token).digest('hex');
+const createEmailVerificationCode = () => randomInt(0, 1000000).toString().padStart(6, '0');
+const hashEmailVerificationCode = (userId: string, code: string) =>
+  createHmac('sha256', jwtKey).update(`${userId}:${code}`).digest('hex');
 let dummyPasswordHash: Promise<string> | undefined;
 
 function passwordError(password: string, identity: { email: string; name: string }) {
@@ -148,6 +152,90 @@ async function deliverActionLink(email: string, kind: 'verify_email' | 'reset_pa
   }
 }
 
+async function deliverEmailVerificationCode(email: string, code: string) {
+  try {
+    await emailRelay.send(new InvokeCommand({
+      FunctionName: emailRelayFunctionName,
+      InvocationType: 'Event',
+      Payload: new TextEncoder().encode(JSON.stringify({
+        recipient: email,
+        from: emailFrom,
+        subject: 'TurkSquare doğrulama kodunuz',
+        text: `TurkSquare doğrulama kodunuz: ${code}\n\nBu kod 10 dakika geçerlidir. Kodu kimseyle paylaşmayın. Bu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
+        category: 'verify_email_code',
+        idempotencyKey: `verify_email_code:${hashEmailVerificationCode(email, code)}`,
+      })),
+    }));
+  } catch (error) {
+    app.log.error({ err: error, category: 'verify_email_code' }, 'Identity verification code delivery failed');
+    throw new Error('Email delivery failed');
+  }
+}
+
+async function issueEmailVerificationCode(user: { id: string; email: string }) {
+  const code = createEmailVerificationCode();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'UPDATE email_verification_codes SET consumed_at=now() WHERE user_id=$1 AND consumed_at IS NULL',
+      [user.id],
+    );
+    await client.query(
+      "INSERT INTO email_verification_codes(user_id, code_hash, expires_at) VALUES($1,$2,now() + interval '10 minutes')",
+      [user.id, hashEmailVerificationCode(user.id, code)],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  await deliverEmailVerificationCode(user.email, code);
+}
+
+type EmailCodeVerificationResult = 'verified' | 'invalid' | 'expired';
+
+async function verifyEmailVerificationCode(userId: string, code: string): Promise<EmailCodeVerificationResult> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query<{ id: string; code_hash: string; expires_at: Date; attempts: number }>(
+      'SELECT id,code_hash,expires_at,attempts FROM email_verification_codes WHERE user_id=$1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE',
+      [userId],
+    );
+    const record = result.rows[0];
+    if (!record || record.expires_at <= new Date()) {
+      if (record) await client.query('UPDATE email_verification_codes SET consumed_at=now() WHERE id=$1', [record.id]);
+      await client.query('COMMIT');
+      return 'expired';
+    }
+    const valid = timingSafeEqual(
+      Buffer.from(record.code_hash, 'hex'),
+      Buffer.from(hashEmailVerificationCode(userId, code), 'hex'),
+    );
+    if (!valid) {
+      const attempts = record.attempts + 1;
+      await client.query(
+        'UPDATE email_verification_codes SET attempts=$2, consumed_at=CASE WHEN $2 >= 5 THEN now() ELSE NULL END WHERE id=$1',
+        [record.id, attempts],
+      );
+      await client.query('COMMIT');
+      return 'invalid';
+    }
+    await client.query('UPDATE email_verification_codes SET consumed_at=now() WHERE id=$1', [record.id]);
+    await client.query('UPDATE users SET email_verified_at=COALESCE(email_verified_at, now()), updated_at=now() WHERE id=$1', [userId]);
+    await client.query('COMMIT');
+    return 'verified';
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function consumeActionToken(token: string, kind: 'verify_email' | 'reset_password') {
   const client = await db.connect();
   try {
@@ -232,9 +320,8 @@ app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 ho
   const passwordHash = await hashPassword(input.password);
   try {
     const result = await db.query<{ id: string; email: string }>('INSERT INTO users(email, display_name, password_hash) VALUES($1,$2,$3) RETURNING id,email', [input.email.toLowerCase(), input.name, passwordHash]);
-    const verificationToken = await createActionToken(result.rows[0]!.id, 'verify_email', '15 minutes');
-    await deliverActionLink(result.rows[0]!.email, 'verify_email', verificationToken);
-    // Delivery is intentionally asynchronous and the token is never returned.
+    await issueEmailVerificationCode(result.rows[0]!);
+    // Delivery is intentionally asynchronous and the code is never returned.
     return reply.code(202).send({ data: { user: result.rows[0], verificationRequired: true } });
   } catch (error: unknown) {
     if ((error as { code?: string }).code === '23505') return reply.code(202).send({ data: { verificationRequired: true } });
@@ -250,16 +337,31 @@ app.post('/v1/auth/email/verify', { config: { rateLimit: { max: 10, timeWindow: 
   return reply.code(204).send();
 });
 
+app.post('/v1/auth/email/verification/confirm', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  const input = emailVerificationCodeSchema.parse(request.body);
+  const user = await db.query<{ id: string }>(
+    'SELECT id FROM users WHERE email=$1 AND email_verified_at IS NULL',
+    [input.email.toLowerCase()],
+  );
+  const userId = user.rows[0]?.id;
+  if (!userId) {
+    return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_CODE', message: 'Kod geçersiz veya süresi dolmuş.' } });
+  }
+  const result = await verifyEmailVerificationCode(userId, input.code);
+  if (result !== 'verified') {
+    return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_CODE', message: 'Kod geçersiz veya süresi dolmuş.' } });
+  }
+  return reply.code(204).send();
+});
+
 // Always return the same response to prevent account enumeration.  For an
-// existing unverified account, invalidate prior links and issue a fresh one.
+// existing unverified account, invalidate prior codes and issue a fresh one.
 app.post('/v1/auth/email/verification/resend', { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = emailSchema.parse(request.body);
   const result = await db.query<{ id: string; email: string }>('SELECT id,email FROM users WHERE email=$1 AND email_verified_at IS NULL', [input.email.toLowerCase()]);
   const user = result.rows[0];
   if (user) {
-    await db.query("UPDATE account_action_tokens SET consumed_at=now() WHERE user_id=$1 AND kind='verify_email' AND consumed_at IS NULL", [user.id]);
-    const token = await createActionToken(user.id, 'verify_email', '15 minutes');
-    await deliverActionLink(user.email, 'verify_email', token);
+    await issueEmailVerificationCode(user);
   }
   return reply.code(202).send({ data: { accepted: true } });
 });
