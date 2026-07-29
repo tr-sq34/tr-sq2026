@@ -83,6 +83,7 @@ jobs:
       - name: Run schema migrations exactly once
         shell: bash
         run: |
+          set -euo pipefail
           network=$(aws ecs describe-services --cluster turksquare-community --services turksquare-community --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
           subnets=$(jq -r '.subnets | join(",")' <<< "$network")
           security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
@@ -99,13 +100,22 @@ jobs:
           if [[ "$exit_code" != "0" ]]; then
             echo "Community migration task failed:" >&2
             jq '{StoppedReason: .stoppedReason, StopCode: .stopCode, Container: (.containers[] | select(.name == "community-migration") | {reason,exitCode,lastStatus})}' <<< "$task" >&2
+            # ECS does not consistently return logStreamName for a stopped
+            # Fargate task.  The awslogs driver stream name is deterministic,
+            # so derive a safe fallback from the task ARN to preserve the
+            # actual database failure in this protected deployment log.
+            task_id="${task_arn##*/}"
             log_stream=$(jq -r '.containers[] | select(.name == "community-migration") | .logStreamName // empty' <<< "$task")
-            if [[ -n "$log_stream" ]]; then
-              echo "Migration log stream: $log_stream" >&2
-              aws logs filter-log-events --log-group-name /turksquare/community-service --log-stream-names "$log_stream" --limit 50 --query 'events[*].message' --output text || true
-            else
-              echo "ECS did not report a migration log stream." >&2
-            fi
+            log_stream="${log_stream:-community-migration/community-migration/$task_id}"
+            echo "Migration log stream: $log_stream" >&2
+            for attempt in {1..6}; do
+              log_events=$(aws logs filter-log-events --log-group-name /turksquare/community-service --log-stream-names "$log_stream" --limit 50 --query 'events[*].message' --output text 2>/dev/null || true)
+              if [[ -n "$log_events" && "$log_events" != "None" ]]; then
+                printf '%s\n' "$log_events" >&2
+                break
+              fi
+              sleep 5
+            done
             exit 1
           fi
       - name: Start service only after migration success
