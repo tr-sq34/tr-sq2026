@@ -17,7 +17,7 @@ Mappings:
   # Apply roles are bound to dedicated, protected production environments.
   # These names deliberately differ from the read-only plan environments.
   AccountEnvironment:
-    '342998331436': { Name: identity }
+    '342998331436': { Name: identity-production }
     '936706105958': { Name: community-production }
     '800554367992': { Name: verification-vault-production }
     '365792980830': { Name: backup }
