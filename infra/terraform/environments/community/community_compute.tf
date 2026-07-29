@@ -93,7 +93,10 @@ resource "aws_iam_role" "github_community_deploy" {
       Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = { StringEquals = {
         "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        "token.actions.githubusercontent.com:sub" = "repo:tr-sq34@309652758/tr-sq2026@1313519494:environment:community-production"
+        "token.actions.githubusercontent.com:sub" = [
+          "repo:tr-sq34@309652758/tr-sq2026@1313519494:environment:community-production",
+          "repo:tr-sq34/tr-sq2026:environment:community-production",
+        ]
       } }
     }]
   })

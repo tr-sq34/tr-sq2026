@@ -14,10 +14,12 @@ Parameters:
     AllowedPattern: '^[0-9]{12}$'
 
 Mappings:
+  # Apply roles are bound to dedicated, protected production environments.
+  # These names deliberately differ from the read-only plan environments.
   AccountEnvironment:
     '342998331436': { Name: identity }
-    '936706105958': { Name: community }
-    '800554367992': { Name: vault }
+    '936706105958': { Name: community-production }
+    '800554367992': { Name: verification-vault-production }
     '365792980830': { Name: backup }
 
 Resources:
@@ -37,10 +39,17 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub
-                  - '${SubjectPrefix}:environment:${EnvironmentName}'
-                  - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
-                    SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                # Support the conventional GitHub subject and the existing
+                # repository-ID subject. Both are exact repository and
+                # environment matches; no wildcard trust is introduced.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub
+                    - '${SubjectPrefix}:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+                      SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                  - !Sub
+                    - 'repo:tr-sq34/tr-sq2026:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
       # PowerUserAccess excludes IAM administration.  The narrow inline policy
       # below grants only the named service roles Terraform needs to maintain.
       ManagedPolicyArns:
