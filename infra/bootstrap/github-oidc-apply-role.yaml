@@ -76,6 +76,27 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
                   - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
+              # Terraform refreshes inline and attached policies before it
+              # changes a managed TurkSquare role.  These are read-only
+              # operations, scoped to the same named roles as the write
+              # permissions above.
+              - Effect: Allow
+                Action:
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
+              # IAM's provider-list action cannot be resource-scoped. The
+              # provider read itself remains limited to GitHub Actions.
+              - Effect: Allow
+                Action: iam:ListOpenIDConnectProviders
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:GetOpenIDConnectProvider
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
         - PolicyName: AllowAssumeScopedTerraformStateRole
           PolicyDocument:
             Version: '2012-10-17'
