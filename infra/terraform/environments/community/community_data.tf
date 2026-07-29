@@ -7,6 +7,35 @@ resource "aws_kms_key" "community" {
   description             = "TurkSquare Community encrypted data"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+  # Keep the account-root delegation statement so IAM policies remain
+  # effective, then grant CloudWatch Logs only the cryptographic operations
+  # required for this one encrypted log group. CloudWatch Logs calls KMS as a
+  # service principal, so relying on the account-root statement alone causes
+  # log-group creation to fail.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableAccountIamDelegation"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCommunityCloudWatchLogsOnly"
+        Effect    = "Allow"
+        Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }
+        Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+        Resource  = "*"
+        Condition = {
+          ArnEquals = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/turksquare/community-service"
+          }
+        }
+      }
+    ]
+  })
 }
 resource "aws_kms_alias" "community" {
   name          = "alias/turksquare/community"

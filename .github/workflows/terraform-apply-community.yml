@@ -7,6 +7,11 @@ on:
         description: 'Type APPLY_COMMUNITY_PRODUCTION to continue'
         required: true
         type: string
+      migrate_legacy_secret_state:
+        description: 'Remove the known legacy runtime-secret records from Terraform state before planning'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -42,5 +47,25 @@ jobs:
           mask-aws-account-id: true
       - run: terraform init -backend-config=backend.hcl
       - run: terraform validate
+      - name: Remove legacy runtime-secret records from state
+        if: inputs.migrate_legacy_secret_state
+        shell: bash
+        run: |
+          set -euo pipefail
+          addresses=(
+            'aws_secretsmanager_secret_version.community_service_config'
+            'aws_secretsmanager_secret.community_service_config'
+            'random_password.community_internal_token'
+          )
+
+          state_addresses="$(terraform state list)"
+          for address in "${addresses[@]}"; do
+            if grep -Fqx "$address" <<<"$state_addresses"; then
+              echo "Removing legacy state record: $address"
+              terraform state rm -lock-timeout=5m "$address"
+            else
+              echo "Legacy state record already absent: $address"
+            fi
+          done
       - run: terraform plan -lock-timeout=5m -out=tfplan
       - run: terraform apply -auto-approve tfplan
