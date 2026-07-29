@@ -27,6 +27,11 @@ jobs:
       # environments. Keep this mapping in sync with the plan-role StackSet
       # trust policy; selecting `community` must never mint a production token.
       name: ${{ inputs.target == 'community' && 'community-plan' || inputs.target == 'vault' && 'vault-plan' || inputs.target }}
+    env:
+      AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
+      TF_VAR_identity_jwt_signing_kms_key_arn: ${{ vars.IDENTITY_JWT_SIGNING_KMS_KEY_ARN }}
+      TF_VAR_community_capability_queue_arn: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_ARN }}
+      TF_VAR_community_capability_queue_url: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_URL }}
     concurrency:
       group: terraform-plan-${{ inputs.target }}
       cancel-in-progress: false
@@ -39,6 +44,14 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.15.8'
+
+      - name: Validate GitHub plan environment contract
+        run: |
+          bash infra/scripts/validate-github-environment.sh terraform-plan "${{ inputs.target }}" "$AWS_PLAN_ROLE_ARN"
+          case "${{ inputs.target }}" in
+            community) bash infra/scripts/validate-production-inputs.sh community ;;
+            vault) bash infra/scripts/validate-production-inputs.sh vault ;;
+          esac
 
       - name: OIDC claim diagnostic
         if: ${{ inputs.debug_oidc }}
@@ -57,8 +70,11 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
+          # All TurkSquare foundation accounts are intentionally pinned to
+          # us-east-1. Keeping this in source avoids a missing/changed GitHub
+          # Environment variable turning a read-only plan into a failed run.
+          aws-region: us-east-1
           role-session-name: turksquare-terraform-plan-${{ github.run_id }}
           mask-aws-account-id: true
 

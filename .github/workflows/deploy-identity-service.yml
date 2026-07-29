@@ -26,15 +26,20 @@ jobs:
     if: inputs.confirmation == 'DEPLOY_IDENTITY_PRODUCTION'
     runs-on: ubuntu-24.04
     environment: identity-production
+    env:
+      AWS_IDENTITY_DEPLOY_ROLE_ARN: ${{ vars.AWS_IDENTITY_DEPLOY_ROLE_ARN }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate GitHub deployment environment contract
+        run: bash infra/scripts/validate-github-environment.sh service-deploy identity "$AWS_IDENTITY_DEPLOY_ROLE_ARN"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_IDENTITY_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_IDENTITY_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
           role-session-name: turksquare-identity-release-${{ github.run_id }}
           mask-aws-account-id: true
