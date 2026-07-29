@@ -1,0 +1,32 @@
+name: Community service CI
+
+on:
+  pull_request:
+    paths:
+      - 'services/community-service/**'
+      - '.github/workflows/community-service-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/community-service/**'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: services/community-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/community-service/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Build container image
+        run: docker build --pull --tag turksquare/community-service:ci .

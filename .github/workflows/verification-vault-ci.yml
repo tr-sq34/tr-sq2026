@@ -1,0 +1,44 @@
+name: Verification Vault CI
+
+on:
+  pull_request:
+    paths:
+      - 'services/verification-vault-service/**'
+      - 'infra/terraform/environments/vault/**'
+      - '.github/workflows/verification-vault-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/verification-vault-service/**'
+      - 'infra/terraform/environments/vault/**'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-service:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: services/verification-vault-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/verification-vault-service/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  validate-infrastructure:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -backend=false
+      - run: terraform validate

@@ -1,0 +1,14 @@
+# Supplied to Synapse at task startup from Secrets Manager. This application
+# service owns only the TurkSquare namespace, preventing normal registration.
+id: turksquare-messaging-gateway
+url: ${MESSAGING_GATEWAY_INTERNAL_URL}
+as_token: ${MATRIX_APPSERVICE_AS_TOKEN}
+hs_token: ${MATRIX_APPSERVICE_HS_TOKEN}
+sender_localpart: turksquare_gateway
+rate_limited: true
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@ts_[0-9a-f-]+:matrix\\.turksquare\\.com"
+  aliases: []
+  rooms: []

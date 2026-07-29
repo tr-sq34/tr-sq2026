@@ -9,7 +9,9 @@
         "migrate": "node dist/migrate.js"
     },
     "dependencies": {
+        "@aws-sdk/client-kms": "^3.1096.0",
         "@aws-sdk/client-lambda": "^3.1096.0",
+        "@aws-sdk/client-sqs": "^3.1096.0",
         "@fastify/cors": "^11.0.0",
         "@fastify/helmet": "^13.0.1",
         "@fastify/rate-limit": "^10.2.1",

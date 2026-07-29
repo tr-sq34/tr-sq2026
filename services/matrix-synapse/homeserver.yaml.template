@@ -1,0 +1,65 @@
+# Production template. Values marked ${...} are injected only by the deployment
+# task from Secrets Manager / Terraform outputs; this file must never contain a
+# real signing key, database password, or application-service token.
+server_name: matrix.turksquare.com
+public_baseurl: https://matrix.turksquare.com/
+pid_file: /data/homeserver.pid
+
+listeners:
+  # The load balancer exposes only the client API. There is intentionally no
+  # `federation` resource and no listener on TCP/8448.
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    resources:
+      - names: [client, media]
+        compress: false
+
+database:
+  name: psycopg2
+  args:
+    user: ${MATRIX_DB_USERNAME}
+    password: ${MATRIX_DB_PASSWORD}
+    database: ${MATRIX_DB_NAME}
+    host: ${MATRIX_DB_HOST}
+    port: 5432
+    cp_min: 5
+    cp_max: 15
+
+redis:
+  enabled: true
+  host: ${MATRIX_REDIS_HOST}
+  port: 6379
+
+enable_registration: false
+enable_registration_without_verification: false
+macaroon_secret_key: ${MATRIX_MACAROON_SECRET}
+form_secret: ${MATRIX_FORM_SECRET}
+signing_key_path: /data/${MATRIX_SIGNING_KEY_FILE}
+
+# Only the TurkSquare-controlled application service can create the internal
+# Matrix identities. The mobile app never talks to this registration surface.
+app_service_config_files:
+  - /data/turksquare-appservice.yaml
+
+# Privacy-first defaults. Public room directory exposure is explicitly disabled.
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: false
+require_auth_for_profile_requests: true
+limit_profile_requests_to_users_who_share_rooms: true
+include_profile_data_on_invite: false
+allow_profile_lookup_over_federation: false
+
+# Federation is blocked in three layers: no federation listener above, ALB/VPC
+# security groups omit :8448, and every gateway-created room has m.federate=false.
+# This setting is intentionally not used as the sole federation control because
+# an empty whitelist does not itself prove that all federation traffic is blocked.
+
+media_store_path: /data/media_store
+max_upload_size: 20M
+url_preview_enabled: false
+enable_media_repo: true
+
+log_config: /data/log.config
+report_stats: false

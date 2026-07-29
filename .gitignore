@@ -28,6 +28,10 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Service build and package-manager artefacts. Lock files remain tracked.
+node_modules/
+dist/
+
 # Flutter build artefacts
 .dart_tool/
 .flutter-plugins-dependencies

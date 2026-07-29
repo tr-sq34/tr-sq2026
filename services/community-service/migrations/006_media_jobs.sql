@@ -1,0 +1,4 @@
+CREATE TABLE media_processing_jobs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(),media_id UUID NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,job_type TEXT NOT NULL CHECK(job_type IN ('scan','sanitize','transcode')),status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','succeeded','failed')),attempts SMALLINT NOT NULL DEFAULT 0,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),finished_at TIMESTAMPTZ);
+CREATE INDEX media_processing_pending_idx ON media_processing_jobs(status,created_at) WHERE status IN ('queued','running');
+
+

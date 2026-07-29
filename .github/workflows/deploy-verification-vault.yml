@@ -1,0 +1,84 @@
+name: Deploy Verification Vault service
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DEPLOY_VERIFICATION_VAULT_PRODUCTION to continue'
+        required: true
+        type: string
+      run_migrations:
+        description: 'Run the one-time idempotent database migrations'
+        required: true
+        default: false
+        type: boolean
+      start_service:
+        description: 'Start the private service after a successful migration'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: verification-vault-production-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirmation == 'DEPLOY_VERIFICATION_VAULT_PRODUCTION'
+    runs-on: ubuntu-24.04
+    environment: verification-vault-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_VERIFICATION_VAULT_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-verification-release-${{ github.run_id }}
+          mask-aws-account-id: true
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build and push immutable image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: turksquare/verification-vault-service
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          image="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build --pull --tag "$image" services/verification-vault-service
+          docker push "$image"
+          echo "uri=$image" >> "$GITHUB_OUTPUT"
+      - name: Render task definition
+        run: aws ecs describe-task-definition --task-definition turksquare-verification-vault-service --query taskDefinition > task-definition.json
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: task_definition
+        with:
+          task-definition: task-definition.json
+          container-name: verification-vault
+          image: ${{ steps.image.outputs.uri }}
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        id: deploy_task_definition
+        with:
+          task-definition: ${{ steps.task_definition.outputs.task-definition }}
+          service: turksquare-verification-vault
+          cluster: turksquare-verification-vault
+          wait-for-service-stability: false
+      - name: Run database migrations once
+        if: inputs.run_migrations
+        shell: bash
+        run: |
+          network=$(aws ecs describe-services --cluster turksquare-verification-vault --services turksquare-verification-vault --query 'services[0].networkConfiguration.awsvpcConfiguration' --output json)
+          subnets=$(jq -r '.subnets | join(",")' <<< "$network")
+          security_groups=$(jq -r '.securityGroups | join(",")' <<< "$network")
+          task_arn=$(aws ecs run-task --cluster turksquare-verification-vault --launch-type FARGATE --task-definition '${{ steps.deploy_task_definition.outputs.task-definition-arn }}' --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$security_groups],assignPublicIp=DISABLED}" --overrides '{"containerOverrides":[{"name":"verification-vault","command":["node","dist/migrate.js"]}]}' --query 'tasks[0].taskArn' --output text)
+          test -n "$task_arn" && test "$task_arn" != "None"
+          aws ecs wait tasks-stopped --cluster turksquare-verification-vault --tasks "$task_arn"
+          exit_code=$(aws ecs describe-tasks --cluster turksquare-verification-vault --tasks "$task_arn" --query 'tasks[0].containers[?name==`verification-vault`].exitCode | [0]' --output text)
+          test "$exit_code" = "0"
+      - name: Start service only after migration success
+        if: inputs.start_service && inputs.run_migrations
+        run: aws ecs update-service --cluster turksquare-verification-vault --service turksquare-verification-vault --desired-count 1 --force-new-deployment

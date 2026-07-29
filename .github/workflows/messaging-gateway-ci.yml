@@ -1,0 +1,33 @@
+name: Messaging gateway CI
+
+on:
+  pull_request:
+    paths:
+      - 'services/messaging-gateway/**'
+      - '.github/workflows/messaging-gateway-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/messaging-gateway/**'
+      - '.github/workflows/messaging-gateway-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/messaging-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/messaging-gateway/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - run: docker build -t turksquare-messaging-gateway:ci .
