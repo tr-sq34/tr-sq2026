@@ -3,7 +3,9 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  availability_zones = slice(data.aws_availability_zones.available.names, 0, 2)
+  availability_zones             = slice(data.aws_availability_zones.available.names, 0, 2)
+  community_projection_queue_arn = trimspace(var.community_profile_projection_queue_arn == null ? "" : var.community_profile_projection_queue_arn)
+  community_projection_queue_url = trimspace(var.community_profile_projection_queue_url == null ? "" : var.community_profile_projection_queue_url)
 }
 
 resource "aws_kms_key" "identity" {
@@ -34,13 +36,19 @@ resource "aws_kms_key" "identity_jwt_signing" {
         Action    = "kms:*"
         Resource  = "*"
       },
+      # These two workload accounts only receive the public verification key.
+      # Account principals are intentionally used here instead of task-role ARNs:
+      # the key must be creatable before the Community and Vault Terraform
+      # foundations create those roles.  Their own task-role IAM policies still
+      # grant only kms:GetPublicKey for this exact key; neither account can sign,
+      # decrypt, administer, or export key material.
       {
-        Sid    = "CommunityServicesReadOnlyPublicKey"
+        Sid    = "WorkloadAccountsReadOnlyPublicKey"
         Effect = "Allow"
         Principal = {
           AWS = [
-            "arn:aws:iam::936706105958:role/TurkSquareCommunityTaskRole",
-            "arn:aws:iam::936706105958:role/TurkSquareMessagingTaskRole"
+            "arn:aws:iam::936706105958:root",
+            "arn:aws:iam::800554367992:root"
           ]
         }
         Action   = ["kms:GetPublicKey"]
@@ -142,6 +150,6 @@ resource "aws_secretsmanager_secret_version" "identity_service_config" {
     EMAIL_FROM                             = "TurkSquare <noreply@notify.turksquare.com>"
     AUTH_ACTION_BASE_URL                   = "https://api.turksquare.com/v1/auth/action"
     PWNED_PASSWORDS_MODE                   = "required"
-    COMMUNITY_PROFILE_PROJECTION_QUEUE_URL = var.community_profile_projection_queue_url
+    COMMUNITY_PROFILE_PROJECTION_QUEUE_URL = local.community_projection_queue_url
   })
 }
