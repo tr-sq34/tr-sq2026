@@ -155,6 +155,16 @@ resource "aws_ecs_task_definition" "community" {
     essential              = true
     readonlyRootFilesystem = true
     portMappings           = [{ containerPort = 8081, protocol = "tcp" }]
+    healthCheck = {
+      # The health endpoint verifies both the HTTP server and its private RDS
+      # connection. ECS therefore does not count a process that merely starts
+      # but cannot reach its encrypted database as healthy.
+      command     = ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8081/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 45
+    }
     environment = [
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = "8081" },

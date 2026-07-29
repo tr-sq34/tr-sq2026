@@ -79,4 +79,30 @@ jobs:
           test "$exit_code" = "0"
       - name: Start service only after migration success
         if: inputs.start_service
-        run: aws ecs update-service --cluster turksquare-community --service turksquare-community --desired-count 1 --force-new-deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecs update-service --cluster turksquare-community --service turksquare-community --desired-count 1 --force-new-deployment >/dev/null
+
+          # There is intentionally no public load balancer yet. Verify the
+          # private Fargate task from ECS' container health check instead. The
+          # check calls /health, which also confirms the private RDS path.
+          for attempt in {1..24}; do
+            task_arn=$(aws ecs list-tasks --cluster turksquare-community --service-name turksquare-community --desired-status RUNNING --query 'taskArns[0]' --output text)
+            if [[ -n "$task_arn" && "$task_arn" != "None" ]]; then
+              health=$(aws ecs describe-tasks --cluster turksquare-community --tasks "$task_arn" --query 'tasks[0].containers[?name==`community`].healthStatus | [0]' --output text)
+              last_status=$(aws ecs describe-tasks --cluster turksquare-community --tasks "$task_arn" --query 'tasks[0].lastStatus' --output text)
+              if [[ "$health" == "HEALTHY" ]]; then
+                echo "Private Community API health check passed."
+                exit 0
+              fi
+              if [[ "$last_status" == "STOPPED" || "$health" == "UNHEALTHY" ]]; then
+                aws ecs describe-tasks --cluster turksquare-community --tasks "$task_arn" --query 'tasks[0].{StoppedReason:stoppedReason,ContainerReason:containers[?name==`community`].reason|[0],ExitCode:containers[?name==`community`].exitCode|[0]}' --output json
+                exit 1
+              fi
+            fi
+            sleep 15
+          done
+
+          echo "Timed out waiting for the private Community API health check."
+          exit 1
