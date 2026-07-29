@@ -58,7 +58,10 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          # All TurkSquare foundation accounts are intentionally pinned to
+          # us-east-1. Keeping this in source avoids a missing/changed GitHub
+          # Environment variable turning a read-only plan into a failed run.
+          aws-region: us-east-1
           role-session-name: turksquare-terraform-plan-${{ github.run_id }}
           mask-aws-account-id: true
 
