@@ -161,7 +161,7 @@ async function deliverEmailVerificationCode(email: string, code: string) {
         recipient: email,
         from: emailFrom,
         subject: 'TurkSquare doğrulama kodunuz',
-        text: `TurkSquare doğrulama kodunuz: ${code}\n\nBu kod 10 dakika geçerlidir. Kodu kimseyle paylaşmayın. Bu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
+        text: `TurkSquare doğrulama kodunuz: ${code}\n\nBu kod 59 saniye geçerlidir. Kodu kimseyle paylaşmayın. Bu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
         category: 'verify_email_code',
         idempotencyKey: `verify_email_code:${hashEmailVerificationCode(email, code)}`,
       })),
@@ -182,7 +182,7 @@ async function issueEmailVerificationCode(user: { id: string; email: string }) {
       [user.id],
     );
     await client.query(
-      "INSERT INTO email_verification_codes(user_id, code_hash, expires_at) VALUES($1,$2,now() + interval '10 minutes')",
+      "INSERT INTO email_verification_codes(user_id, code_hash, expires_at) VALUES($1,$2,now() + interval '59 seconds')",
       [user.id, hashEmailVerificationCode(user.id, code)],
     );
     await client.query('COMMIT');
