@@ -126,5 +126,27 @@ jobs:
       - name: Start service only after migration success
         if: inputs.start_service
         run: |
+          set -euo pipefail
+          diagnose_service() {
+            echo 'Identity service diagnostics:' >&2
+            aws ecs describe-services --cluster turksquare-identity --services turksquare-identity \
+              --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[].{status:status,desired:desiredCount,running:runningCount,pending:pendingCount,rollout:rolloutState,reason:rolloutStateReason},events:events[0:10].[createdAt,message]}' \
+              --output json >&2 || true
+
+            task_arns=$(aws ecs list-tasks --cluster turksquare-identity --service-name turksquare-identity --desired-status STOPPED --query 'taskArns[0:5]' --output text || true)
+            for task_arn in $task_arns; do
+              task=$(aws ecs describe-tasks --cluster turksquare-identity --tasks "$task_arn" --query 'tasks[0]' --output json || true)
+              echo "$task" | jq '{stoppedReason,stopCode,containers: [.containers[] | {name,lastStatus,exitCode,reason,logStreamName}]}' >&2
+              task_id="${task_arn##*/}"
+              log_stream=$(echo "$task" | jq -r '.containers[] | select(.name == "identity") | .logStreamName // empty')
+              log_stream="${log_stream:-identity/identity/$task_id}"
+              echo "Identity log stream: $log_stream" >&2
+              aws logs filter-log-events --log-group-name /turksquare/identity-service --log-stream-names "$log_stream" --limit 50 --query 'events[*].message' --output text >&2 || true
+            done
+          }
+
           aws ecs update-service --cluster turksquare-identity --service turksquare-identity --desired-count 1 --force-new-deployment
-          aws ecs wait services-stable --cluster turksquare-identity --services turksquare-identity
+          if ! aws ecs wait services-stable --cluster turksquare-identity --services turksquare-identity; then
+            diagnose_service
+            exit 1
+          fi
