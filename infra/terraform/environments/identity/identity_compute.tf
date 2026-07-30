@@ -146,11 +146,7 @@ resource "aws_iam_role_policy" "ecs_execution_runtime_secrets" {
       Effect   = "Allow"
       Action   = ["kms:Decrypt"]
       Resource = [aws_kms_key.identity.arn]
-      }, {
-      Effect   = "Allow"
-      Action   = ["kms:GetPublicKey", "kms:Sign"]
-      Resource = [aws_kms_key.identity_jwt_signing.arn]
-    }]
+      }]
   })
 }
 
@@ -225,6 +221,13 @@ resource "aws_iam_role_policy" "identity_task_secrets" {
       Effect   = "Allow"
       Action   = ["kms:Decrypt"]
       Resource = [aws_kms_key.identity.arn]
+      }, {
+      # The application, rather than the ECS execution agent, reads the
+      # public key at startup and signs access tokens.  Keep both operations
+      # constrained to the dedicated asymmetric signing key.
+      Effect   = "Allow"
+      Action   = ["kms:GetPublicKey", "kms:Sign"]
+      Resource = [aws_kms_key.identity_jwt_signing.arn]
       }, {
       Effect   = "Allow"
       Action   = ["lambda:InvokeFunction"]
@@ -312,6 +315,13 @@ resource "aws_ecs_service" "identity" {
     subnets          = aws_subnet.identity_private[*].id
     security_groups  = [aws_security_group.identity_service.id]
     assign_public_ip = false
+  }
+
+  # Container releases own the running revision and desired count.  Terraform
+  # provisions the service but must not roll a healthy release back to the
+  # bootstrap image or scale it to zero on a later infrastructure apply.
+  lifecycle {
+    ignore_changes = [task_definition, desired_count]
   }
 }
 
