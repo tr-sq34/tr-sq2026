@@ -50,7 +50,7 @@ const webauthnSchema = z.object({ credential: z.record(z.unknown()) });
 const onboardingSchema = z.object({
   city: z.string().trim().min(2).max(100),
   regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/),
-  interests: z.array(z.string().trim().min(2).max(40)).min(1).max(8).transform((values) => [...new Set(values.map((value) => value.toLocaleLowerCase('tr-TR')))]),
+  interests: z.array(z.string().trim().min(2).max(40)).min(1).max(12).transform((values) => [...new Set(values.map((value) => value.toLocaleLowerCase('tr-TR')))]),
   primaryIntent: z.enum(['community', 'marketplace', 'networking', 'events']),
 });
 
