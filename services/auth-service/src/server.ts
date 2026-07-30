@@ -360,7 +360,11 @@ await app.register(cors, {
     }
     callback(null, false);
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
+  // The mobile app uses PUT for the idempotent onboarding preference update.
+  // Omitting it makes browsers reject the preflight request before it reaches
+  // the authenticated endpoint, while native clients misleadingly continue
+  // to work.
+  methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type'],
   maxAge: 600,
 });
