@@ -192,7 +192,10 @@ resource "aws_db_instance" "vault" {
   manage_master_user_password     = true
   multi_az                        = true
   publicly_accessible             = false
-  deletion_protection             = true
+  # Normal operation prevents accidental database deletion.  A separately
+  # reviewed decommission run must set vault_decommission_mode=true before a
+  # final snapshot can be created and the instance removed.
+  deletion_protection             = !var.vault_decommission_mode
   skip_final_snapshot             = false
   final_snapshot_identifier       = "turksquare-verification-vault-final"
   backup_retention_period         = 35

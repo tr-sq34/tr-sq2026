@@ -1,0 +1,66 @@
+name: Plan Verification Vault Decommission
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type PLAN_VERIFICATION_VAULT_DECOMMISSION to generate the cost-removal plan'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: verification-vault-production-infrastructure
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: inputs.confirmation == 'PLAN_VERIFICATION_VAULT_DECOMMISSION'
+    runs-on: ubuntu-24.04
+    environment: vault-plan
+    env:
+      AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
+      TF_VAR_identity_jwt_signing_kms_key_arn: ${{ vars.IDENTITY_JWT_SIGNING_KMS_KEY_ARN }}
+      TF_VAR_community_capability_queue_arn: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_ARN }}
+      TF_VAR_community_capability_queue_url: ${{ vars.COMMUNITY_CAPABILITY_QUEUE_URL }}
+      TF_VAR_vault_decommission_mode: 'true'
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/vault
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Validate environment contract
+        run: |
+          bash ../../../scripts/validate-github-environment.sh terraform-plan vault "$AWS_PLAN_ROLE_ARN"
+          bash ../../../scripts/validate-production-inputs.sh vault
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-vault-decommission-plan-${{ github.run_id }}
+          mask-aws-account-id: true
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform validate
+      - name: Plan removal of billable Vault runtime resources
+        run: |
+          terraform plan -destroy -lock-timeout=5m -no-color \
+            -target=aws_db_instance.vault \
+            -target=aws_ecs_service.verification \
+            -target=aws_ecs_task_definition.verification \
+            -target=aws_ecs_cluster.verification \
+            -target=aws_lb_listener.vault_https \
+            -target=aws_lb_target_group.vault \
+            -target=aws_lb.vault \
+            -target=aws_wafv2_web_acl_association.vault \
+            -target=aws_wafv2_web_acl.vault \
+            -target='aws_vpc_endpoint.vault_interface["ecr.api"]' \
+            -target='aws_vpc_endpoint.vault_interface["ecr.dkr"]' \
+            -target='aws_vpc_endpoint.vault_interface["kms"]' \
+            -target='aws_vpc_endpoint.vault_interface["logs"]' \
+            -target='aws_vpc_endpoint.vault_interface["secretsmanager"]' \
+            -target='aws_vpc_endpoint.vault_interface["sqs"]' \
+            -target='aws_vpc_endpoint.vault_interface["sts"]'

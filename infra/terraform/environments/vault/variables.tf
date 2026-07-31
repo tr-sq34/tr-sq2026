@@ -19,6 +19,11 @@ variable "service_desired_count" {
   type    = number
   default = 0
 }
+variable "vault_decommission_mode" {
+  type        = bool
+  default     = false
+  description = "Temporarily permits the encrypted RDS final-snapshot deletion path during an approved Vault decommission."
+}
 variable "identity_jwt_signing_kms_key_arn" {
   type    = string
   default = "arn:aws:kms:us-east-1:342998331436:key/replace-at-apply"
