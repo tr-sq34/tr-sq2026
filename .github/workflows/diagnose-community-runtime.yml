@@ -1,0 +1,54 @@
+name: Diagnose Community runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DIAGNOSE_COMMUNITY_RUNTIME to run read-only diagnostics'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    if: inputs.confirmation == 'DIAGNOSE_COMMUNITY_RUNTIME'
+    runs-on: ubuntu-24.04
+    environment: community-production
+    env:
+      AWS_COMMUNITY_DEPLOY_ROLE_ARN: ${{ vars.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment environment contract
+        run: bash infra/scripts/validate-github-environment.sh service-deploy community "$AWS_COMMUNITY_DEPLOY_ROLE_ARN"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_COMMUNITY_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-community-diagnose-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Inspect Community services
+        run: |
+          aws ecs describe-services \
+            --cluster turksquare-community \
+            --services turksquare-community turksquare-community-profile-projection-worker \
+            --query 'services[].{Name:serviceName,Desired:desiredCount,Running:runningCount,Pending:pendingCount,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Running:runningCount,Pending:pendingCount}}' \
+            --output json
+      - name: Inspect recent ECS tasks
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_arns="$(aws ecs list-tasks --cluster turksquare-community --desired-status RUNNING --query 'taskArns' --output text)"
+          stopped_arns="$(aws ecs list-tasks --cluster turksquare-community --desired-status STOPPED --query 'taskArns[:10]' --output text)"
+          all_tasks="$task_arns $stopped_arns"
+          if [[ -n "${all_tasks// }" ]]; then
+            aws ecs describe-tasks \
+              --cluster turksquare-community \
+              --tasks $all_tasks \
+              --query 'tasks[].{Task:lastStatus,StopCode:stopCode,StoppedReason:stoppedReason,Containers:containers[].{Name:name,Status:lastStatus,Reason:reason,Exit:exitCode}}' \
+              --output json
+          else
+            echo 'No running or recently stopped Community tasks found.'
+          fi
