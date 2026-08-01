@@ -118,16 +118,31 @@ jobs:
             done
             exit 1
           fi
+      - name: Render profile projection worker task definition
+        run: aws ecs describe-task-definition --task-definition turksquare-community-profile-projection-worker --query taskDefinition > projection-worker-task-definition.json
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: projection_worker_task_definition
+        with:
+          task-definition: projection-worker-task-definition.json
+          container-name: profile-projection-worker
+          image: ${{ steps.image.outputs.uri }}
+      - name: Register profile projection worker task definition
+        id: deploy_projection_worker_task_definition
+        run: |
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' '${{ steps.projection_worker_task_definition.outputs.task-definition }}' > projection-worker-task-definition-register.json
+          arn=$(aws ecs register-task-definition --cli-input-json file://projection-worker-task-definition-register.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task-definition-arn=$arn" >> "$GITHUB_OUTPUT"
       - name: Start service only after migration success
         if: inputs.start_service
         shell: bash
         run: |
           set -euo pipefail
           aws ecs update-service --cluster turksquare-community --service turksquare-community --desired-count 1 --force-new-deployment >/dev/null
+          aws ecs update-service --cluster turksquare-community --service turksquare-community-profile-projection-worker --task-definition '${{ steps.deploy_projection_worker_task_definition.outputs.task-definition-arn }}' --desired-count 1 --force-new-deployment >/dev/null
 
-          # There is intentionally no public load balancer yet. Verify the
-          # private Fargate task from ECS' container health check instead. The
-          # check calls /health, which also confirms the private RDS path.
+          # Verify the Fargate task through its container health check. This
+          # check calls /health and also confirms the private RDS path without
+          # relying on the public edge.
           for attempt in {1..24}; do
             task_arn=$(aws ecs list-tasks --cluster turksquare-community --service-name turksquare-community --desired-status RUNNING --query 'taskArns[0]' --output text)
             if [[ -n "$task_arn" && "$task_arn" != "None" ]]; then
@@ -146,4 +161,19 @@ jobs:
           done
 
           echo "Timed out waiting for the private Community API health check."
+          exit 1
+      - name: Verify profile projection worker is running
+        if: inputs.start_service
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            task_arn=$(aws ecs list-tasks --cluster turksquare-community --service-name turksquare-community-profile-projection-worker --desired-status RUNNING --query 'taskArns[0]' --output text)
+            if [[ -n "$task_arn" && "$task_arn" != "None" ]]; then
+              echo "Profile projection worker is running."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Profile projection worker did not reach RUNNING state." >&2
           exit 1
