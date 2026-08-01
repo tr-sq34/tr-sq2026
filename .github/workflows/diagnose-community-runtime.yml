@@ -52,3 +52,7 @@ jobs:
           else
             echo 'No running or recently stopped Community tasks found.'
           fi
+      - name: Verify public HTTPS health endpoint
+        run: |
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            https://community-api.turksquare.com/health
