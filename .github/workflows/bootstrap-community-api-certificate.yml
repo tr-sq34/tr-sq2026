@@ -1,0 +1,56 @@
+name: Bootstrap Community API certificate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type CREATE_COMMUNITY_API_CERTIFICATE to create only the DNS-validated ACM certificate'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: community-api-certificate-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  create-certificate:
+    if: inputs.confirmation == 'CREATE_COMMUNITY_API_CERTIFICATE'
+    runs-on: ubuntu-24.04
+    environment: community-production
+    env:
+      AWS_APPLY_ROLE_ARN: ${{ vars.AWS_APPLY_ROLE_ARN }}
+      TF_VAR_identity_jwt_signing_kms_key_arn: ${{ vars.IDENTITY_JWT_SIGNING_KMS_KEY_ARN }}
+    defaults:
+      run:
+        working-directory: infra/terraform/environments/community
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Validate production environment contract
+        run: |
+          bash ../../../scripts/validate-github-environment.sh terraform-apply community "$AWS_APPLY_ROLE_ARN"
+          bash ../../../scripts/validate-production-inputs.sh community
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_APPLY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: turksquare-community-cert-${{ github.run_id }}
+          mask-aws-account-id: true
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform validate
+      - name: Create only the ACM DNS certificate
+        run: terraform apply -lock-timeout=5m -auto-approve -target=aws_acm_certificate.community_api
+      - name: Print DNS validation record for Cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate_arn="$(terraform state show -no-color aws_acm_certificate.community_api | awk -F' = ' '/^[[:space:]]*arn[[:space:]]*=/{print $2; exit}' | tr -d '\"')"
+          aws acm describe-certificate \
+            --region us-east-1 \
+            --certificate-arn "$certificate_arn" \
+            --query 'Certificate.DomainValidationOptions[].ResourceRecord.{Name:Name,Type:Type,Value:Value}' \
+            --output table | tee -a "$GITHUB_STEP_SUMMARY"
