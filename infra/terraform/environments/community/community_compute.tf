@@ -282,6 +282,12 @@ resource "aws_ecs_service" "community" {
     enable   = true
     rollback = true
   }
+  depends_on = [aws_lb_listener.community_https]
+  load_balancer {
+    target_group_arn = aws_lb_target_group.community.arn
+    container_name   = "community"
+    container_port   = 8081
+  }
   network_configuration {
     subnets          = aws_subnet.community_private[*].id
     security_groups  = [aws_security_group.community_service.id]

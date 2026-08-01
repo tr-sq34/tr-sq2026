@@ -18,3 +18,9 @@ variable "identity_account_id" {
   type    = string
   default = "342998331436"
 }
+
+variable "community_api_domain_name" {
+  type        = string
+  default     = "community-api.turksquare.com"
+  description = "Branded public HTTPS host for the Community API."
+}
