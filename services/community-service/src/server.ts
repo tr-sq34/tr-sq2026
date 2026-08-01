@@ -2,8 +2,15 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { createPublicKey } from 'node:crypto';
+import { createPublicKey, randomUUID } from 'node:crypto';
 import { GetPublicKeyCommand, KMSClient } from '@aws-sdk/client-kms';
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { importSPKI, jwtVerify } from 'jose';
 import { z } from 'zod';
 import { createDatabasePool } from './database.js';
@@ -11,6 +18,8 @@ import { createDatabasePool } from './database.js';
 const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Missing ${key}`); return value; };
 const db = createDatabasePool();
 const identityKms = new KMSClient({});
+const mediaS3 = new S3Client({});
+const mediaBucket = required('COMMUNITY_MEDIA_BUCKET');
 const identityVerificationKey = await (async () => {
   const key = await identityKms.send(new GetPublicKeyCommand({ KeyId: required('IDENTITY_JWT_SIGNING_KMS_KEY_ARN') }));
   if (!key.PublicKey) throw new Error('Identity signing public key is unavailable');
@@ -24,6 +33,14 @@ const shareBody = z.object({ idempotencyKey: z.string().uuid() });
 const postBody = z.object({ body:z.string().trim().min(1).max(2200), visibility:z.enum(['public','friends_only']).default('public'), locationLabel:z.string().trim().max(120).optional(), locationRegionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(), marketplaceListingId:z.string().uuid().optional(), poll:z.object({ question:z.string().trim().min(1).max(300), selectionMode:z.enum(['single','multiple']), options:z.array(z.string().trim().min(1).max(160)).min(2).max(4), closesAt:z.string().datetime().optional() }).optional(), idempotencyKey:z.string().uuid() });
 const storyBody=z.object({mediaId:z.string().uuid(),visibility:z.enum(['network','public']),ttlHours:z.union([z.literal(6),z.literal(12),z.literal(24)])});
 const storyQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(30)});
+const mediaPresignBody=z.object({
+  kind:z.literal('image'),
+  contentType:z.enum(['image/jpeg','image/png','image/webp']),
+  fileName:z.string().trim().min(1).max(180),
+  sizeBytes:z.coerce.number().int().min(1).max(10 * 1024 * 1024),
+  sha256:z.string().regex(/^[a-fA-F0-9]{64}$/),
+});
+const mediaCompleteBody=z.object({uploadId:z.string().uuid()});
 const commentBody=z.object({body:z.string().trim().min(1).max(1000),parentId:z.string().uuid().optional()});
 const listingBody=z.object({title:z.string().trim().min(3).max(140),description:z.string().trim().min(10).max(4000),price:z.coerce.number().nonnegative(),city:z.string().trim().min(2).max(100).optional(),regionCode:z.string().regex(/^[A-Za-z]{2}$/).optional()});
 const listingQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(20)});
@@ -31,6 +48,11 @@ const auctionBody=z.object({startingPrice:z.coerce.number().nonnegative(),minimu
 const bidBody=z.object({amount:z.coerce.number().positive()});
 const decodeCursor = (cursor?: string) => { if (!cursor) return null; try { const [createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|'); if (!createdAt || !id) throw Error(); return { createdAt, id }; } catch { throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 }); } };
 const encodeCursor = (row: { created_at: Date; id: string }) => Buffer.from(`${row.created_at.toISOString()}|${row.id}`).toString('base64url');
+const sha256Base64 = (hex: string) => Buffer.from(hex, 'hex').toString('base64');
+const mediaObjectUrl = async (safeUrlOrKey: string) => {
+  if (/^https:\/\//.test(safeUrlOrKey)) return safeUrlOrKey;
+  return getSignedUrl(mediaS3, new GetObjectCommand({ Bucket: mediaBucket, Key: safeUrlOrKey }), { expiresIn: 300 });
+};
 
 async function viewer(headers: { authorization?: string }) { const token = headers.authorization?.replace(/^Bearer\s+/i, ''); if (!token) throw Error('UNAUTHORIZED'); const verified = await jwtVerify(token, identityVerificationKey, { issuer: required('JWT_ISSUER'), audience: required('JWT_AUDIENCE'), algorithms: ['RS256'] }); if (!verified.payload.sub) throw Error('UNAUTHORIZED'); return verified.payload.sub; }
 await app.register(helmet); await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute' });
@@ -54,6 +76,153 @@ app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => 
   } catch (error) {
     app.log.warn({ err: error }, 'Community health check failed');
     return reply.code(503).send({ status: 'unavailable' });
+  }
+});
+
+// A client can upload only a declared image to a private quarantine prefix.
+// The final safe object is created by a separate media processor after scan
+// and EXIF stripping; it is never the object addressed by this presigned URL.
+app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = mediaPresignBody.parse(request.body);
+    const mediaId = randomUUID();
+    const uploadId = randomUUID();
+    const quarantineKey = `uploads/quarantine/${userId}/${mediaId}`;
+    const checksum = sha256Base64(input.sha256.toLowerCase());
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "INSERT INTO media_assets(id,owner_id,status,kind) VALUES($1,$2,'quarantined',$3)",
+        [mediaId, userId, input.kind],
+      );
+      await client.query(
+        "INSERT INTO media_upload_sessions(id,media_id,owner_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')",
+        [uploadId, mediaId, userId, quarantineKey, Buffer.from(input.sha256, 'hex'), input.sizeBytes, input.contentType],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    const uploadUrl = await getSignedUrl(mediaS3, new PutObjectCommand({
+      Bucket: mediaBucket,
+      Key: quarantineKey,
+      ContentType: input.contentType,
+      ContentLength: input.sizeBytes,
+      ChecksumSHA256: checksum,
+      Metadata: { uploadid: uploadId },
+    }), { expiresIn: 300 });
+    return reply.code(201).send({
+      data: {
+        uploadId,
+        mediaId,
+        uploadUrl,
+        expiresInSeconds: 300,
+        requiredHeaders: {
+          'content-type': input.contentType,
+          'x-amz-checksum-sha256': checksum,
+        },
+      },
+    });
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+      error: { code: 'MEDIA_UPLOAD_NOT_ACCEPTED', message: 'Medya yükleme isteği kabul edilemedi.' },
+    });
+  }
+});
+
+app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const { uploadId } = mediaCompleteBody.parse(request.body);
+    const client = await db.connect();
+    let row: {
+      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+    } | undefined;
+    try {
+    await client.query('BEGIN');
+    const session = await client.query<{
+      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+    }>(
+      'SELECT media_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+      [uploadId, userId],
+    );
+    row = session.rows[0];
+    if (!row || row.expires_at <= new Date()) {
+      await client.query('ROLLBACK');
+      return reply.code(410).send({ error: { code: 'UPLOAD_EXPIRED', message: 'Yükleme süresi doldu.' } });
+    }
+    if (row.completed_at) {
+      await client.query('COMMIT');
+      return { data: { mediaId: row.media_id, status: 'scanning' } };
+    }
+    const head = await mediaS3.send(new HeadObjectCommand({ Bucket: mediaBucket, Key: row.quarantine_key, ChecksumMode: 'ENABLED' }));
+    if (head.ContentLength !== Number(row.expected_size_bytes) || head.ContentType !== row.content_type || head.ChecksumSHA256 !== row.expected_sha256.toString('base64')) {
+      await client.query('ROLLBACK');
+      return reply.code(400).send({ error: { code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' } });
+    }
+    await client.query("UPDATE media_upload_sessions SET completed_at=now() WHERE id=$1 AND completed_at IS NULL", [uploadId]);
+    await client.query("UPDATE media_assets SET status='scanning' WHERE id=$1 AND owner_id=$2 AND status='quarantined'", [row.media_id, userId]);
+    await client.query("INSERT INTO media_processing_jobs(media_id,job_type,status) VALUES($1,'scan','queued') ON CONFLICT DO NOTHING", [row.media_id]);
+    await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    return reply.code(202).send({ data: { mediaId: row!.media_id, status: 'scanning' } });
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+      error: { code: 'MEDIA_COMPLETE_FAILED', message: 'Medya doğrulama kuyruğa alınamadı.' },
+    });
+  }
+});
+
+// Media IDs are not a sharing mechanism. The owner can poll this endpoint
+// while an upload is processed; everyone else receives media through an
+// already-authorized Community object such as a visible Story.
+app.get('/v1/media/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const mediaId = z.string().uuid().parse((request.params as { id: string }).id);
+    const media = await db.query<{
+      id: string;
+      status: 'quarantined' | 'scanning' | 'ready' | 'rejected';
+      kind: 'image' | 'video';
+      safe_url: string | null;
+      thumbnail_url: string | null;
+    }>(
+      'SELECT id,status,kind,safe_url,thumbnail_url FROM media_assets WHERE id=$1 AND owner_id=$2',
+      [mediaId, userId],
+    );
+    const row = media.rows[0];
+    if (!row) {
+      return reply.code(404).send({
+        error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' },
+      });
+    }
+    return {
+      data: {
+        id: row.id,
+        status: row.status,
+        kind: row.kind,
+        url: row.status === 'ready' && row.safe_url
+            ? await mediaObjectUrl(row.safe_url)
+            : null,
+        thumbnailUrl: row.status === 'ready' && row.thumbnail_url
+            ? await mediaObjectUrl(row.thumbnail_url)
+            : null,
+      },
+    };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+      error: { code: 'MEDIA_STATUS_FAILED', message: 'Medya durumu okunamadı.' },
+    });
   }
 });
 
@@ -159,7 +328,48 @@ app.post('/v1/community/posts/:postId/poll/votes', async (request, reply) => {
   try {const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {postId:string}).postId);const input=z.object({optionIds:z.array(z.string().uuid()).min(1).max(4)}).parse(request.body);const client=await db.connect();try{await client.query('BEGIN');const poll=await client.query<{selection_mode:string;closes_at:Date|null}>('SELECT selection_mode,closes_at FROM post_polls WHERE post_id=$1 FOR UPDATE',[postId]);if(!poll.rows[0]||(poll.rows[0].closes_at&&poll.rows[0].closes_at<=new Date())||(poll.rows[0].selection_mode==='single'&&input.optionIds.length!==1))throw Error();const valid=await client.query('SELECT id FROM post_poll_options WHERE post_id=$1 AND id=ANY($2::uuid[])',[postId,input.optionIds]);if(valid.rows.length!==input.optionIds.length)throw Error();await client.query('DELETE FROM post_poll_votes WHERE voter_id=$1 AND option_id IN (SELECT id FROM post_poll_options WHERE post_id=$2)',[userId,postId]);for(const id of input.optionIds)await client.query('INSERT INTO post_poll_votes(option_id,voter_id) VALUES($1,$2)',[id,userId]);await client.query('COMMIT');return reply.code(204).send();}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}catch{return reply.code(400).send({error:{code:'POLL_VOTE_FAILED',message:'Anket oyu kaydedilemedi.'}});}
 });
 const storyAccessWhere = (storyAlias: string, viewerParam: string) => `(${storyAlias}.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=${storyAlias}.author_id AND r.active) OR EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=${storyAlias}.author_id AND o.role='official' AND o.active) OR (${storyAlias}.visibility='public' AND ${storyAlias}.region_code=(SELECT region_code FROM community_profile_projection WHERE user_id=${viewerParam})))`;
-app.get('/v1/community/stories',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=storyQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where=`s.expires_at>now() AND m.status='ready' AND ${storyAccessWhere('s','$1')}`;if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (s.created_at,s.id)<($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;author_id:string;author_name:string;created_at:Date;expires_at:Date;visibility:'network'|'public';safe_url:string;thumbnail_url:string|null;kind:'image'|'video';like_count:string;is_liked:boolean;is_viewed:boolean;source:'self'|'official'|'network'|'local'}>(`SELECT s.id,s.author_id,COALESCE(p.display_name,'TurkSquare üyesi') author_name,s.created_at,s.expires_at,s.visibility,m.safe_url,m.thumbnail_url,m.kind,(SELECT count(*) FROM story_likes l WHERE l.story_id=s.id) like_count,EXISTS(SELECT 1 FROM story_likes l WHERE l.story_id=s.id AND l.actor_id=$1) is_liked,EXISTS(SELECT 1 FROM story_views v WHERE v.story_id=s.id AND v.viewer_id=$1) is_viewed,CASE WHEN s.author_id=$1 THEN 'self' WHEN EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=s.author_id AND o.role='official' AND o.active) THEN 'official' WHEN EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=s.author_id AND r.active) THEN 'network' ELSE 'local' END source FROM stories s JOIN media_assets m ON m.id=s.media_id LEFT JOIN community_profile_projection p ON p.user_id=s.author_id WHERE ${where} ORDER BY s.created_at DESC,s.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);return{data:page.map((s)=>({id:s.id,authorId:s.author_id,authorName:s.author_name,createdAt:s.created_at.toISOString(),expiresAt:s.expires_at.toISOString(),visibility:s.visibility,media:{id:s.id,type:s.kind,url:s.safe_url,thumbnailUrl:s.thumbnail_url},likeCount:Number(s.like_count),isLiked:s.is_liked,isViewed:s.is_viewed,source:s.source})),meta:{nextCursor:rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'STORIES_FAILED',message:'Story yüklenemedi.'}});}});
+app.get('/v1/community/stories', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = storyQuery.parse(request.query);
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [userId];
+    let where = `s.expires_at>now() AND m.status='ready' AND ${storyAccessWhere('s', '$1')}`;
+    if (cursor) {
+      params.push(cursor.createdAt, cursor.id);
+      where += ` AND (s.created_at,s.id)<($${params.length - 1}::timestamptz,$${params.length}::uuid)`;
+    }
+    params.push(input.limit + 1);
+    const rows = await db.query<{ id: string; author_id: string; author_name: string; created_at: Date; expires_at: Date; visibility: 'network' | 'public'; safe_url: string; thumbnail_url: string | null; kind: 'image' | 'video'; like_count: string; is_liked: boolean; is_viewed: boolean; source: 'self' | 'official' | 'network' | 'local' }>(
+      `SELECT s.id,s.author_id,COALESCE(p.display_name,'TurkSquare üyesi') author_name,s.created_at,s.expires_at,s.visibility,m.safe_url,m.thumbnail_url,m.kind,(SELECT count(*) FROM story_likes l WHERE l.story_id=s.id) like_count,EXISTS(SELECT 1 FROM story_likes l WHERE l.story_id=s.id AND l.actor_id=$1) is_liked,EXISTS(SELECT 1 FROM story_views v WHERE v.story_id=s.id AND v.viewer_id=$1) is_viewed,CASE WHEN s.author_id=$1 THEN 'self' WHEN EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=s.author_id AND o.role='official' AND o.active) THEN 'official' WHEN EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=s.author_id AND r.active) THEN 'network' ELSE 'local' END source FROM stories s JOIN media_assets m ON m.id=s.media_id LEFT JOIN community_profile_projection p ON p.user_id=s.author_id WHERE ${where} ORDER BY s.created_at DESC,s.id DESC LIMIT $${params.length}`,
+      params,
+    );
+    const page = rows.rows.slice(0, input.limit);
+    const data = await Promise.all(page.map(async (story) => ({
+      id: story.id,
+      authorId: story.author_id,
+      authorName: story.author_name,
+      createdAt: story.created_at.toISOString(),
+      expiresAt: story.expires_at.toISOString(),
+      visibility: story.visibility,
+      media: {
+        id: story.id,
+        type: story.kind,
+        url: await mediaObjectUrl(story.safe_url),
+        thumbnailUrl: story.thumbnail_url ? await mediaObjectUrl(story.thumbnail_url) : null,
+      },
+      likeCount: Number(story.like_count),
+      isLiked: story.is_liked,
+      isViewed: story.is_viewed,
+      source: story.source,
+    })));
+    return { data, meta: { nextCursor: rows.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null } };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({
+      error: { code: 'STORIES_FAILED', message: 'Story yüklenemedi.' },
+    });
+  }
+});
 app.post('/v1/community/stories',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=storyBody.parse(request.body);const media=await db.query('SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status=\'ready\'',[input.mediaId,userId]);if(!media.rows[0])return reply.code(400).send({error:{code:'MEDIA_NOT_READY',message:'Medya hazır değil.'}});const r=await db.query<{id:string}>('INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) SELECT $1,$2,$3,p.region_code,now()+($4::text||\' hours\')::interval FROM community_profile_projection p WHERE p.user_id=$1 RETURNING id',[userId,input.mediaId,input.visibility,input.ttlHours]);if(!r.rows[0])return reply.code(400).send({error:{code:'PROFILE_REQUIRED',message:'Story paylaşmadan önce profil konumunu tamamlayın.'}});return reply.code(201).send({data:r.rows[0]});}catch{return reply.code(400).send({error:{code:'STORY_CREATE_FAILED',message:'Story oluşturulamadı.'}});}});
 app.post('/v1/community/stories/:id/views',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});await db.query('INSERT INTO story_views(story_id,viewer_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.put('/v1/community/stories/:id/likes',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=interactionBody.parse(request.body);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});if(input.enabled)await db.query('INSERT INTO story_likes(story_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);else await db.query('DELETE FROM story_likes WHERE story_id=$1 AND actor_id=$2',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});

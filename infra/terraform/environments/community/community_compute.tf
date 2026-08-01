@@ -70,7 +70,7 @@ resource "aws_iam_role_policy" "community_task" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["kms:GetPublicKey"], Resource = [var.identity_jwt_signing_kms_key_arn] },
     { Effect = "Allow", Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"], Resource = [aws_sqs_queue.identity_profile_projection.arn] },
-    { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"], Resource = ["${aws_s3_bucket.community_media.arn}/uploads/*"] },
+    { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"], Resource = ["${aws_s3_bucket.community_media.arn}/uploads/*"] },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = [aws_s3_bucket.community_media.arn], Condition = { StringLike = { "s3:prefix" = ["uploads/*"] } } }
   ] })
 }
@@ -173,7 +173,8 @@ resource "aws_ecs_task_definition" "community" {
       { name = "DATABASE_NAME", value = "community_db" },
       { name = "JWT_ISSUER", value = "https://api.turksquare.com" },
       { name = "JWT_AUDIENCE", value = "turksquare-mobile" },
-      { name = "IDENTITY_JWT_SIGNING_KMS_KEY_ARN", value = var.identity_jwt_signing_kms_key_arn }
+      { name = "IDENTITY_JWT_SIGNING_KMS_KEY_ARN", value = var.identity_jwt_signing_kms_key_arn },
+      { name = "COMMUNITY_MEDIA_BUCKET", value = aws_s3_bucket.community_media.bucket }
     ]
     secrets = concat(
       [
@@ -268,6 +269,58 @@ resource "aws_ecs_service" "profile_projection_worker" {
     security_groups  = [aws_security_group.community_service.id]
     assign_public_ip = false
   }
+}
+
+# The media processor has no public listener and never receives client input.
+# It reads only completed quarantine objects, sanitizes them, then writes a
+# newly encoded private object. The release workflow owns its image revision
+# and desired count after schema migration succeeds.
+resource "aws_ecs_task_definition" "media_processor_worker" {
+  family                   = "turksquare-community-media-processor"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.community_execution.arn
+  task_role_arn            = aws_iam_role.community_task.arn
+  container_definitions = jsonencode([{
+    name                   = "media-processor"
+    image                  = "${aws_ecr_repository.community.repository_url}:bootstrap"
+    essential              = true
+    readonlyRootFilesystem = true
+    command                = ["node", "dist/media_processor_worker.js"]
+    environment = [
+      { name = "NODE_ENV", value = "production" },
+      { name = "DATABASE_HOST", value = aws_db_instance.community.address },
+      { name = "DATABASE_PORT", value = tostring(aws_db_instance.community.port) },
+      { name = "DATABASE_NAME", value = "community_db" },
+      { name = "COMMUNITY_MEDIA_BUCKET", value = aws_s3_bucket.community_media.bucket },
+      { name = "MEDIA_PROCESSOR_POLL_MS", value = "3000" }
+    ]
+    secrets = [
+      { name = "DATABASE_USER", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:username::" },
+      { name = "DATABASE_PASSWORD", valueFrom = "${aws_db_instance.community.master_user_secret[0].secret_arn}:password::" }
+    ]
+    logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.community.name, awslogs-region = data.aws_region.current.name, awslogs-stream-prefix = "media-processor" } }
+  }])
+}
+
+resource "aws_ecs_service" "media_processor_worker" {
+  name            = "turksquare-community-media-processor"
+  cluster         = aws_ecs_cluster.community.id
+  task_definition = aws_ecs_task_definition.media_processor_worker.arn
+  desired_count   = 0
+  launch_type     = "FARGATE"
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  network_configuration {
+    subnets          = aws_subnet.community_private[*].id
+    security_groups  = [aws_security_group.community_service.id]
+    assign_public_ip = false
+  }
+  lifecycle { ignore_changes = [task_definition, desired_count] }
 }
 
 # Edge routing is intentionally a later step. A new service starts at zero so
