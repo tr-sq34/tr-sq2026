@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: TurkSquare GitHub Actions OIDC Terraform apply role. Deploy as a StackSet to workload accounts.
+
+Parameters:
+  RoleName:
+    Type: String
+    Default: GitHubActionsTerraformApplyRole
+  GitHubOidcSubjectPrefix:
+    Type: String
+    Default: repo:tr-sq34@309652758/tr-sq2026@1313519494
+  StateAccessAccountId:
+    Type: String
+    Default: '626300432889'
+    AllowedPattern: '^[0-9]{12}$'
+
+Mappings:
+  # Apply roles are bound to dedicated, protected production environments.
+  # These names deliberately differ from the read-only plan environments.
+  AccountEnvironment:
+    '342998331436': { Name: identity-production }
+    '936706105958': { Name: community-production }
+    '800554367992': { Name: verification-vault-production }
+    '365792980830': { Name: backup }
+
+Resources:
+  TerraformApplyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustGitHubActionsEnvironmentOnly
+            Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Support the conventional GitHub subject and the existing
+                # repository-ID subject. Both are exact repository and
+                # environment matches; no wildcard trust is introduced.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub
+                    - '${SubjectPrefix}:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+                      SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                  - !Sub
+                    - 'repo:tr-sq34/tr-sq2026:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+      # PowerUserAccess excludes IAM administration.  The narrow inline policy
+      # below grants only the named service roles Terraform needs to maintain.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: ManageTurkSquareServiceRolesOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsIdentityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
+              # Terraform refreshes inline and attached policies before it
+              # changes a managed TurkSquare role.  These are read-only
+              # operations, scoped to the same named roles as the write
+              # permissions above.
+              - Effect: Allow
+                Action:
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/TurkSquare*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsIdentityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsCommunityDeployRole'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/GitHubActionsVerificationVaultDeployRole'
+              # IAM's provider-list action cannot be resource-scoped. The
+              # provider read itself remains limited to GitHub Actions.
+              - Effect: Allow
+                Action: iam:ListOpenIDConnectProviders
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:GetOpenIDConnectProvider
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+        - PolicyName: AllowAssumeScopedTerraformStateRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${StateAccessAccountId}:role/TerraformStateAccess*'
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt TerraformApplyRole.Arn

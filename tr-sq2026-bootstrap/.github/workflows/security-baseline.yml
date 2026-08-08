@@ -1,0 +1,49 @@
+﻿name: Security baseline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  infrastructure:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tr-sq2026-bootstrap/infra/terraform/azure/environments/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - verification-vault-service
+          - community-service
+          - messaging-gateway
+          - password-breach-check
+          - email-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tr-sq2026-bootstrap/services/${{ matrix.service }}/package-lock.json
+      - run: npm ci
+        working-directory: tr-sq2026-bootstrap/services/${{ matrix.service }}
+      - run: npm run build
+        working-directory: tr-sq2026-bootstrap/services/${{ matrix.service }}
+
+# Production apply is intentionally absent. A separate protected workflow must
+# use GitHub OIDC, a reviewed plan artifact and a dedicated Azure deploy role.

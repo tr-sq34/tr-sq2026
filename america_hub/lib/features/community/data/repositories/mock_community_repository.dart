@@ -1,0 +1,318 @@
+import '../../domain/entities/community_post.dart';
+import '../../domain/entities/create_post_draft.dart';
+import '../../domain/repositories/community_repository.dart';
+import '../../../../core/pagination/cursor_page.dart';
+import '../../domain/entities/feed_extensions.dart';
+
+class MockCommunityRepository
+    implements
+        CommunityRepository,
+        CommunityPostCommands,
+        CommunityPostArchive,
+        FeedRepository,
+        PostInteractionRepository,
+        PollRepository,
+        StoryRepository {
+  final List<CommunityPost> _posts = [
+    CommunityPost(
+      id: 'post-1',
+      authorName: 'Elif Demir',
+      location: 'New York, NY',
+      timeLabel: '18 dk önce',
+      message:
+          'Bu hafta sonu Brooklyn’de güzel bir Türk kahvaltısı için buluşmak isteyen var mı? ☕️',
+      likes: 24,
+      comments: 8,
+    ),
+    CommunityPost(
+      id: 'post-2',
+      authorName: 'Mert Kaya',
+      location: 'Austin, TX',
+      timeLabel: '2 sa önce',
+      message:
+          'Austin’deki yeni Türk marketini denedim. Özellikle taze simitleri harikaydı!',
+      likes: 39,
+      comments: 12,
+      isLiked: true,
+    ),
+    CommunityPost(
+      id: 'post-3',
+      authorName: 'Zeynep Arslan',
+      location: 'Chicago, IL',
+      timeLabel: '3 sa önce',
+      message:
+          'Haftaya çocuklar için Türkçe kitap takası yapıyoruz. Katılmak isteyenler yazabilir.',
+      likes: 17,
+      comments: 6,
+    ),
+    CommunityPost(
+      id: 'post-4',
+      authorName: 'Can Yılmaz',
+      location: 'Seattle, WA',
+      timeLabel: 'Dün',
+      message: 'Seattle’daki Türk film gösterimi için bilet alan var mı?',
+      likes: 11,
+      comments: 4,
+    ),
+  ];
+  final List<StoryItem> _stories = [];
+
+  @override
+  Future<CursorPage<CommunityPost>> fetchPage({
+    String? cursor,
+    int limit = 20,
+  }) async {
+    final start = int.tryParse(cursor ?? '0') ?? 0;
+    final visiblePosts = _posts
+        .where((post) => !post.isDeleted)
+        .toList(growable: false);
+    final safeEnd = (start + limit).clamp(0, visiblePosts.length).toInt();
+    return CursorPage(
+      items: visiblePosts.sublist(start, safeEnd),
+      nextCursor: safeEnd < visiblePosts.length ? '$safeEnd' : null,
+    );
+  }
+
+  @override
+  Future<List<CommunityPost>> getFeed() async =>
+      _posts.where((post) => !post.isDeleted).toList(growable: false);
+
+  @override
+  Future<CursorPage<CommunityPost>> fetchFeed({
+    required FeedMode mode,
+    String? cursor,
+    int limit = 20,
+  }) => fetchPage(cursor: cursor, limit: limit);
+
+  @override
+  Future<CommunityPost> setLike(String postId, bool isLiked) async =>
+      _updatePost(
+        postId,
+        (post) => post.copyWith(
+          isLiked: isLiked,
+          likes:
+              (post.likes +
+                      (isLiked == post.isLiked
+                          ? 0
+                          : isLiked
+                          ? 1
+                          : -1))
+                  .clamp(0, 1 << 31),
+        ),
+      );
+
+  @override
+  Future<CommunityPost> setSaved(String postId, bool isSaved) async =>
+      _updatePost(
+        postId,
+        (post) => post.copyWith(
+          isSaved: isSaved,
+          saves:
+              (post.saves +
+                      (isSaved == post.isSaved
+                          ? 0
+                          : isSaved
+                          ? 1
+                          : -1))
+                  .clamp(0, 1 << 31),
+        ),
+      );
+
+  @override
+  Future<CommunityPost> registerShare(String postId) async =>
+      _updatePost(postId, (post) => post.copyWith(shares: post.shares + 1));
+
+  @override
+  Future<CommunityPoll> vote({
+    required String postId,
+    required String pollId,
+    required Set<String> optionIds,
+  }) async {
+    final post = _posts.firstWhere((item) => item.id == postId);
+    final poll = post.poll;
+    if (poll == null || poll.id != pollId || poll.isClosed)
+      throw StateError('Anket oylamaya açık değil.');
+    if (poll.selectionMode == PollSelectionMode.single && optionIds.length != 1)
+      throw ArgumentError('Bu ankette tek seçenek seçilebilir.');
+    if (!optionIds.every((id) => poll.options.any((option) => option.id == id)))
+      throw ArgumentError('Geçersiz anket seçeneği.');
+    final updated = CommunityPoll(
+      id: poll.id,
+      question: poll.question,
+      selectionMode: poll.selectionMode,
+      endsAt: poll.endsAt,
+      selectedOptionIds: optionIds,
+      options: [
+        for (final option in poll.options)
+          PollOption(
+            id: option.id,
+            label: option.label,
+            votes: option.votes + (optionIds.contains(option.id) ? 1 : 0),
+          ),
+      ],
+    );
+    _updatePost(postId, (item) => item.copyWith(poll: updated));
+    return updated;
+  }
+
+  @override
+  Future<CursorPage<StoryItem>> fetchStories({
+    String? cursor,
+    int limit = 30,
+  }) async {
+    final visible = _stories
+        .where((item) => !item.isExpired)
+        .toList(growable: false);
+    final start = int.tryParse(cursor ?? '0') ?? 0;
+    final end = (start + limit).clamp(0, visible.length).toInt();
+    return CursorPage(
+      items: visible.sublist(start, end),
+      nextCursor: end < visible.length ? '$end' : null,
+    );
+  }
+
+  @override
+  Future<StoryItem> createStory(CreateStoryDraft draft) async {
+    if (draft.validationError case final error?)
+      throw ArgumentError.value(draft, 'draft', error);
+    final story = StoryItem(
+      id: 'story-${DateTime.now().microsecondsSinceEpoch}',
+      authorId: 'local-user',
+      authorName: 'Ahmet Yılmaz',
+      media: draft.media,
+      createdAt: DateTime.now(),
+      expiresAt: DateTime.now().add(draft.ttl),
+      visibility: draft.visibility,
+    );
+    _stories.insert(0, story);
+    return story;
+  }
+
+  @override
+  Future<StoryItem> markViewed(String storyId) async => _updateStory(
+    storyId,
+    (story) => story.copyWith(
+      isViewed: true,
+      viewCount: story.isViewed ? story.viewCount : story.viewCount + 1,
+    ),
+  );
+  @override
+  Future<StoryItem> setLiked(String storyId, bool isLiked) async =>
+      _updateStory(
+        storyId,
+        (story) => story.copyWith(
+          isLiked: isLiked,
+          likeCount:
+              story.likeCount +
+              (isLiked == story.isLiked
+                  ? 0
+                  : isLiked
+                  ? 1
+                  : -1),
+        ),
+      );
+
+  @override
+  Future<List<StoryAudienceContact>> fetchAudienceContacts() async => const [];
+
+  @override
+  Future<void> updateAudienceExclusions({
+    required String storyId,
+    required List<String> excludedUserIds,
+  }) async {}
+
+  @override
+  Future<List<StoryHighlight>> fetchMyHighlights() async => const [];
+
+  @override
+  Future<StoryHighlight> createHighlight({
+    required String title,
+    required StoryVisibility visibility,
+    required List<String> storyIds,
+  }) {
+    throw UnsupportedError('Mock Story öne çıkanları kullanılmıyor.');
+  }
+
+  @override
+  Future<void> sendReply({
+    required String storyId,
+    required String message,
+  }) async {
+    if (message.trim().isEmpty || message.length > 1000)
+      throw ArgumentError('Geçerli bir story yanıtı yazın.');
+  }
+
+  CommunityPost _updatePost(
+    String id,
+    CommunityPost Function(CommunityPost post) update,
+  ) {
+    final index = _posts.indexWhere((item) => item.id == id);
+    if (index < 0) throw StateError('Paylaşım bulunamadı.');
+    return _posts[index] = update(_posts[index]);
+  }
+
+  StoryItem _updateStory(
+    String id,
+    StoryItem Function(StoryItem story) update,
+  ) {
+    final index = _stories.indexWhere((item) => item.id == id);
+    if (index < 0) throw StateError('Story bulunamadı.');
+    return _stories[index] = update(_stories[index]);
+  }
+
+  @override
+  Future<List<CommunityPost>> getPostsByOwner(String ownerId) async => _posts
+      .where((post) => post.ownerId == ownerId && !post.isDeleted)
+      .toList(growable: false);
+
+  @override
+  Future<CommunityPost> createPost(CreatePostDraft draft) async {
+    final error = draft.validationError;
+    if (error != null) throw ArgumentError.value(draft, 'draft', error);
+
+    final post = CommunityPost(
+      id: 'post-${DateTime.now().microsecondsSinceEpoch}',
+      ownerId: 'local-user',
+      authorName: draft.purpose == CommunityPostPurpose.anonymousAdvice
+          ? 'Anonim üye'
+          : 'Ahmet Yılmaz',
+      location: draft.location?.displayName ?? 'New York, NY',
+      timeLabel: 'Şimdi',
+      message: draft.normalizedMessage,
+      likes: 0,
+      comments: 0,
+      visibility: draft.visibility,
+      commentsPolicy: draft.commentsPolicy,
+      media: draft.media,
+      taggedUsers: draft.taggedUsers,
+      postLocation: draft.location,
+      purpose: draft.purpose,
+      travelerMatch: draft.travelerMatch,
+      badge: _badgeFor(draft.purpose),
+      poll: draft.poll,
+    );
+    _posts.insert(0, post);
+    return post;
+  }
+
+  CommunityBadge? _badgeFor(CommunityPostPurpose purpose) => switch (purpose) {
+    CommunityPostPurpose.imeceHelp => const CommunityBadge(label: 'İmece'),
+    CommunityPostPurpose.travelerMatch => const CommunityBadge(
+      label: 'Yolculuk',
+    ),
+    CommunityPostPurpose.anonymousAdvice => const CommunityBadge(
+      label: 'Anonim',
+    ),
+    CommunityPostPurpose.standard => null,
+  };
+
+  @override
+  Future<void> deletePost(String postId) async {
+    final index = _posts.indexWhere((post) => post.id == postId);
+    if (index == -1) throw StateError('Paylaşım bulunamadı.');
+    _posts[index] = _posts[index].copyWith(
+      status: PostStatus.deleted,
+      deletedAt: DateTime.now(),
+    );
+  }
+}

@@ -1,0 +1,32 @@
+
+
+
+# Local Build & Artifacts
+node_modules/
+dist/
+build/
+.dart_tool/
+.flutter-plugins-dependencies
+*.zip
+stage/
+zip_extract/
+zipcheck/
+
+# Terraform Local Cache
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+**/node_modules/
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/tfplan*
+**/function.zip
+backend/_archive/
+tr-sq2026-bootstrap/infra/terraform/_archive/
+.env
+.env.local
+**/dist/
+

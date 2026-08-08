@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: TurkSquare GitHub Actions OIDC read-only Terraform plan role. Deploy as a StackSet to workload accounts.
+
+Parameters:
+  RoleName:
+    Type: String
+    Default: GitHubActionsTerraformPlanRole
+  GitHubOidcSubjectPrefix:
+    Type: String
+    Default: repo:tr-sq34@309652758/tr-sq2026@1313519494
+  StateAccessAccountId:
+    Type: String
+    Default: '626300432889'
+    AllowedPattern: '^[0-9]{12}$'
+
+Mappings:
+  # Plan roles are intentionally bound to the dedicated non-production
+  # GitHub Environments.  Apply roles use the separate production
+  # environments, so a pull-request plan can never inherit apply access.
+  AccountEnvironment:
+    '342998331436': { Name: identity }
+    '936706105958': { Name: community-plan }
+    '800554367992': { Name: vault-plan }
+    '365792980830': { Name: backup }
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  TerraformPlanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustGitHubActionsEnvironmentOnly
+            Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # GitHub supports both the conventional repository subject
+                # and the repository-ID subject configured by some orgs. Both
+                # entries remain exact matches for this repository and this
+                # account's dedicated plan environment; no wildcard is used.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub
+                    - '${SubjectPrefix}:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+                      SubjectPrefix: !Ref GitHubOidcSubjectPrefix
+                  - !Sub
+                    - 'repo:tr-sq34/tr-sq2026:environment:${EnvironmentName}'
+                    - EnvironmentName: !FindInMap [AccountEnvironment, !Ref 'AWS::AccountId', Name]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: AllowAssumeScopedTerraformStateRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${StateAccessAccountId}:role/TerraformStateAccess*'
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt TerraformPlanRole.Arn

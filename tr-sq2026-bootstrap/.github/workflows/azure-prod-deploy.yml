@@ -1,0 +1,355 @@
+﻿name: Azure Production Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tr-sq2026-bootstrap/services/auth-service/**'
+      - 'tr-sq2026-bootstrap/services/verification-vault-service/**'
+      - 'tr-sq2026-bootstrap/services/community-service/**'
+      - 'tr-sq2026-bootstrap/services/messaging-gateway/**'
+      - 'tr-sq2026-bootstrap/services/password-breach-check/**'
+      - 'tr-sq2026-bootstrap/services/email-relay/**'
+      - 'tr-sq2026-bootstrap/infra/terraform/azure/**'
+      - '.github/workflows/azure-prod-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Override all container image tags (defaults to commit SHA)'
+        required: false
+        default: ''
+      skip_smoke_tests:
+        description: 'Set to true to skip post-deployment smoke tests'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+  id-token: write  # Required for Azure OIDC login
+
+env:
+  AZURE_SUBSCRIPTION_ID: ae28daea-9900-4161-8c87-dc2fa5951304
+  AZURE_TENANT_ID: c04e6d5b-5a24-42bc-b75b-31915d61e2ed
+  AZURE_LOCATION: centralus
+  ACR_NAME: crturksquareprodcu
+  TF_BACKEND_RG: rg-turksquare-tfstate
+  TF_BACKEND_SA: stturktfstateprod
+  TF_BACKEND_CONTAINER: tfstate
+  TF_BACKEND_KEY: prod.terraform.tfstate
+  TF_DIR: tr-sq2026-bootstrap/infra/terraform/azure/environments/prod
+  SERVICES_DIR: tr-sq2026-bootstrap/services
+  # Allow third-party actions that still require Node 20 to run on newer runners.
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  validate-secrets:
+    name: Validate Azure OIDC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        run: |
+          if [ -z "$AZURE_CLIENT_ID_PROD" ]; then
+            echo "::error::AZURE_CLIENT_ID_PROD secret is missing."
+            exit 1
+          fi
+          echo "AZURE_CLIENT_ID_PROD is configured."
+        env:
+          AZURE_CLIENT_ID_PROD: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure subscription access
+        run: |
+          echo "Available subscriptions for this identity:"
+          az account list --query "[].{Name:name, ID:id, State:state}" -o table
+          echo ""
+          echo "Attempting to set target subscription: ${{ env.AZURE_SUBSCRIPTION_ID }}"
+          az account set --subscription ${{ env.AZURE_SUBSCRIPTION_ID }}
+          az account show --query "{subscription:id, name:name, tenant:tenantId}" -o table
+
+  build:
+    name: Build Container Images & Function Zips
+    runs-on: ubuntu-latest
+    needs: validate-secrets
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure subscription
+        run: |
+          az account set --subscription ${{ env.AZURE_SUBSCRIPTION_ID }}
+          az account show
+
+      - name: ACR login
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build & push identity container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/auth-service
+          file: ./tr-sq2026-bootstrap/services/auth-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/identity-service:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/identity-service:latest
+
+      - name: Build & push verification-vault container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/verification-vault-service
+          file: ./tr-sq2026-bootstrap/services/verification-vault-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/verification-vault-service:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/verification-vault-service:latest
+
+      - name: Build & push community container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/community-service
+          file: ./tr-sq2026-bootstrap/services/community-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/community-service:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/community-service:latest
+
+      - name: Build & push messaging-gateway container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/messaging-gateway
+          file: ./tr-sq2026-bootstrap/services/messaging-gateway/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:latest
+
+      - name: Setup Node.js for function packaging
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            ${{ env.SERVICES_DIR }}/password-breach-check/package-lock.json
+            ${{ env.SERVICES_DIR }}/email-relay/package-lock.json
+
+      - name: Package password-breach-check function
+        working-directory: ${{ env.SERVICES_DIR }}/password-breach-check
+        run: |
+          npm ci --omit=dev
+          rm -f function.zip
+          zip -r function.zip host.json package.json src/functions/*.js node_modules \
+            -x '*.git*' -x 'node_modules/.cache/*' -x '*.ts' -x '*/test/*' -x 'test/*'
+
+      - name: Package email-relay function
+        working-directory: ${{ env.SERVICES_DIR }}/email-relay
+        run: |
+          npm ci --omit=dev
+          rm -f function.zip
+          zip -r function.zip host.json package.json src/functions/*.js node_modules \
+            -x '*.git*' -x 'node_modules/.cache/*' -x '*.ts' -x '*/test/*' -x 'test/*'
+
+      - name: Upload function zips
+        uses: actions/upload-artifact@v4
+        with:
+          name: function-zips
+          path: |
+            ${{ env.SERVICES_DIR }}/password-breach-check/function.zip
+            ${{ env.SERVICES_DIR }}/email-relay/function.zip
+          retention-days: 1
+
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: azure-prod-plan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure subscription
+        run: |
+          az account set --subscription ${{ env.AZURE_SUBSCRIPTION_ID }}
+          az account show
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD: true
+        run: terraform init
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD: true
+          TF_VAR_identity_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_verification_vault_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_community_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_messaging_gateway_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_resend_api_key_initial: ${{ secrets.RESEND_API_KEY_INITIAL }}
+          TF_VAR_jwt_secret_initial: ${{ secrets.JWT_SECRET_INITIAL }}
+          TF_VAR_postgres_admin_password: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          TF_VAR_deployer_object_id: ${{ secrets.AZURE_DEPLOYER_OBJECT_ID }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_DIR }}/tfplan
+          retention-days: 5
+
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    environment:
+      name: azure-prod-apply
+      url: https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_DIR }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD: true
+        run: terraform init
+
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ env.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD: true
+        run: terraform apply -input=false tfplan
+
+  deploy-functions:
+    name: Deploy Function Packages
+    runs-on: ubuntu-latest
+    needs: [build, terraform-apply]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download function zips
+        uses: actions/download-artifact@v4
+        with:
+          name: function-zips
+          path: ${{ env.SERVICES_DIR }}
+
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy functions via PowerShell
+        shell: pwsh
+        working-directory: ${{ env.SERVICES_DIR }}
+        run: pwsh -ExecutionPolicy Bypass -File .\deploy_azure_functions_v2.ps1
+
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-functions
+    if: github.event.inputs.skip_smoke_tests != 'true'
+    steps:
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Password breach check smoke test
+        run: |
+          sleep 30
+          curl -sf -X POST https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck \
+            -H 'Content-Type: application/json' \
+            -d '{"prefix":"21BD1","suffix":"001F8A4C123456789012345678901234567"}' | jq .
+
+      - name: Email relay function list check
+        run: |
+          az functionapp function list --name func-email-relay-prod-cu -g rg-turksquare-prod-centralus -o table
+          az functionapp function list --name func-password-breach-check-prod-cu -g rg-turksquare-prod-centralus -o table
+
+      - name: Container App health checks
+        run: |
+          FQDN="${{ secrets.CONTAINER_APP_ENV_FQDN }}"
+          echo "identity /health"
+          curl -sf "https://ca-identity-prod.${FQDN}/health" || true
+          echo "verification-vault /health"
+          curl -sf "https://ca-verification-vault-prod.${FQDN}/health" || true
+          echo "community /health"
+          curl -sf "https://ca-community-prod.${FQDN}/health" || true
+          echo "messaging-gateway /health"
+          curl -sf "https://ca-messaging-gateway-prod.${FQDN}/health" || true

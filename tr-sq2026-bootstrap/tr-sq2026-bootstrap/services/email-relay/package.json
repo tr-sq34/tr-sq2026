@@ -1,0 +1,16 @@
+{
+  "name": "turksquare-email-relay",
+  "version": "1.0.0",
+  "description": "Azure Function that relays transactional emails via Resend",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

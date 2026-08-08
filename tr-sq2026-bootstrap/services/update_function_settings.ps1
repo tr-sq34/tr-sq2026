@@ -1,0 +1,5 @@
+$pbUrl = 'https://stpasswordbreachchprodcu.blob.core.windows.net/function-releases/password-breach-check-20260806033812.zip?se=2036-07-24T00%3A00%3A00Z&sp=r&spr=https&sv=2026-04-06&sr=b&sig=F9FC8yaXkQrRGx34t%2B8q%2BF7H3ufVzbcMDxiVlS6vXEU%3D'
+$erUrl = 'https://stemailrelayprodcu.blob.core.windows.net/function-releases/email-relay-20260806033825.zip?se=2036-07-24T00%3A00%3A00Z&sp=r&spr=https&sv=2026-04-06&sr=b&sig=mDG1KYscjxqBX5RwSkYkQBmPWO0XUuk%2B%2FlrlXtiak2o%3D'
+
+& az functionapp config appsettings set --name func-password-breach-check-prod-cu --resource-group rg-turksquare-prod-centralus --settings "WEBSITE_RUN_FROM_PACKAGE=$pbUrl" -o json
+& az functionapp config appsettings set --name func-email-relay-prod-cu --resource-group rg-turksquare-prod-centralus --settings "WEBSITE_RUN_FROM_PACKAGE=$erUrl" -o json
