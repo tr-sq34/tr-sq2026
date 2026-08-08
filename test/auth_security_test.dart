@@ -31,4 +31,36 @@ void main() {
       expect(controller.isAuthenticated, isTrue);
     },
   );
+
+  test('mock email status supports the explicit two-step login flow', () async {
+    final repository = MockAuthRepository();
+
+    expect(
+      await repository.checkEmailStatus(email: 'member@turksquare.app'),
+      isTrue,
+    );
+    expect(
+      await repository.checkEmailStatus(email: 'new-member@example.com'),
+      isFalse,
+    );
+  });
+
+  test(
+    'verification code must match the expected one-time code in mock mode',
+    () async {
+      final repository = MockAuthRepository();
+
+      await repository.confirmEmailVerification(
+        email: 'new-member@example.com',
+        code: '123456',
+      );
+      await expectLater(
+        repository.confirmEmailVerification(
+          email: 'new-member@example.com',
+          code: '000000',
+        ),
+        throwsA(isA<AuthException>()),
+      );
+    },
+  );
 }

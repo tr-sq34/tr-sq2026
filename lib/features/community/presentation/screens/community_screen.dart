@@ -12,10 +12,13 @@ import '../../../../core/widgets/app_screen_header.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/paged_list_footer.dart';
 import '../../application/community_feed_controller.dart';
+import '../../application/story_controller.dart';
 import '../../application/community_comments_controller.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
 import '../widgets/special_post_request_sheet.dart';
+import '../widgets/story_composer_sheet.dart';
+import 'story_viewer_screen.dart';
 import '../../domain/entities/community_post.dart';
 import '../../domain/entities/create_post_draft.dart';
 import '../../domain/entities/post_media_upload.dart';
@@ -25,11 +28,13 @@ class CommunityScreen extends StatefulWidget {
   const CommunityScreen({
     super.key,
     required this.controller,
+    required this.storyController,
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
   });
   final CommunityFeedController controller;
+  final StoryController storyController;
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
@@ -75,12 +80,13 @@ class _CreatePostSheetState extends State<_CreatePostSheet> {
       await widget.controller.createPost(draft);
       if (mounted) Navigator.of(context).pop();
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Paylaşım gönderilemedi. Lütfen tekrar deneyin.'),
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -173,6 +179,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   void initState() {
     super.initState();
     widget.controller.load();
+    widget.storyController.load();
   }
 
   @override
@@ -209,6 +216,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
       }
       return _Feed(
         controller: widget.controller,
+        storyController: widget.storyController,
         commentsController: widget.commentsController,
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
@@ -220,11 +228,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
 class _Feed extends StatefulWidget {
   const _Feed({
     required this.controller,
+    required this.storyController,
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
   });
   final CommunityFeedController controller;
+  final StoryController storyController;
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
@@ -300,7 +310,10 @@ class _FeedState extends State<_Feed> {
             controller: _scrollController,
             padding: const EdgeInsets.only(bottom: 28),
             children: [
-              const _ReferenceStories(),
+              _StoryRail(
+                controller: widget.storyController,
+                mediaUploadController: widget.mediaUploadController,
+              ),
               const SizedBox(height: 10),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -495,134 +508,142 @@ class _ReferenceFilter extends StatelessWidget {
   );
 }
 
-class _ReferenceStories extends StatelessWidget {
-  const _ReferenceStories();
-  static const _items = [
-    (
-      'Elif',
-      'E',
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=240&q=80',
-    ),
-    (
-      'Mert',
-      'M',
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=240&q=80',
-    ),
-    (
-      'Zeynep',
-      'Z',
-      'https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=240&q=80',
-    ),
-    (
-      'Can',
-      'C',
-      'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=240&q=80',
-    ),
-  ];
+class _StoryRail extends StatelessWidget {
+  const _StoryRail({
+    required this.controller,
+    required this.mediaUploadController,
+  });
+  final StoryController controller;
+  final MediaUploadController mediaUploadController;
   @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 106,
-    child: ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      scrollDirection: Axis.horizontal,
-      itemCount: _items.length + 1,
-      separatorBuilder: (_, __) => const SizedBox(width: 9),
-      itemBuilder: (_, index) {
-        if (index == 0) {
-          return InkWell(
-            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Story oluşturma yakında aktif olacak.'),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final railItems = controller.railItems;
+      return SizedBox(
+        height: 106,
+        child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        scrollDirection: Axis.horizontal,
+        itemCount: railItems.length + 1,
+        separatorBuilder: (_, __) => const SizedBox(width: 9),
+        itemBuilder: (_, index) {
+          if (index == 0) {
+            return InkWell(
+              onTap: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                useSafeArea: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) => StoryComposerSheet(
+                  storyController: controller,
+                  mediaUploadController: mediaUploadController,
+                ),
+              ),
+              borderRadius: BorderRadius.circular(11),
+              child: Container(
+                width: 74,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDEAFF),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(color: const Color(0xFFD8D2FF)),
+                ),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: Color(0xFF6B54E8),
+                      child: Icon(Icons.add_rounded, color: Colors.white),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Story Ekle',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF4937BC),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+          index -= 1;
+          final item = railItems[index];
+          if (index >= railItems.length - 3) controller.loadMore();
+          return GestureDetector(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                fullscreenDialog: true,
+                builder: (_) => StoryViewerScreen(
+                  controller: controller,
+                  initialStoryId: item.id,
+                ),
               ),
             ),
-            borderRadius: BorderRadius.circular(11),
-            child: Container(
+            child: SizedBox(
               width: 74,
-              decoration: BoxDecoration(
-                color: const Color(0xFFEDEAFF),
+              child: ClipRRect(
                 borderRadius: BorderRadius.circular(11),
-                border: Border.all(color: const Color(0xFFD8D2FF)),
-              ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: Color(0xFF6B54E8),
-                    child: Icon(Icons.add_rounded, color: Colors.white),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Story Ekle',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF4937BC),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    AppRemoteImage(
+                      imageUrl: item.media.thumbnailUrl ?? item.media.url,
+                      semanticLabel: '${item.authorName} hikayesi',
                     ),
-                  ),
-                ],
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0x11000000), Color(0xB9000000)],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 7,
+                      top: 7,
+                      child: CircleAvatar(
+                        radius: 11,
+                        backgroundColor: Colors.white,
+                        child: Text(
+                          item.authorName.isEmpty
+                              ? '?'
+                              : item.authorName.substring(0, 1).toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF6B54E8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 9,
+                      child: Text(
+                        item.authorName,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
-        }
-        index -= 1;
-        final item = _items[index];
-        return SizedBox(
-          width: 74,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(11),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                AppRemoteImage(
-                  imageUrl: item.$3,
-                  semanticLabel: '${item.$1} hikayesi',
-                ),
-                const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Color(0x11000000), Color(0xB9000000)],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 7,
-                  top: 7,
-                  child: CircleAvatar(
-                    radius: 11,
-                    backgroundColor: Colors.white,
-                    child: Text(
-                      item.$2,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF6B54E8),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 9,
-                  child: Text(
-                    item.$1,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    ),
+        },
+      ),
+      );
+    },
   );
 }
 
@@ -681,12 +702,13 @@ class _ReferenceCreatePostSheetState extends State<_ReferenceCreatePostSheet> {
       await widget.controller.createPost(draft);
       if (mounted) Navigator.pop(context);
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Paylaşım gönderilemedi. Lütfen tekrar deneyin.'),
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }

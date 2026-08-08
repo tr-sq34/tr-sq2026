@@ -7,10 +7,16 @@ import '../../application/marketplace_controller.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/entities/marketplace_seller.dart';
 import 'marketplace_seller_profile_screen.dart';
+import '../../../verification/application/member_capabilities_controller.dart';
 
 class MarketplaceScreen extends StatefulWidget {
-  const MarketplaceScreen({super.key, required this.controller});
+  const MarketplaceScreen({
+    super.key,
+    required this.controller,
+    required this.memberCapabilitiesController,
+  });
   final MarketplaceController controller;
+  final MemberCapabilitiesController memberCapabilitiesController;
 
   @override
   State<MarketplaceScreen> createState() => _MarketplaceScreenState();
@@ -25,6 +31,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
     widget.controller.load();
     widget.controller.loadSellerOverview();
     widget.controller.loadSellerAnalytics();
+    widget.memberCapabilitiesController.load();
   }
 
   @override
@@ -85,7 +92,11 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
               ),
               Expanded(
                 child: _tab == 0
-                    ? SellerOverviewScreen(controller: widget.controller)
+                    ? SellerOverviewScreen(
+                        controller: widget.controller,
+                        memberCapabilitiesController:
+                            widget.memberCapabilitiesController,
+                      )
                     : MarketplaceFeedView(
                         controller: widget.controller,
                         local: _tab == 2,
@@ -118,8 +129,10 @@ class _TopTabs extends StatelessWidget {
             return InkWell(
               onTap: () => onChanged(i),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
                 child: Column(
                   children: [
                     Text(
@@ -129,8 +142,9 @@ class _TopTabs extends StatelessWidget {
                             ? AppColors.textPrimary
                             : AppColors.textMuted,
                         fontSize: 14,
-                        fontWeight:
-                            index == i ? FontWeight.w800 : FontWeight.w600,
+                        fontWeight: index == i
+                            ? FontWeight.w800
+                            : FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -424,8 +438,13 @@ class _CategoryRow extends StatelessWidget {
 }
 
 class SellerOverviewScreen extends StatelessWidget {
-  const SellerOverviewScreen({super.key, required this.controller});
+  const SellerOverviewScreen({
+    super.key,
+    required this.controller,
+    required this.memberCapabilitiesController,
+  });
   final MarketplaceController controller;
+  final MemberCapabilitiesController memberCapabilitiesController;
 
   @override
   Widget build(BuildContext context) {
@@ -434,6 +453,8 @@ class SellerOverviewScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
       children: [
+        _AuctionEligibilityCard(controller: memberCapabilitiesController),
+        const SizedBox(height: 16),
         InkWell(
           onTap: () => Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
@@ -453,8 +474,10 @@ class SellerOverviewScreen extends StatelessWidget {
                   children: [
                     Text(
                       'Satış merkezim',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                      ),
                     ),
                     Text(
                       'Çarşıdaki ilanların ve taleplerin',
@@ -466,7 +489,10 @@ class SellerOverviewScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textMuted,
+              ),
             ],
           ),
         ),
@@ -553,6 +579,48 @@ class SellerOverviewScreen extends StatelessWidget {
       ],
     );
   }
+}
+
+class _AuctionEligibilityCard extends StatelessWidget {
+  const _AuctionEligibilityCard({required this.controller});
+  final MemberCapabilitiesController controller;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final eligible = controller.value.auctionSellerEligible;
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: eligible ? const Color(0xFFEAFBF3) : const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: eligible ? const Color(0xFF86E2B3) : const Color(0xFFFDD29A),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              eligible ? Icons.gavel_rounded : Icons.verified_user_outlined,
+              color: eligible
+                  ? const Color(0xFF059669)
+                  : const Color(0xFFB45309),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                eligible
+                    ? 'Canlı ihale açma yetkin aktif.'
+                    : 'Canlı ihale açmak için Onaylı Hesap rozeti gerekir.',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class _InsightCard extends StatelessWidget {
@@ -728,7 +796,13 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
 
   Future<void> _pickChoice(String key, String label) async {
     final choices = switch (key) {
-      'propertyType' => const ['Daire', 'Müstakil Ev', 'Villa', 'Arsa', 'Ticari'],
+      'propertyType' => const [
+        'Daire',
+        'Müstakil Ev',
+        'Villa',
+        'Arsa',
+        'Ticari',
+      ],
       'parking' => const ['Açık Otopark', 'Kapalı Otopark', 'Garaj', 'Yok'],
       'vehicleType' => const ['Otomobil', 'SUV', 'Motosiklet', 'Ticari Araç'],
       _ => <String>[],
@@ -742,12 +816,17 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
-            ...choices.map((c) => ListTile(
-              title: Text(c),
-              onTap: () => Navigator.of(context).pop(c),
-            )),
+            ...choices.map(
+              (c) => ListTile(
+                title: Text(c),
+                onTap: () => Navigator.of(context).pop(c),
+              ),
+            ),
           ],
         ),
       ),
@@ -1048,7 +1127,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
               shape: BoxShape.circle,
             ),
             child: IconButton(
-              icon: const Icon(Icons.chevron_left, color: Colors.white, size: 20),
+              icon: const Icon(
+                Icons.chevron_left,
+                color: Colors.white,
+                size: 20,
+              ),
               onPressed: () => Navigator.of(context).pop(),
             ),
           ),
@@ -1078,7 +1161,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
             ),
             child: IconButton(
               onPressed: () => widget.controller.registerShare(listing.id),
-              icon: const Icon(Icons.share_rounded, color: Colors.white, size: 18),
+              icon: const Icon(
+                Icons.share_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -1120,8 +1207,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.chat_bubble_outline_rounded,
-                      color: Colors.white, size: 18),
+                  Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                   SizedBox(width: 8),
                   Text(
                     'Satıcı ile İletişime Geç',
@@ -1160,12 +1250,15 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                     const SizedBox(height: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFF5F3FF),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                            color: const Color(0xFF6355D8).withValues(alpha: 0.1)),
+                          color: const Color(0xFF6355D8).withValues(alpha: 0.1),
+                        ),
                       ),
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1173,8 +1266,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                           CircleAvatar(
                             radius: 8,
                             backgroundColor: Color(0xFF6355D8),
-                            child: Icon(Icons.check,
-                                size: 10, color: Colors.white),
+                            child: Icon(
+                              Icons.check,
+                              size: 10,
+                              color: Colors.white,
+                            ),
                           ),
                           SizedBox(width: 6),
                           Flexible(
@@ -1225,15 +1321,19 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                   borderRadius: BorderRadius.circular(12),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: const Color(0xFF3B3383)
-                                          .withValues(alpha: 0.2),
+                                      color: const Color(
+                                        0xFF3B3383,
+                                      ).withValues(alpha: 0.2),
                                       blurRadius: 8,
                                       offset: const Offset(0, 4),
                                     ),
                                   ],
                                 ),
-                                child: const Icon(Icons.store_rounded,
-                                    color: Colors.white, size: 20),
+                                child: const Icon(
+                                  Icons.store_rounded,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
                               ),
                               const SizedBox(width: 10),
                               Column(
@@ -1262,11 +1362,15 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                           ),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFFECFDF5),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFA7F3D0)),
+                              border: Border.all(
+                                color: const Color(0xFFA7F3D0),
+                              ),
                             ),
                             child: const Text(
                               'Stokta Var',
@@ -1330,15 +1434,19 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                         children: [
                           const Row(
                             children: [
-                              Icon(Icons.chat_bubble_outline_rounded,
-                                  color: Color(0xFF6355D8), size: 16),
+                              Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                color: Color(0xFF6355D8),
+                                size: 16,
+                              ),
                               SizedBox(width: 8),
                               Text(
                                 'Hızlı Soru Sor',
                                 style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                    color: Color(0xFF334155)),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                  color: Color(0xFF334155),
+                                ),
                               ),
                             ],
                           ),
@@ -1351,8 +1459,9 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(16),
-                                border:
-                                    Border.all(color: const Color(0xFFD9D6FE)),
+                                border: Border.all(
+                                  color: const Color(0xFFD9D6FE),
+                                ),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.black.withValues(alpha: 0.03),
@@ -1362,15 +1471,19 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                 ],
                               ),
                               child: const Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Row(
                                     children: [
                                       CircleAvatar(
                                         radius: 12,
                                         backgroundColor: Color(0xFFF5F3FF),
-                                        child: Icon(Icons.send_rounded,
-                                            size: 12, color: Color(0xFF6355D8)),
+                                        child: Icon(
+                                          Icons.send_rounded,
+                                          size: 12,
+                                          color: Color(0xFF6355D8),
+                                        ),
                                       ),
                                       SizedBox(width: 8),
                                       Text(
@@ -1393,8 +1506,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                           color: Color(0xFF6355D8),
                                         ),
                                       ),
-                                      Icon(Icons.chevron_right_rounded,
-                                          size: 14, color: Color(0xFF6355D8)),
+                                      Icon(
+                                        Icons.chevron_right_rounded,
+                                        size: 14,
+                                        color: Color(0xFF6355D8),
+                                      ),
                                     ],
                                   ),
                                 ],
@@ -1488,7 +1604,7 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                     gradient: LinearGradient(
                                       colors: [
                                         Color(0xFF6355D8),
-                                        Color(0xFF4F46E5)
+                                        Color(0xFF4F46E5),
                                       ],
                                     ),
                                   ),
@@ -1515,10 +1631,15 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                       color: const Color(0xFF10B981),
                                       shape: BoxShape.circle,
                                       border: Border.all(
-                                          color: Colors.white, width: 2),
+                                        color: Colors.white,
+                                        width: 2,
+                                      ),
                                     ),
-                                    child: const Icon(Icons.check,
-                                        size: 8, color: Colors.white),
+                                    child: const Icon(
+                                      Icons.check,
+                                      size: 8,
+                                      color: Colors.white,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -1545,15 +1666,21 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                         ),
                                       ),
                                       const SizedBox(width: 6),
-                                      const Icon(Icons.verified_rounded,
-                                          size: 14, color: Color(0xFF6355D8)),
+                                      const Icon(
+                                        Icons.verified_rounded,
+                                        size: 14,
+                                        color: Color(0xFF6355D8),
+                                      ),
                                     ],
                                   ),
                                   const SizedBox(height: 4),
                                   Row(
                                     children: [
-                                      const Icon(Icons.star_rounded,
-                                          size: 14, color: Color(0xFFFBBF24)),
+                                      const Icon(
+                                        Icons.star_rounded,
+                                        size: 14,
+                                        color: Color(0xFFFBBF24),
+                                      ),
                                       const SizedBox(width: 4),
                                       const Text(
                                         '4.8',
@@ -1580,8 +1707,10 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                                 ],
                               ),
                             ),
-                            const Icon(Icons.chevron_right_rounded,
-                                color: Color(0xFFCBD5E1)),
+                            const Icon(
+                              Icons.chevron_right_rounded,
+                              color: Color(0xFFCBD5E1),
+                            ),
                           ],
                         ),
                       ),
@@ -1617,17 +1746,19 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                             'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=600&q=80',
                             width: double.infinity,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(color: const Color(0xFF1E293B)),
+                            errorBuilder: (_, __, ___) =>
+                                Container(color: const Color(0xFF1E293B)),
                           ),
-                          Container(
-                            color: Colors.black.withValues(alpha: 0.1),
-                          ),
+                          Container(color: Colors.black.withValues(alpha: 0.1)),
                           const Center(
                             child: CircleAvatar(
                               radius: 20,
                               backgroundColor: Color(0xFF6355D8),
-                              child: Icon(Icons.location_on_rounded,
-                                  color: Colors.white, size: 20),
+                              child: Icon(
+                                Icons.location_on_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
                             ),
                           ),
                           Positioned(
@@ -1639,16 +1770,22 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                               decoration: BoxDecoration(
                                 color: Colors.white.withValues(alpha: 0.9),
                                 borderRadius: BorderRadius.circular(12),
-                                border:
-                                    Border.all(color: Colors.white, width: 0.5),
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 0.5,
+                                ),
                               ),
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Row(
                                     children: [
-                                      const Icon(Icons.map_rounded,
-                                          size: 14, color: Color(0xFF6355D8)),
+                                      const Icon(
+                                        Icons.map_rounded,
+                                        size: 14,
+                                        color: Color(0xFF6355D8),
+                                      ),
                                       const SizedBox(width: 6),
                                       Text(
                                         listing.location,
@@ -1704,7 +1841,8 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                     color: Colors.white.withValues(alpha: 0.95),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                        color: const Color(0xFF6355D8).withValues(alpha: 0.2)),
+                      color: const Color(0xFF6355D8).withValues(alpha: 0.2),
+                    ),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.1),
@@ -1718,8 +1856,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                       const CircleAvatar(
                         radius: 18,
                         backgroundColor: Color(0xFF10B981),
-                        child: Icon(Icons.send_rounded,
-                            size: 16, color: Colors.white),
+                        child: Icon(
+                          Icons.send_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       const Expanded(
@@ -1747,8 +1888,11 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                       ),
                       IconButton(
                         onPressed: () => setState(() => _showToast = false),
-                        icon: const Icon(Icons.close_rounded,
-                            size: 18, color: Color(0xFF94A3B8)),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          size: 18,
+                          color: Color(0xFF94A3B8),
+                        ),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),
@@ -1777,43 +1921,45 @@ class _PremiumActionChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: isactive ? const Color(0xFFFFF1F2) : const Color(0xFFF5F3FF),
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: onTap,
+    color: isactive ? const Color(0xFFFFF1F2) : const Color(0xFFF5F3FF),
+    borderRadius: BorderRadius.circular(16),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isactive ? const Color(0xFFFECDD3) : const Color(0xFFEBE9FE),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  icon,
-                  size: 16,
-                  color:
-                      isactive ? const Color(0xFFE11D48) : const Color(0xFF6355D8),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color:
-                        isactive ? const Color(0xFF9F1239) : const Color(0xFF3B3383),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+          border: Border.all(
+            color: isactive ? const Color(0xFFFECDD3) : const Color(0xFFEBE9FE),
           ),
         ),
-      );
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isactive
+                  ? const Color(0xFFE11D48)
+                  : const Color(0xFF6355D8),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isactive
+                    ? const Color(0xFF9F1239)
+                    : const Color(0xFF3B3383),
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _ListingGallery extends StatefulWidget {
@@ -1862,7 +2008,7 @@ class _ListingGalleryState extends State<_ListingGallery> {
                         Color(0x77000000),
                         Color(0x00000000),
                         Color(0x00000000),
-                        Color(0x22000000)
+                        Color(0x22000000),
                       ],
                       stops: [0.0, 0.25, 0.8, 1.0],
                     ),
@@ -1881,8 +2027,9 @@ class _ListingGalleryState extends State<_ListingGallery> {
                 child: _ArrowButton(
                   icon: Icons.chevron_left_rounded,
                   onTap: () => _pageController.previousPage(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut),
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  ),
                 ),
               ),
             ),
@@ -1894,8 +2041,9 @@ class _ListingGalleryState extends State<_ListingGallery> {
                 child: _ArrowButton(
                   icon: Icons.chevron_right_rounded,
                   onTap: () => _pageController.nextPage(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut),
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  ),
                 ),
               ),
             ),
@@ -1913,7 +2061,11 @@ class _ListingGalleryState extends State<_ListingGallery> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.image_outlined, color: Colors.white, size: 12),
+                  const Icon(
+                    Icons.image_outlined,
+                    color: Colors.white,
+                    size: 12,
+                  ),
                   const SizedBox(width: 6),
                   Text(
                     '${_index + 1} / ${images.length}',

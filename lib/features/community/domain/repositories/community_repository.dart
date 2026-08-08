@@ -60,6 +60,17 @@ abstract interface class StoryRepository {
   Future<StoryItem> createStory(CreateStoryDraft draft);
   Future<StoryItem> markViewed(String storyId);
   Future<StoryItem> setLiked(String storyId, bool isLiked);
+  Future<List<StoryAudienceContact>> fetchAudienceContacts();
+  Future<void> updateAudienceExclusions({
+    required String storyId,
+    required List<String> excludedUserIds,
+  });
+  Future<List<StoryHighlight>> fetchMyHighlights();
+  Future<StoryHighlight> createHighlight({
+    required String title,
+    required StoryVisibility visibility,
+    required List<String> storyIds,
+  });
   Future<void> sendReply({required String storyId, required String message});
 }
 

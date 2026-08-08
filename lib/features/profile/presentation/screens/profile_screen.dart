@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/state/async_state.dart';
 import '../../../community/application/profile_posts_controller.dart';
+import '../../../community/application/story_controller.dart';
 import '../../../community/domain/entities/community_post.dart';
 import '../../application/profile_controller.dart';
 import '../../domain/entities/user_profile.dart';
+import '../../../verification/application/member_capabilities_controller.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
@@ -12,10 +15,14 @@ class ProfileScreen extends StatefulWidget {
     required this.controller,
     required this.postsController,
     required this.onSignOut,
+    required this.memberCapabilitiesController,
+    required this.storyController,
   });
   final ProfileController controller;
   final ProfilePostsController postsController;
   final Future<void> Function() onSignOut;
+  final MemberCapabilitiesController memberCapabilitiesController;
+  final StoryController storyController;
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
@@ -27,6 +34,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   void initState() {
     super.initState();
     widget.controller.load();
+    widget.memberCapabilitiesController.load();
+    widget.storyController.loadHighlights();
   }
 
   @override
@@ -67,6 +76,10 @@ class _ProfileScreenState extends State<ProfileScreen>
                   onPressed: _confirmSignOut,
                 ),
               ),
+              _VerifiedAccountCard(
+                controller: widget.memberCapabilitiesController,
+              ),
+              _StoryHighlights(controller: widget.storyController),
               Container(
                 margin: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -111,7 +124,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Çıkış yapılsın mı?'),
-        content: const Text('Bu cihazdaki oturumun güvenli olarak kapatılacak.'),
+        content: const Text(
+          'Bu cihazdaki oturumun güvenli olarak kapatılacak.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -126,6 +141,163 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     if (shouldSignOut != true || !mounted) return;
     await widget.onSignOut();
+  }
+}
+
+class _StoryHighlights extends StatelessWidget {
+  const _StoryHighlights({required this.controller});
+
+  final StoryController controller;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final highlights = controller.highlights;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Öne çıkanlar',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 9),
+            SizedBox(
+              height: 78,
+              child: highlights.isEmpty
+                  ? const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Henüz öne çıkarılmış bir Story yok.',
+                        style: TextStyle(color: AppColors.textSecondary),
+                      ),
+                    )
+                  : ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: highlights.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 10),
+                      itemBuilder: (_, index) {
+                        final highlight = highlights[index];
+                        final first = highlight.items.first;
+                        return SizedBox(
+                          width: 68,
+                          child: Column(
+                            children: [
+                              Container(
+                                height: 51,
+                                width: 51,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: AppColors.primary,
+                                    width: 2,
+                                  ),
+                                  image: DecorationImage(
+                                    image: NetworkImage(
+                                      first.media.thumbnailUrl ??
+                                          first.media.url,
+                                    ),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                highlight.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _VerifiedAccountCard extends StatelessWidget {
+  const _VerifiedAccountCard({required this.controller});
+
+  final MemberCapabilitiesController controller;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final verified = controller.value.identityVerified;
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: verified ? const Color(0xFFEAFBF3) : const Color(0xFFF5F3FF),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: verified ? const Color(0xFF86E2B3) : const Color(0xFFD8CCFF),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              verified ? Icons.verified_rounded : Icons.verified_user_outlined,
+              color: verified ? const Color(0xFF059669) : AppColors.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                verified
+                    ? 'Onaylı Hesap rozeti aktif'
+                    : 'Onaylı Hesap rozeti gerekli',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            if (controller.isLoading)
+              const SizedBox(
+                height: 18,
+                width: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              TextButton(
+                onPressed: verified
+                    ? controller.load
+                    : () => _startVerification(context),
+                child: Text(verified ? 'Yenile' : 'Rozeti al'),
+              ),
+          ],
+        ),
+      );
+    },
+  );
+
+  Future<void> _startVerification(BuildContext context) async {
+    try {
+      final url = await controller.startVerification();
+      if (!context.mounted) return;
+      final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+      if (!opened && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Doğrulama sayfası açılamadı.')),
+        );
+      }
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Doğrulama şu anda başlatılamadı. Lütfen tekrar deneyin.',
+          ),
+        ),
+      );
+    }
   }
 }
 

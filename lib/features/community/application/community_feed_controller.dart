@@ -4,24 +4,49 @@ import '../domain/entities/create_post_draft.dart';
 import '../domain/repositories/community_repository.dart';
 
 class CommunityFeedController extends PagedController<CommunityPost> {
-  CommunityFeedController({required CommunityRepository repository, required CommunityPostCommands commands, Future<void> Function()? onMutationCommitted})
-      : _commands = commands,
+  CommunityFeedController({
+    required CommunityRepository repository,
+    required CommunityPostCommands commands,
+    required PostInteractionRepository interactions,
+    Future<void> Function()? onMutationCommitted,
+  })  : _commands = commands,
+        _interactions = interactions,
         _onMutationCommitted = onMutationCommitted,
         super(dataSource: repository, pageSize: 2);
 
   final CommunityPostCommands _commands;
+  final PostInteractionRepository _interactions;
   final Future<void> Function()? _onMutationCommitted;
 
   Future<void> load() => loadInitial();
 
-  void toggleLike(String postId) {
+  Future<void> toggleLike(String postId) async {
+    CommunityPost? previous;
+    for (final post in items) {
+      if (post.id == postId) {
+        previous = post;
+        break;
+      }
+    }
+    if (previous == null) return;
+    final optimistic = previous.copyWith(
+      isLiked: !previous.isLiked,
+      likes: previous.isLiked ? previous.likes - 1 : previous.likes + 1,
+    );
     replaceItems([
-      for (final post in items)
-        if (post.id == postId)
-          post.copyWith(isLiked: !post.isLiked, likes: post.isLiked ? post.likes - 1 : post.likes + 1)
-        else
-          post,
+      for (final post in items) if (post.id == postId) optimistic else post,
     ]);
+    try {
+      final confirmed = await _interactions.setLike(postId, optimistic.isLiked);
+      replaceItems([
+        for (final post in items) if (post.id == postId) confirmed else post,
+      ]);
+      await _onMutationCommitted?.call();
+    } catch (_) {
+      replaceItems([
+        for (final post in items) if (post.id == postId) previous else post,
+      ]);
+    }
   }
 
   Future<CommunityPost> createPost(CreatePostDraft draft) async {

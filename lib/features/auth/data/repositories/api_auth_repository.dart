@@ -2,6 +2,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/network/api_endpoints.dart';
 import '../../domain/entities/app_user.dart';
 import '../../domain/entities/auth_session.dart';
+import '../../domain/entities/onboarding_profile.dart';
 import '../../domain/repositories/auth_repository.dart';
 import '../../domain/repositories/passkey_repository.dart';
 
@@ -13,6 +14,19 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
   final ApiClient _client;
 
   @override
+  Future<bool> checkEmailStatus({required String email}) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.authEmailStatus,
+      data: {'email': email.trim()},
+    );
+    final body =
+        response.data?['data'] as Map<String, dynamic>? ??
+        response.data ??
+        const {};
+    return body['exists'] == true;
+  }
+
+  @override
   Future<AuthSession> signIn({
     required String email,
     required String password,
@@ -22,15 +36,32 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
   });
 
   @override
-  Future<AuthSession> signUp({
+  Future<void> signUp({
     required String name,
     required String email,
     required String password,
-  }) => _authenticate(ApiEndpoints.authRegister, {
-    'name': name.trim(),
-    'email': email.trim(),
-    'password': password,
-  });
+  }) async {
+    await _client.post<void>(
+      ApiEndpoints.authRegister,
+      data: {'name': name.trim(), 'email': email.trim(), 'password': password},
+    );
+  }
+
+  @override
+  Future<void> confirmEmailVerification({
+    required String email,
+    required String code,
+  }) => _client.post<void>(
+    ApiEndpoints.authEmailVerificationConfirm,
+    data: {'email': email.trim(), 'code': code},
+  );
+
+  @override
+  Future<void> resendEmailVerification({required String email}) =>
+      _client.post<void>(
+        ApiEndpoints.authEmailVerificationResend,
+        data: {'email': email.trim()},
+      );
 
   @override
   Future<AuthSession> refreshSession({required String refreshToken}) =>
@@ -50,8 +81,9 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
         const {};
     final user = body['user'] as Map<String, dynamic>? ?? const {};
     final accessToken = body['accessToken'] as String?;
-    if (accessToken == null || accessToken.isEmpty)
+    if (accessToken == null || accessToken.isEmpty) {
       throw StateError('Kimlik doğrulama servisi geçersiz yanıt verdi.');
+    }
     return AuthSession(
       user: AppUser(
         id: user['id'] as String? ?? '',
@@ -73,14 +105,11 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
       const {};
 
   @override
-  Future<AuthSession> verifyRegistration(
-    Map<String, dynamic> credential,
-  ) => _authenticate(ApiEndpoints.authPasskeyRegistrationVerify, credential);
+  Future<AuthSession> verifyRegistration(Map<String, dynamic> credential) =>
+      _authenticate(ApiEndpoints.authPasskeyRegistrationVerify, credential);
 
   @override
-  Future<Map<String, dynamic>> authenticationOptions({
-    String? email,
-  }) async =>
+  Future<Map<String, dynamic>> authenticationOptions({String? email}) async =>
       (await _client.post<Map<String, dynamic>>(
             ApiEndpoints.authPasskeyAuthenticationOptions,
             data: {if (email != null) 'email': email.trim()},
@@ -89,9 +118,8 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
       const {};
 
   @override
-  Future<AuthSession> verifyAuthentication(
-    Map<String, dynamic> credential,
-  ) => _authenticate(ApiEndpoints.authPasskeyAuthenticationVerify, credential);
+  Future<AuthSession> verifyAuthentication(Map<String, dynamic> credential) =>
+      _authenticate(ApiEndpoints.authPasskeyAuthenticationVerify, credential);
 
   @override
   Future<void> requestPasswordReset({required String email}) async =>
@@ -118,4 +146,40 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
       data: {'refreshToken': refreshToken},
     );
   }
+
+  @override
+  Future<OnboardingProfile> getOnboarding() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.authOnboarding,
+    );
+    final data =
+        response.data?['data'] as Map<String, dynamic>? ??
+        response.data ??
+        const {};
+    return OnboardingProfile(
+      completed: data['completed'] == true,
+      city: data['city'] as String?,
+      regionCode: data['regionCode'] as String?,
+      interests: (data['interests'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(growable: false),
+      primaryIntent: data['primaryIntent'] as String?,
+    );
+  }
+
+  @override
+  Future<void> saveOnboarding({
+    required String city,
+    required String regionCode,
+    required List<String> interests,
+    required String primaryIntent,
+  }) => _client.put<void>(
+    ApiEndpoints.authOnboarding,
+    data: {
+      'city': city.trim(),
+      'regionCode': regionCode,
+      'interests': interests,
+      'primaryIntent': primaryIntent,
+    },
+  );
 }

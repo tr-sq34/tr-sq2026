@@ -23,7 +23,19 @@ class _StartupScreenState extends State<StartupScreen> {
   Future<void> _restoreSession() async {
     await widget.authController.restoreSession();
     if (!mounted) return;
-    final destination = widget.authController.isAuthenticated ? AppRoutes.home : AppRoutes.login;
+    var destination = AppRoutes.login;
+    if (widget.authController.isAuthenticated) {
+      try {
+        final onboarding = await widget.authController.getOnboarding();
+        destination = onboarding.completed
+            ? AppRoutes.home
+            : AppRoutes.onboarding;
+      } catch (_) {
+        // A temporary profile lookup problem must not make an authenticated user stuck.
+        destination = AppRoutes.home;
+      }
+    }
+    if (!mounted) return;
     Navigator.of(context).pushReplacementNamed(destination);
   }
 
@@ -36,9 +48,20 @@ class _StartupScreenState extends State<StartupScreen> {
           children: [
             Text('🇹🇷', style: TextStyle(fontSize: 42)),
             SizedBox(height: 12),
-            Text('TurkSquare', style: TextStyle(color: AppColors.textPrimary, fontSize: 22, fontWeight: FontWeight.w800)),
+            Text(
+              'TurkSquare',
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
             SizedBox(height: 20),
-            SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(
+              height: 22,
+              width: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
           ],
         ),
       ),

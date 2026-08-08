@@ -1,26 +1,34 @@
-import 'dart:ui';
-
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
-
-import '../../../../core/constants/app_colors.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
+    this.onCheckEmailStatus,
+    this.initialEmail,
     this.onSignIn,
     this.onAuthenticated,
     this.onForgotPassword,
     this.onCreateAccount,
+    this.onRegisterWithEmail,
     this.onPhoneLogin,
     this.onPasskeyLogin,
+    this.onTermsOfService,
+    this.onPrivacyPolicy,
   });
 
+  final Future<bool> Function(String email)? onCheckEmailStatus;
+  final String? initialEmail;
   final Future<void> Function(String email, String password)? onSignIn;
   final VoidCallback? onAuthenticated;
   final VoidCallback? onForgotPassword;
   final VoidCallback? onCreateAccount;
+  final Future<void> Function(String email)? onRegisterWithEmail;
   final VoidCallback? onPhoneLogin;
   final Future<void> Function({String? email})? onPasskeyLogin;
+  final VoidCallback? onTermsOfService;
+  final VoidCallback? onPrivacyPolicy;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -29,8 +37,16 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _isExistingUser = false;
+  bool _isLoading = false;
   bool _obscurePassword = true;
-  bool _isSubmitting = false;
+  String? _emailError;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailController.text = widget.initialEmail?.trim() ?? '';
+  }
 
   @override
   void dispose() {
@@ -41,531 +57,521 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isExistingUser = _isExistingUser;
+    final title = isExistingUser ? 'Giriş yap' : 'Hesap oluştur';
+    final subtitle = isExistingUser
+        ? 'Şifrenizle devam edin.'
+        : 'Bu uygulamaya kaydolmak için e-posta adresinizi girin';
+
     return Scaffold(
-      body: Stack(
-        children: [
-          const _SoftGradientBackground(),
-          SafeArea(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 390),
-                  child: Column(
-                    children: [
-                      const _BrandHeader(),
-                      const SizedBox(height: 24),
-                      _buildLoginCard(),
-                      const SizedBox(height: 20),
-                      const _TrustIndicators(),
-                    ],
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.fromLTRB(24, 14, 24, 24),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: AspectRatio(
+                      aspectRatio: 330 / 252,
+                      child: Image.asset(
+                        'assets/images/auth/istanbul_galata.png',
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
+                        semanticLabel: 'İstanbul Galata manzarası',
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(
+                      color: Colors.black,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(
+                      color: Colors.black,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  _EmailField(
+                    controller: _emailController,
+                    enabled: !isExistingUser && !_isLoading,
+                    errorText: _emailError,
+                    onChanged: (_) {
+                      if (_emailError != null) {
+                        setState(() => _emailError = null);
+                      }
+                    },
+                  ),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: isExistingUser
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 16),
+                            child: _PasswordStep(
+                              controller: _passwordController,
+                              obscurePassword: _obscurePassword,
+                              enabled: !_isLoading,
+                              onToggleObscure: () => setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              ),
+                              onChangeEmail: _changeEmail,
+                              onForgotPassword: widget.onForgotPassword,
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: 16),
+                  _ContinueButton(
+                    isLoading: _isLoading,
+                    label: isExistingUser ? 'Giriş yap' : 'Devam et',
+                    onPressed: isExistingUser ? _signIn : _continueWithEmail,
+                  ),
+                  const SizedBox(height: 24),
+                  const _DividerLabel(label: 'veya'),
+                  const SizedBox(height: 24),
+                  _ProviderButton(
+                    icon: const FaIcon(
+                      FontAwesomeIcons.google,
+                      size: 20,
+                      color: Color(0xFF4285F4),
+                    ),
+                    label: 'Google ile devam et',
+                    onPressed: _showProviderUnavailable,
+                  ),
+                  const SizedBox(height: 10),
+                  _ProviderButton(
+                    icon: const FaIcon(FontAwesomeIcons.apple, size: 20),
+                    label: 'Apple ile devam et',
+                    onPressed: _showProviderUnavailable,
+                  ),
+                  const SizedBox(height: 10),
+                  _ProviderButton(
+                    icon: const Icon(Icons.phone_outlined, size: 22),
+                    label: 'Telefonla devam et',
+                    onPressed: _showProviderUnavailable,
+                  ),
+                  if (widget.onPasskeyLogin != null) ...[
+                    const SizedBox(height: 10),
+                    _ProviderButton(
+                      icon: const Icon(Icons.key_outlined, size: 21),
+                      label: 'Passkey ile devam et',
+                      onPressed: _signInWithPasskey,
+                    ),
+                  ],
+                  const SizedBox(height: 30),
+                  _LegalNotice(
+                    onTermsOfService: widget.onTermsOfService,
+                    onPrivacyPolicy: widget.onPrivacyPolicy,
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLoginCard() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: AppColors.surface.withValues(alpha: 0.82),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.16),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _InputField(
-                controller: _emailController,
-                label: 'Email',
-                hint: 'example@email.com',
-                keyboardType: TextInputType.emailAddress,
-                prefixIcon: Icons.mail_outline_rounded,
-              ),
-              const SizedBox(height: 16),
-              _InputField(
-                controller: _passwordController,
-                label: 'Password',
-                hint: '••••••••••••••••',
-                obscureText: _obscurePassword,
-                prefixIcon: Icons.lock_outline_rounded,
-                suffix: IconButton(
-                  tooltip: _obscurePassword ? 'Show password' : 'Hide password',
-                  onPressed: () =>
-                      setState(() => _obscurePassword = !_obscurePassword),
-                  icon: Icon(
-                    _obscurePassword
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed:
-                      widget.onForgotPassword ??
-                      () => _showMessage(
-                        'Password reset will be available soon.',
-                      ),
-                  child: const Text('Forgot Password?'),
-                ),
-              ),
-              const SizedBox(height: 4),
-              _PrimaryButton(onPressed: _signIn, isLoading: _isSubmitting),
-              const SizedBox(height: 22),
-              const _OrDivider(),
-              const SizedBox(height: 18),
-              _SocialButton(
-                icon: Icons.key_rounded,
-                iconColor: AppColors.primaryLight,
-                label: 'Continue with Passkey',
-                onPressed: widget.onPasskeyLogin == null
-                    ? null
-                    : () => _signInWithPasskey(),
-              ),
-              const SizedBox(height: 10),
-              _SocialButton(
-                icon: Icons.apple,
-                label: 'Continue with Apple',
-                onPressed: () =>
-                    _showMessage('Apple sign-in will be available soon.'),
-              ),
-              const SizedBox(height: 10),
-              _SocialButton(
-                icon: Icons.g_mobiledata_rounded,
-                iconColor: const Color(0xFFEA4335),
-                label: 'Continue with Google',
-                onPressed: () =>
-                    _showMessage('Google sign-in will be available soon.'),
-              ),
-              const SizedBox(height: 10),
-              _SocialButton(
-                icon: Icons.phone_iphone_rounded,
-                iconColor: AppColors.primaryLight,
-                label: 'Continue with Phone',
-                onPressed:
-                    widget.onPhoneLogin ??
-                    () => _showMessage('Phone sign-in will be available soon.'),
-              ),
-              const SizedBox(height: 20),
-              Container(height: 1, color: AppColors.surfaceBorder),
-              const SizedBox(height: 18),
-              const Text(
-                "Don't have an account?",
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-              ),
-              TextButton(
-                onPressed:
-                    widget.onCreateAccount ??
-                    () => _showMessage(
-                      'Account creation will be available soon.',
-                    ),
-                child: const Text(
-                  'Create Account',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
           ),
         ),
       ),
     );
   }
 
-  Future<void> _signIn() async {
-    if (_isSubmitting) return;
+  Future<void> _continueWithEmail() async {
+    final email = _emailController.text.trim();
+    if (!_isValidEmail(email)) {
+      setState(() => _emailError = 'Geçerli bir e-posta adresi girin.');
+      return;
+    }
+    final checkEmailStatus = widget.onCheckEmailStatus;
+    if (checkEmailStatus == null) {
+      _showMessage('E-posta kontrolü şu anda kullanılamıyor.');
+      return;
+    }
 
-    setState(() => _isSubmitting = true);
+    setState(() => _isLoading = true);
     try {
-      await widget.onSignIn?.call(
-        _emailController.text,
-        _passwordController.text,
-      );
+      final exists = await checkEmailStatus(email);
       if (!mounted) return;
-      if (widget.onAuthenticated != null) {
-        widget.onAuthenticated!();
+      if (exists) {
+        setState(() => _isExistingUser = true);
       } else {
-        _showMessage('Authentication setup is incomplete.');
+        final register = widget.onRegisterWithEmail;
+        if (register != null) {
+          await register(email);
+        } else {
+          widget.onCreateAccount?.call();
+        }
       }
-    } catch (_) {
-      if (mounted) _showMessage('Please enter your email and password.');
+    } catch (error) {
+      if (mounted) _showMessage(_messageFor(error));
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _signIn() async {
+    if (_isLoading) return;
+    final password = _passwordController.text;
+    if (password.isEmpty) {
+      _showMessage('Şifrenizi girin.');
+      return;
+    }
+    if (widget.onSignIn == null) {
+      _showMessage('Giriş servisi yapılandırılmamış.');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await widget.onSignIn!(_emailController.text.trim(), password);
+      if (!mounted) return;
+      widget.onAuthenticated?.call();
+    } catch (error) {
+      if (mounted) _showMessage(_messageFor(error));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _signInWithPasskey() async {
-    if (_isSubmitting || widget.onPasskeyLogin == null) return;
-    setState(() => _isSubmitting = true);
+    final callback = widget.onPasskeyLogin;
+    if (callback == null || _isLoading) return;
+    setState(() => _isLoading = true);
     try {
       final email = _emailController.text.trim();
-      await widget.onPasskeyLogin!(email: email.isEmpty ? null : email);
+      await callback(email: email.isEmpty ? null : email);
       if (!mounted) return;
       widget.onAuthenticated?.call();
     } catch (error) {
-      if (mounted) _showMessage(_passkeyError(error));
+      if (mounted) _showMessage(_messageFor(error));
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  String _passkeyError(Object error) {
-    final message = error.toString().toLowerCase();
-    if (message.contains('cancel')) return 'Passkey işlemi iptal edildi.';
-    if (message.contains('domain-not-associated')) {
-      return 'Bu uygulama alan adıyla doğrulanmamış. Lütfen destek ekibiyle iletişime geçin.';
-    }
-    if (message.contains('no-credentials')) return 'Bu cihazda kullanılabilir bir passkey bulunamadı.';
-    return 'Passkey ile giriş tamamlanamadı. Şifrenizle tekrar deneyin.';
+  void _changeEmail() {
+    setState(() {
+      _isExistingUser = false;
+      _passwordController.clear();
+      _obscurePassword = true;
+    });
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showProviderUnavailable() =>
+      _showMessage('Bu giriş yöntemi yakında kullanılabilir olacak.');
+
+  void _showMessage(String message) => ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(message)));
+
+  bool _isValidEmail(String value) =>
+      RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(value);
+
+  String _messageFor(Object error) =>
+      error.toString().replaceFirst('Exception: ', '');
 }
 
-class _SoftGradientBackground extends StatelessWidget {
-  const _SoftGradientBackground();
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFFFFFF),
-                AppColors.background,
-                Color(0xFFF0EDFF),
-              ],
-            ),
-          ),
-        ),
-        const Positioned(
-          top: -95,
-          right: -70,
-          child: _BlurCircle(color: AppColors.primary, size: 240),
-        ),
-        const Positioned(
-          bottom: 30,
-          left: -105,
-          child: _BlurCircle(color: AppColors.accentRose, size: 260),
-        ),
-        Positioned(
-          top: 300,
-          right: -80,
-          child: _BlurCircle(
-            color: AppColors.accentEmerald.withValues(alpha: 0.35),
-            size: 180,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _BlurCircle extends StatelessWidget {
-  const _BlurCircle({required this.color, required this.size});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return ImageFiltered(
-      imageFilter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color.withValues(alpha: 0.40),
-        ),
-      ),
-    );
-  }
-}
-
-class _BrandHeader extends StatelessWidget {
-  const _BrandHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const Text(
-          '🇹🇷  TurkSquare',
-          style: TextStyle(
-            color: AppColors.textPrimary,
-            fontSize: 25,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Your Turkish Community in America',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-        ),
-        const SizedBox(height: 20),
-        Container(
-          width: 92,
-          height: 92,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [AppColors.primaryLight, AppColors.primary],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.35),
-                blurRadius: 24,
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Icon(Icons.public_rounded, color: Colors.white, size: 47),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _InputField extends StatelessWidget {
-  const _InputField({
+class _EmailField extends StatelessWidget {
+  const _EmailField({
     required this.controller,
-    required this.label,
-    required this.hint,
-    required this.prefixIcon,
-    this.keyboardType,
-    this.obscureText = false,
-    this.suffix,
+    required this.enabled,
+    required this.onChanged,
+    this.errorText,
   });
 
   final TextEditingController controller;
-  final String label;
-  final String hint;
-  final IconData prefixIcon;
-  final TextInputType? keyboardType;
-  final bool obscureText;
-  final Widget? suffix;
+  final bool enabled;
+  final String? errorText;
+  final ValueChanged<String> onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: AppColors.textPrimary,
-            fontWeight: FontWeight.w700,
-            fontSize: 13,
-          ),
-        ),
-        const SizedBox(height: 8),
         TextField(
           controller: controller,
-          keyboardType: keyboardType,
-          obscureText: obscureText,
-          style: const TextStyle(color: AppColors.textPrimary),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: const TextStyle(color: AppColors.textMuted),
-            prefixIcon: Icon(
-              prefixIcon,
-              color: AppColors.textSecondary,
-              size: 20,
-            ),
-            suffixIcon: suffix,
-            filled: true,
-            fillColor: Colors.black.withValues(alpha: 0.18),
-            contentPadding: const EdgeInsets.symmetric(vertical: 17),
-            enabledBorder: _border(AppColors.surfaceBorder),
-            focusedBorder: _border(AppColors.primaryLight),
+          enabled: enabled,
+          onChanged: onChanged,
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
+          autofillHints: const [AutofillHints.email],
+          style: GoogleFonts.inter(fontSize: 14, color: Colors.black),
+          decoration: _inputDecoration(
+            hint: 'email@domain.com',
+            errorText: errorText,
           ),
         ),
       ],
     );
   }
-
-  OutlineInputBorder _border(Color color) => OutlineInputBorder(
-    borderRadius: BorderRadius.circular(14),
-    borderSide: BorderSide(color: color),
-  );
 }
 
-class _PrimaryButton extends StatelessWidget {
-  const _PrimaryButton({required this.onPressed, required this.isLoading});
-  final VoidCallback? onPressed;
-  final bool isLoading;
+class _PasswordStep extends StatelessWidget {
+  const _PasswordStep({
+    required this.controller,
+    required this.obscurePassword,
+    required this.enabled,
+    required this.onToggleObscure,
+    required this.onChangeEmail,
+    this.onForgotPassword,
+  });
+
+  final TextEditingController controller;
+  final bool obscurePassword;
+  final bool enabled;
+  final VoidCallback onToggleObscure;
+  final VoidCallback onChangeEmail;
+  final VoidCallback? onForgotPassword;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.primaryLight, AppColors.primary],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: controller,
+          enabled: enabled,
+          obscureText: obscurePassword,
+          enableInteractiveSelection: false,
+          autofillHints: const [AutofillHints.password],
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => FocusScope.of(context).unfocus(),
+          style: GoogleFonts.inter(fontSize: 14, color: Colors.black),
+          decoration: _inputDecoration(
+            hint: 'Şifreniz',
+            suffixIcon: IconButton(
+              tooltip: obscurePassword ? 'Şifreyi göster' : 'Şifreyi gizle',
+              onPressed: enabled ? onToggleObscure : null,
+              icon: Icon(
+                obscurePassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
+            ),
+          ),
         ),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.30),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: ElevatedButton(
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          runSpacing: 2,
+          children: [
+            TextButton(
+              onPressed: enabled ? onChangeEmail : null,
+              child: const Text('E-postayı değiştir'),
+            ),
+            TextButton(
+              onPressed: enabled ? onForgotPassword : null,
+              child: const Text('Şifremi unuttum'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ContinueButton extends StatelessWidget {
+  const _ContinueButton({
+    required this.label,
+    required this.isLoading,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool isLoading;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: FilledButton(
         onPressed: isLoading ? null : onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          foregroundColor: Colors.white,
-          shadowColor: Colors.transparent,
-          minimumSize: const Size(0, 54),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.black,
+          disabledBackgroundColor: Colors.black54,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: isLoading
             ? const SizedBox(
-                height: 20,
-                width: 20,
+                width: 18,
+                height: 18,
                 child: CircularProgressIndicator(
-                  color: Colors.white,
                   strokeWidth: 2,
+                  color: Colors.white,
                 ),
               )
-            : const Text(
-                'Sign In',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+            : Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
       ),
     );
   }
 }
 
-class _OrDivider extends StatelessWidget {
-  const _OrDivider();
-  @override
-  Widget build(BuildContext context) {
-    return const Row(
-      children: [
-        Expanded(child: Divider(color: AppColors.surfaceBorder)),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            'OR CONTINUE WITH',
-            style: TextStyle(
-              color: AppColors.textMuted,
-              fontWeight: FontWeight.w700,
-              fontSize: 10,
-              letterSpacing: 0.8,
-            ),
-          ),
-        ),
-        Expanded(child: Divider(color: AppColors.surfaceBorder)),
-      ],
-    );
-  }
-}
+class _DividerLabel extends StatelessWidget {
+  const _DividerLabel({required this.label});
 
-class _SocialButton extends StatelessWidget {
-  const _SocialButton({
-    required this.icon,
-    required this.label,
-    this.onPressed,
-    this.iconColor,
-  });
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  final Color? iconColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon, color: iconColor ?? AppColors.textPrimary, size: 22),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.textPrimary,
-        minimumSize: const Size(0, 48),
-        side: const BorderSide(color: AppColors.surfaceBorder),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-      ),
-    );
-  }
-}
-
-class _TrustIndicators extends StatelessWidget {
-  const _TrustIndicators();
-  @override
-  Widget build(BuildContext context) {
-    const items = [
-      'Secure Login',
-      'End-to-End Encryption',
-      'Trusted by Turkish Community',
-    ];
-    return Wrap(
-      alignment: WrapAlignment.center,
-      spacing: 12,
-      runSpacing: 8,
-      children: items
-          .map((item) => _TrustItem(label: item))
-          .toList(growable: false),
-    );
-  }
-}
-
-class _TrustItem extends StatelessWidget {
-  const _TrustItem({required this.label});
   final String label;
 
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(
-          Icons.check_circle_rounded,
-          color: AppColors.accentEmerald,
-          size: 14,
+        const Expanded(child: Divider(color: Color(0xFFE6E6E6))),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            label,
+            style: GoogleFonts.inter(
+              color: const Color(0xFF828282),
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
         ),
-        const SizedBox(width: 5),
-        Text(
-          label,
-          style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
-        ),
+        const Expanded(child: Divider(color: Color(0xFFE6E6E6))),
       ],
     );
   }
 }
+
+class _ProviderButton extends StatelessWidget {
+  const _ProviderButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final Widget icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: icon,
+        label: Text(
+          label,
+          style: GoogleFonts.inter(
+            color: Colors.black,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFFEEEEEE),
+          foregroundColor: Colors.black,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+    );
+  }
+}
+
+class _LegalNotice extends StatelessWidget {
+  const _LegalNotice({this.onTermsOfService, this.onPrivacyPolicy});
+
+  final VoidCallback? onTermsOfService;
+  final VoidCallback? onPrivacyPolicy;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = GoogleFonts.inter(
+      color: const Color(0xFF828282),
+      fontSize: 12,
+      height: 1.5,
+    );
+    final link = muted.copyWith(color: Colors.black);
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('Devam ederek ', style: muted),
+        _LegalLink(
+          label: 'Kullanım Koşulları',
+          onPressed: onTermsOfService,
+          style: link,
+        ),
+        Text(' ve ', style: muted),
+        _LegalLink(
+          label: 'Gizlilik Politikası',
+          onPressed: onPrivacyPolicy,
+          style: link,
+        ),
+        Text("'nı kabul etmiş olursunuz.", style: muted),
+      ],
+    );
+  }
+}
+
+class _LegalLink extends StatelessWidget {
+  const _LegalLink({
+    required this.label,
+    required this.onPressed,
+    required this.style,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onPressed,
+      child: Text(
+        label,
+        style: style.copyWith(decoration: TextDecoration.underline),
+      ),
+    );
+  }
+}
+
+InputDecoration _inputDecoration({
+  required String hint,
+  String? errorText,
+  Widget? suffixIcon,
+}) => InputDecoration(
+  hintText: hint,
+  hintStyle: GoogleFonts.inter(color: const Color(0xFF828282), fontSize: 14),
+  errorText: errorText,
+  errorStyle: GoogleFonts.inter(fontSize: 12),
+  filled: true,
+  fillColor: Colors.white,
+  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+  suffixIcon: suffixIcon,
+  enabledBorder: _outline(const Color(0xFFDFDFDF)),
+  focusedBorder: _outline(Colors.black),
+  errorBorder: _outline(Colors.red.shade700),
+  focusedErrorBorder: _outline(Colors.red.shade700),
+);
+
+OutlineInputBorder _outline(Color color) => OutlineInputBorder(
+  borderRadius: BorderRadius.circular(8),
+  borderSide: BorderSide(color: color),
+);

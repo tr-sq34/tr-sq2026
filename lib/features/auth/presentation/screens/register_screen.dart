@@ -9,11 +9,15 @@ class RegisterScreen extends StatefulWidget {
     super.key,
     required this.onSignUp,
     required this.onAuthenticated,
+    this.initialEmail,
+    this.onVerificationRequired,
   });
 
   final Future<void> Function(String name, String email, String password)
   onSignUp;
   final VoidCallback onAuthenticated;
+  final String? initialEmail;
+  final Future<void> Function(String email)? onVerificationRequired;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -27,6 +31,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isLoading = false;
   bool _acceptedTerms = false;
   bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _email.text = widget.initialEmail?.trim() ?? '';
+  }
 
   @override
   void dispose() {
@@ -45,6 +56,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.person_add_alt_1_rounded,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Step 1 of 2  •  Account details',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
           AuthInput(
             controller: _name,
             label: 'Full name',
@@ -67,6 +96,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             hint: 'At least 6 characters',
             icon: Icons.lock_outline_rounded,
             obscureText: _obscurePassword,
+            enableInteractiveSelection: false,
+            onChanged: (_) => setState(() {}),
             suffixIcon: IconButton(
               onPressed: () =>
                   setState(() => _obscurePassword = !_obscurePassword),
@@ -77,13 +108,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 8),
+          _PasswordChecklist(
+            password: _password.text,
+            email: _email.text,
+            name: _name.text,
+          ),
           const SizedBox(height: 15),
           AuthInput(
             controller: _confirmPassword,
             label: 'Confirm password',
             hint: 'Repeat your password',
             icon: Icons.verified_user_outlined,
-            obscureText: _obscurePassword,
+            obscureText: _obscureConfirmPassword,
+            enableInteractiveSelection: false,
+            suffixIcon: IconButton(
+              tooltip: _obscureConfirmPassword
+                  ? 'Show password'
+                  : 'Hide password',
+              onPressed: () => setState(
+                () => _obscureConfirmPassword = !_obscureConfirmPassword,
+              ),
+              icon: Icon(
+                _obscureConfirmPassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
+            ),
           ),
           const SizedBox(height: 10),
           CheckboxListTile(
@@ -115,23 +166,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _createAccount() async {
-    if (!_acceptedTerms)
+    if (!_acceptedTerms) {
       return _show('Please accept the Terms and Privacy Policy.');
-    if (_password.text != _confirmPassword.text)
+    }
+    if (_password.text != _confirmPassword.text) {
       return _show('Passwords do not match.');
+    }
     if (PasswordPolicy.validate(
           _password.text,
           email: _email.text,
           name: _name.text,
         )
-        case final error?)
+        case final error?) {
       return _show(error);
+    }
     setState(() => _isLoading = true);
     try {
       await widget.onSignUp(_name.text, _email.text, _password.text);
-      if (mounted) widget.onAuthenticated();
-    } catch (_) {
-      if (mounted) _show('Please review your details and try again.');
+      if (mounted) {
+        final email = _email.text.trim();
+        final onVerificationRequired = widget.onVerificationRequired;
+        if (onVerificationRequired != null) {
+          await onVerificationRequired(email);
+        } else {
+          _show('Doğrulama kodu e-posta adresinize gönderildi.');
+        }
+      }
+    } catch (error) {
+      if (mounted) _show(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -140,4 +202,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
   void _show(String message) => ScaffoldMessenger.of(
     context,
   ).showSnackBar(SnackBar(content: Text(message)));
+}
+
+class _PasswordChecklist extends StatelessWidget {
+  const _PasswordChecklist({
+    required this.password,
+    required this.email,
+    required this.name,
+  });
+  final String password;
+  final String email;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final validLength = password.trim().length >= PasswordPolicy.minLength;
+    final validIdentity =
+        PasswordPolicy.validate(password, email: email, name: name) == null ||
+        !validLength;
+    Widget item(bool ok, String text) => Row(
+      children: [
+        Icon(
+          ok ? Icons.check_circle_rounded : Icons.circle_outlined,
+          size: 15,
+          color: ok ? Colors.green : AppColors.textMuted,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+      ],
+    );
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.surfaceBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Password security',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          item(validLength, 'At least 12 characters'),
+          const SizedBox(height: 4),
+          item(validIdentity, 'Does not include your name or email'),
+        ],
+      ),
+    );
+  }
 }

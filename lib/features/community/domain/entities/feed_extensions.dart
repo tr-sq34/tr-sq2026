@@ -110,15 +110,42 @@ class StoryItem {
   );
 }
 
+/// A deliberately small relationship projection used only for Story audience
+/// controls. It is not a member directory and never exposes arbitrary users.
+class StoryAudienceContact {
+  const StoryAudienceContact({required this.id, required this.displayName});
+
+  final String id;
+  final String displayName;
+}
+
+class StoryHighlight {
+  const StoryHighlight({
+    required this.id,
+    required this.title,
+    required this.visibility,
+    required this.createdAt,
+    required this.items,
+  });
+
+  final String id;
+  final String title;
+  final StoryVisibility visibility;
+  final DateTime createdAt;
+  final List<StoryItem> items;
+}
+
 class CreateStoryDraft {
   const CreateStoryDraft({
     required this.media,
     required this.visibility,
     required this.ttl,
+    this.excludedUserIds = const <String>[],
   });
   final PostMedia media;
   final StoryVisibility visibility;
   final Duration ttl;
+  final List<String> excludedUserIds;
   String? get validationError => switch (ttl.inHours) {
     6 || 12 || 24 => null,
     _ => 'Story süresi 6, 12 veya 24 saat olmalıdır.',

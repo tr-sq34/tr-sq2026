@@ -23,7 +23,7 @@ import 'package:america_hub/features/profile/data/repositories/mock_profile_repo
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('starts on the TurkSquare login screen', (tester) async {
+  testWidgets('starts on the two-step TurkSquare login screen', (tester) async {
     final communityRepository = MockCommunityRepository();
     await tester.pumpWidget(
       AmericaHubApp(
@@ -49,7 +49,8 @@ void main() {
 
     await tester.pump();
     await tester.pump();
-    expect(find.textContaining('TurkSquare'), findsWidgets);
-    expect(find.text('Sign In'), findsOneWidget);
+    expect(find.text('Hesap oluştur'), findsOneWidget);
+    expect(find.text('Devam et'), findsOneWidget);
+    expect(find.text('Google ile devam et'), findsOneWidget);
   });
 }

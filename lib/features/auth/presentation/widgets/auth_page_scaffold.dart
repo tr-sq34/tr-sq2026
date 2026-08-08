@@ -97,6 +97,8 @@ class AuthInput extends StatelessWidget {
     this.obscureText = false,
     this.suffixIcon,
     this.maxLength,
+    this.enableInteractiveSelection = true,
+    this.onChanged,
   });
 
   final TextEditingController controller;
@@ -107,6 +109,8 @@ class AuthInput extends StatelessWidget {
   final bool obscureText;
   final Widget? suffixIcon;
   final int? maxLength;
+  final bool enableInteractiveSelection;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -119,6 +123,8 @@ class AuthInput extends StatelessWidget {
       obscureText: obscureText,
       suffixIcon: suffixIcon,
       maxLength: maxLength,
+      enableInteractiveSelection: enableInteractiveSelection,
+      onChanged: onChanged,
     );
   }
 }

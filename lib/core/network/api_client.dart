@@ -7,11 +7,16 @@ import 'auth_interceptor.dart';
 import 'token_refresh_coordinator.dart';
 
 class ApiClient {
-  ApiClient({required TokenStore tokenStore, Dio? dio, Future<void> Function()? onSessionExpired})
+  ApiClient({
+    required TokenStore tokenStore,
+    Dio? dio,
+    Future<void> Function()? onSessionExpired,
+    String? baseUrl,
+  })
       : _dio = dio ??
             Dio(
               BaseOptions(
-                baseUrl: ApiConfig.baseUrl,
+                baseUrl: baseUrl ?? ApiConfig.baseUrl,
                 connectTimeout: ApiConfig.connectTimeout,
                 receiveTimeout: ApiConfig.receiveTimeout,
                 headers: const {'Accept': 'application/json'},

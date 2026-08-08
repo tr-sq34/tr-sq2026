@@ -211,6 +211,28 @@ class MockCommunityRepository
                   : -1),
         ),
       );
+
+  @override
+  Future<List<StoryAudienceContact>> fetchAudienceContacts() async => const [];
+
+  @override
+  Future<void> updateAudienceExclusions({
+    required String storyId,
+    required List<String> excludedUserIds,
+  }) async {}
+
+  @override
+  Future<List<StoryHighlight>> fetchMyHighlights() async => const [];
+
+  @override
+  Future<StoryHighlight> createHighlight({
+    required String title,
+    required StoryVisibility visibility,
+    required List<String> storyIds,
+  }) {
+    throw UnsupportedError('Mock Story öne çıkanları kullanılmıyor.');
+  }
+
   @override
   Future<void> sendReply({
     required String storyId,

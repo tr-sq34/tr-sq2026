@@ -18,6 +18,7 @@ class AppTextField extends StatelessWidget {
     this.onChanged,
     this.onSubmitted,
     this.showLabel = true,
+    this.enableInteractiveSelection = true,
   });
 
   final TextEditingController controller;
@@ -33,6 +34,7 @@ class AppTextField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
   final bool showLabel;
+  final bool enableInteractiveSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +50,7 @@ class AppTextField extends StatelessWidget {
         onChanged: onChanged,
         onSubmitted: onSubmitted,
         obscureText: obscureText,
+        enableInteractiveSelection: enableInteractiveSelection,
         maxLength: maxLength,
         style: const TextStyle(color: AppColors.textPrimary),
         decoration: InputDecoration(
