@@ -1,0 +1,67 @@
+﻿{
+    "runAt":  "2026-08-06T02:50:34.9988489-04:00",
+    "subscription":  "ae28daea-9900-4161-8c87-dc2fa5951304",
+    "resourceGroup":  "rg-turksquare-prod-centralus",
+    "steps":  {
+                  "AzureContext":  {
+                                       "status":  "PASS",
+                                       "message":  "Logged in as info@turksquare.com on subscription ae28daea-9900-4161-8c87-dc2fa5951304",
+                                       "details":  null,
+                                       "timestamp":  "2026-08-06T02:50:36.1708289-04:00"
+                                   },
+                  "KeyVault_JWT_SECRET":  {
+                                              "status":  "PASS",
+                                              "message":  "JWT-SECRET updated with new 32-byte cryptographically secure value.",
+                                              "details":  null,
+                                              "timestamp":  "2026-08-06T02:50:38.2416787-04:00"
+                                          },
+                  "KeyVault_EMAIL_CODE_HMAC_SECRET":  {
+                                                          "status":  "PASS",
+                                                          "message":  "EMAIL-CODE-HMAC-SECRET updated with new 32-byte cryptographically secure value.",
+                                                          "details":  null,
+                                                          "timestamp":  "2026-08-06T02:50:40.2885894-04:00"
+                                                      },
+                  "KeyVault_RESEND_API_KEY":  {
+                                                  "status":  "WARN",
+                                                  "message":  "No RESEND-API-KEY provided; existing value left unchanged.",
+                                                  "details":  null,
+                                                  "timestamp":  "2026-08-06T02:50:40.3045881-04:00"
+                                              },
+                  "Smoke_PasswordBreach":  {
+                                               "status":  "FAIL",
+                                               "message":  "HTTP 503 from https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck : The remote server returned an error: (503) Server Unavailable.",
+                                               "details":  null,
+                                               "timestamp":  "2026-08-06T02:50:40.5259913-04:00"
+                                           },
+                  "Smoke_Register":  {
+                                         "status":  "FAIL",
+                                         "message":  "HTTP 503 from https://ca-identity-prod.bravesea-9c47c081.centralus.azurecontainerapps.io/v1/auth/register : The remote server returned an error: (503) Server Unavailable.",
+                                         "details":  null,
+                                         "timestamp":  "2026-08-06T02:50:40.8188540-04:00"
+                                     },
+                  "RBAC_OIDC":  {
+                                    "status":  "FAIL",
+                                    "message":  "az CLI failed (exit 1): ERROR: Resource \u00278551120e-7a3e-4651-ae23-6cd9b49784b9\u0027 does not exist or one of its queried reference-property objects are not present.\r\n\nOutput: ",
+                                    "details":  null,
+                                    "timestamp":  "2026-08-06T02:50:51.0353154-04:00"
+                                },
+                  "AppInsights_LogAnalytics":  {
+                                                   "status":  "PASS",
+                                                   "message":  "Application Insights and Log Analytics connectivity verified.",
+                                                   "details":  {
+                                                                   "func-password-breach-check-prod-cu_AI_ConnectionStringSet":  true,
+                                                                   "LogAnalyticsWorkspaceIdPresent":  true,
+                                                                   "ApplicationInsightsConnectionStringPresent":  true,
+                                                                   "func-email-relay-prod-cu_AI_ConnectionStringSet":  true,
+                                                                   "ca-identity-prod_AI_EnvSet":  false
+                                                               },
+                                                   "timestamp":  "2026-08-06T02:51:04.2978743-04:00"
+                                               }
+              },
+    "summary":  {
+                    "passed":  4,
+                    "failed":  3,
+                    "warnings":  1,
+                    "total":  8
+                }
+}

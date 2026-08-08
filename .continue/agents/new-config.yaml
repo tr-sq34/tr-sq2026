@@ -1,0 +1,14 @@
+name: Azure Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Azure Kimi
+    provider: openai
+    model: FW-Kimi-K2.7-Code
+    apiKey: 4i17HymVXQt8hoU8khmSFYc9YIlsICPSkm4rf3qmQhJ0AARpGwLoJQQJ99CHACMsfrFXJ3w3AAAAACOGURVr
+    apiBase: https://info-0041-resource.services.ai.azure.com/openai/v1
+    roles:
+      - chat
+      - edit
+      - apply

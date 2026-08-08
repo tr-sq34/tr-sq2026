@@ -1,0 +1,17 @@
+{
+  "name": "turksquare-verification-vault-service",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "tsx watch src/server.ts", "build": "tsc -p tsconfig.json", "start": "node dist/server.js" },
+  "dependencies": {
+    "@azure/identity": "^4.13.1",
+    "@azure/keyvault-keys": "^4.10.2",
+    "@azure/service-bus": "^7.9.4",
+    "@azure/storage-blob": "^12.26.0",
+    "fastify": "^5.2.1",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": { "@types/node": "^22.10.2", "@types/pg": "^8.11.10", "tsx": "^4.19.2", "typescript": "^5.7.2" }
+}

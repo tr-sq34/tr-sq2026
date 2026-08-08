@@ -1,0 +1,21 @@
+import json
+
+body = {
+    "properties": {
+        "template": {
+            "containers": [
+                {
+                    "name": "identity",
+                    "env": [
+                        {"name": "AZURE_CLIENT_ID", "value": "21ccc87a-eaa6-4f19-9fdf-30ca5bafb445"},
+                        {"name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "InstrumentationKey=31dacf21-c9e7-40a3-b85e-26aa1c62ed97;IngestionEndpoint=https://centralus-2.in.applicationinsights.azure.com/;LiveEndpoint=https://centralus.livediagnostics.monitor.azure.com/;ApplicationId=15021d49-14a0-407c-99f6-c8e6987f62ec"}
+                    ]
+                }
+            ]
+        }
+    }
+}
+
+with open('ca-patch-body.json', 'w') as f:
+    json.dump(body, f)
+print('ca-patch-body.json created')

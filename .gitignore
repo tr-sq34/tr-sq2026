@@ -1,0 +1,44 @@
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Terraform local state and execution artefacts
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform/
+crash.log
+crash.*.log
+
+# Certificates, private keys, and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials
+credentials.*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Service build and package-manager artefacts. Lock files remain tracked.
+node_modules/
+dist/
+
+# Flutter build artefacts
+.dart_tool/
+.flutter-plugins-dependencies
+build/
+.packages
+
+# Temporary files
+tmp/
+temp/
+*.log

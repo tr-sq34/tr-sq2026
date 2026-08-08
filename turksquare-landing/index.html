@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="tr" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>TurkSquare | American Turkish Community Mobile App</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icon CDN for flawless rendering on mobile -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        turkRed: {
+                            DEFAULT: '#E30A17',
+                            light: '#FF4D58',
+                            dark: '#A0030E',
+                        },
+                        darkBg: '#08080A',
+                        cardBg: '#121318',
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'slide-up': 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                        'float': 'float 4s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        slideUp: {
+                            '0%': { transform: 'translateY(100%)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' },
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0px)' },
+                            '50%': { transform: 'translateY(-8px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        :root {
+            --sat: env(safe-area-inset-top);
+            --sab: env(safe-area-inset-bottom);
+        }
+        
+        * {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        body {
+            background-color: #08080A;
+            color: #F3F4F6;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow-x: hidden;
+            padding-bottom: calc(70px + var(--sab));
+        }
+
+        @media (min-width: 1024px) {
+            body {
+                padding-bottom: 0;
+            }
+        }
+
+        .glass-panel {
+            background: rgba(18, 19, 24, 0.82);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        
+        .glass-panel-red {
+            background: rgba(227, 10, 23, 0.06);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(227, 10, 23, 0.28);
+        }
+
+        .text-gradient-bright {
+            background: linear-gradient(135deg, #FF4D58 0%, #E30A17 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .bg-gradient-red {
+            background: linear-gradient(135deg, #E30A17 0%, #A0030E 100%);
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #0D0E12;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #E30A17;
+            border-radius: 4px;
+        }
+
+        .audio-bar {
+            animation: soundWave 1.2s infinite ease-in-out alternate;
+        }
+
+        @keyframes soundWave {
+            0% { height: 4px; }
+            100% { height: 26px; }
+        }
+
+        .modal-active {
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="selection:bg-turkRed selection:text-white">
+
+    <!-- TOP APP HEADER BAR -->
+    <header class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 pt-[var(--sat)] bg-[#08080A]/90 backdrop-blur-xl border-b border-gray-800/60" id="navbar">
+        <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-3">
+            <div class="flex items-center justify-between">
+                
+                <!-- Logo with App Icon Feel -->
+                <a href="#" class="flex items-center space-x-2.5 group active:scale-95 transition-transform">
+                    <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-red flex items-center justify-center font-black text-white text-lg sm:text-xl shadow-[0_0_15px_rgba(227,10,23,0.5)]">
+                        TS
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-base sm:text-xl font-black tracking-tight text-white flex items-center leading-none">
+                            Turk<span class="text-turkRed-light">Square</span>
+                            <span class="ml-1.5 px-1.5 py-0.5 text-[8px] sm:text-[9px] bg-turkRed/20 text-turkRed-light border border-turkRed/40 rounded uppercase font-bold tracking-wide">USA 51</span>
+                        </span>
+                        <span class="text-[9px] sm:text-[10px] text-gray-400 font-medium" data-i18n="logo_sub">American Turkish Community</span>
+                    </div>
+                </a>
+
+                <!-- Desktop Nav Links -->
+                <nav class="hidden lg:flex items-center space-x-7 text-xs font-semibold text-gray-300">
+                    <a href="#ozellikler" class="hover:text-turkRed-light transition-colors" data-i18n="nav_features">Features</a>
+                    <a href="#carsi" class="hover:text-turkRed-light transition-colors" data-i18n="nav_market">Marketplace & Auction</a>
+                    <a href="#sesli-oda" class="hover:text-turkRed-light transition-colors" data-i18n="nav_voice">Voice Rooms</a>
+                    <a href="#forum" class="hover:text-turkRed-light transition-colors" data-i18n="nav_forum">Legal Forum</a>
+                    <a href="#uzmanlar" class="hover:text-turkRed-light transition-colors" data-i18n="nav_experts">Expert Guide</a>
+                    <a href="#sos" class="hover:text-turkRed-light transition-colors flex items-center space-x-1.5 text-turkRed-light font-bold">
+                        <span class="relative flex h-2 w-2">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-turkRed opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-2 w-2 bg-turkRed"></span>
+                        </span>
+                        <span data-i18n="nav_sos">SOS Emergency</span>
+                    </a>
+                </nav>
+
+                <!-- Language Switcher & Quick Actions -->
+                <div class="flex items-center space-x-2">
+                    <!-- EN / TR Native Toggle Pill -->
+                    <div class="inline-flex rounded-xl p-0.5 bg-black/60 border border-gray-800 text-[11px] font-bold">
+                        <button onclick="setLanguage('tr')" id="langBtnTr" class="px-2.5 py-1 rounded-lg transition-all bg-turkRed text-white shadow-sm">TR</button>
+                        <button onclick="setLanguage('en')" id="langBtnEn" class="px-2.5 py-1 rounded-lg transition-all text-gray-400 hover:text-white">EN</button>
+                    </div>
+
+                    <!-- Desktop Business CTA -->
+                    <button onclick="openModal('businessModal')" class="hidden sm:inline-flex px-3 py-1.5 text-xs font-semibold text-gray-300 hover:text-white border border-gray-700 hover:border-turkRed rounded-xl transition-all">
+                        <i class="fa-solid fa-briefcase mr-1.5 text-turkRed"></i> <span data-i18n="btn_business_reg">Business Reg.</span>
+                    </button>
+
+                    <!-- Desktop App Download CTA -->
+                    <button onclick="openModal('downloadModal')" class="hidden lg:inline-flex px-4 py-2 text-xs font-bold text-white bg-gradient-red hover:brightness-110 rounded-xl shadow-[0_0_15px_rgba(227,10,23,0.4)] transition-all items-center space-x-1.5">
+                        <i class="fa-solid fa-download"></i>
+                        <span data-i18n="btn_download_app">Download App</span>
+                    </button>
+
+                    <!-- Mobile Drawer Menu Toggle -->
+                    <button id="mobileMenuBtn" onclick="toggleMobileMenu()" class="lg:hidden text-gray-300 hover:text-white p-2.5 rounded-xl bg-cardBg border border-gray-800 focus:outline-none active:scale-95 transition-transform" aria-label="Menü">
+                        <i class="fa-solid fa-bars text-lg" id="menuIcon"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile App Drawer Overlay -->
+        <div id="mobileMenu" class="hidden lg:hidden px-3 pb-4 pt-1 bg-[#08080A]/95 border-b border-gray-800 shadow-2xl transition-all">
+            <div class="glass-panel rounded-2xl p-4 flex flex-col space-y-3 border border-turkRed/20">
+                <a href="#ozellikler" onclick="toggleMobileMenu()" class="text-gray-200 hover:text-turkRed text-sm font-semibold py-2 border-b border-gray-800/80 flex items-center"><i class="fa-solid fa-layer-group w-7 text-turkRed"></i> <span data-i18n="nav_features">Features</span></a>
+                <a href="#carsi" onclick="toggleMobileMenu()" class="text-gray-200 hover:text-turkRed text-sm font-semibold py-2 border-b border-gray-800/80 flex items-center"><i class="fa-solid fa-store w-7 text-turkRed"></i> <span data-i18n="nav_market">Marketplace & Auction</span></a>
+                <a href="#sesli-oda" onclick="toggleMobileMenu()" class="text-gray-200 hover:text-turkRed text-sm font-semibold py-2 border-b border-gray-800/80 flex items-center"><i class="fa-solid fa-microphone w-7 text-turkRed"></i> <span data-i18n="nav_voice_mobile">Voice Rooms & Night Chat</span></a>
+                <a href="#forum" onclick="toggleMobileMenu()" class="text-gray-200 hover:text-turkRed text-sm font-semibold py-2 border-b border-gray-800/80 flex items-center"><i class="fa-solid fa-comments w-7 text-turkRed"></i> <span data-i18n="nav_forum_mobile">Immigration & Forum</span></a>
+                <a href="#uzmanlar" onclick="toggleMobileMenu()" class="text-gray-200 hover:text-turkRed text-sm font-semibold py-2 border-b border-gray-800/80 flex items-center"><i class="fa-solid fa-user-doctor w-7 text-turkRed"></i> <span data-i18n="nav_experts_mobile">Doctors, Lawyers & Experts</span></a>
+                <a href="#sos" onclick="toggleMobileMenu()" class="text-turkRed font-bold py-2 border-b border-gray-800/80 text-sm flex items-center"><i class="fa-solid fa-circle-exclamation w-7 text-turkRed"></i> <span data-i18n="nav_sos_mobile">SOS Emergency Help</span></a>
+                
+                <div class="pt-2 flex flex-col space-y-2.5">
+                    <button onclick="openModal('businessModal'); toggleMobileMenu()" class="w-full py-2.5 text-xs font-bold text-gray-200 bg-cardBg border border-gray-700 rounded-xl active:scale-95 transition-transform" data-i18n="m_create_profile">
+                        Create Business Profile
+                    </button>
+                    <button onclick="openModal('downloadModal'); toggleMobileMenu()" class="w-full py-2.5 text-xs font-black text-white bg-gradient-red rounded-xl shadow-[0_0_15px_rgba(227,10,23,0.4)] active:scale-95 transition-transform" data-i18n="m_download_now">
+                        Download App Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- HERO SECTION -->
+    <section class="relative pt-24 pb-12 sm:pt-36 sm:pb-24 overflow-hidden">
+        <!-- Background Ambient Glows -->
+        <div class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px] sm:w-[600px] h-[320px] sm:h-[600px] bg-turkRed/15 rounded-full blur-[100px] sm:blur-[140px] pointer-events-none"></div>
+
+        <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 relative z-10">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+                
+                <!-- Hero Text Left -->
+                <div class="lg:col-span-7 space-y-5 sm:space-y-8 text-center lg:text-left">
+                    
+                    <!-- Tag Line Badge -->
+                    <div class="inline-flex items-center space-x-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full glass-panel-red border border-turkRed/30 text-xs sm:text-sm font-semibold text-gray-200 shadow-inner">
+                        <span class="flex h-2 w-2 rounded-full bg-turkRed animate-ping"></span>
+                        <span data-i18n="hero_tag">ABD'deki Türk toplumu için çok yakında</span>
+                    </div>
+
+                    <!-- Main Heading -->
+                    <h1 class="text-3xl sm:text-5xl lg:text-7xl font-black tracking-tight leading-[1.15]" data-i18n="hero_title">
+                        Amerika'daki Türkler İçin <br>
+                        <span class="text-gradient-bright">Süper Mobil Uygulama</span>
+                    </h1>
+
+                    <!-- Paragraph -->
+                    <p class="text-sm sm:text-lg text-gray-300 max-w-2xl mx-auto lg:mx-0 font-normal leading-relaxed" data-i18n="hero_desc">
+                        İkinci el pazarı, canlı açık artırmalar, 7/24 sesli sohbet odaları, göçmenlik forumu, Türk avukat/doktor randevuları ve anlık SOS acil yardım ağı. <strong class="text-white font-semibold">Hepsi TurkSquare'de!</strong>
+                    </p>
+
+                    <!-- Drivers Special Banner Pill -->
+                    <div class="p-3.5 sm:p-4 rounded-2xl glass-panel border border-red-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-left">
+                        <div class="flex items-center space-x-3 w-full sm:w-auto">
+                            <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-turkRed/20 border border-turkRed/40 flex items-center justify-center text-turkRed-light text-lg sm:text-xl shrink-0">
+                                <i class="fa-solid fa-truck-monster"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-xs sm:text-sm font-bold text-white" data-i18n="hero_drivers_title">Amerika’daki Türk Topluluğu İçin</h4>
+                                <p class="text-[11px] sm:text-xs text-gray-400" data-i18n="hero_drivers_desc">Amerika’daki Türklerle günün her saatinde sıcak ve güvenli sohbet. Uber veya DoorDash gibi yolda çalışanlar da dilediğinde katılabilir.</p>
+                            </div>
+                        </div>
+                        <a href="#sesli-oda" class="w-full sm:w-auto text-center px-3.5 py-2 text-xs font-bold text-turkRed-light bg-turkRed/10 hover:bg-turkRed hover:text-white rounded-xl transition-all whitespace-nowrap active:scale-95">
+                            <span data-i18n="hero_drivers_btn">Dinlemeye Başla</span> <i class="fa-solid fa-arrow-right ml-1"></i>
+                        </a>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3 pt-1">
+                        <button onclick="openModal('downloadModal')" class="w-full sm:w-auto px-7 py-3.5 sm:py-4 bg-gradient-red hover:brightness-110 text-white font-black text-sm sm:text-base rounded-2xl shadow-[0_0_25px_rgba(227,10,23,0.5)] transition-all flex items-center justify-center space-x-2.5 active:scale-95">
+                            <i class="fa-brands fa-apple text-xl"></i>
+                            <i class="fa-brands fa-google-play text-lg mr-1"></i>
+                            <span data-i18n="hero_cta_free">Lansman Listesine Katıl</span>
+                            <i class="fa-solid fa-chevron-right text-xs ml-1"></i>
+                        </button>
+                        
+                        <button onclick="openModal('qrModal')" class="w-full sm:w-auto px-5 py-3.5 sm:py-4 glass-panel border border-gray-700 hover:border-turkRed text-gray-200 hover:text-white font-bold text-sm sm:text-base rounded-2xl transition-all flex items-center justify-center space-x-2 active:scale-95">
+                            <i class="fa-solid fa-qrcode text-turkRed-light text-base"></i>
+                            <span data-i18n="hero_cta_qr">QR Kod ile Yükle</span>
+                        </button>
+                    </div>
+
+                    <!-- Social Proof Badges -->
+                    <div class="pt-2 flex flex-wrap items-center justify-center lg:justify-start gap-4 text-xs text-gray-400">
+                        <div class="flex items-center space-x-2">
+                            <div class="flex -space-x-2">
+                                <img width="28" height="28" class="w-7 h-7 rounded-full border-2 border-darkBg object-cover" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=64&q=40" alt="Community member" loading="lazy">
+                                <img width="28" height="28" class="w-7 h-7 rounded-full border-2 border-darkBg object-cover" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=64&q=40" alt="Community member" loading="lazy">
+                                <img width="28" height="28" class="w-7 h-7 rounded-full border-2 border-darkBg object-cover" src="https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=64&q=40" alt="Community member" loading="lazy">
+                            </div>
+                            <span class="font-semibold text-gray-300 text-xs" data-i18n="hero_members"><strong class="text-white">Erken erişim</strong> çok yakında açılıyor</span>
+                        </div>
+                        <div class="flex items-center space-x-1 text-yellow-400 text-xs">
+                            <i class="fa-solid fa-star"></i>
+                            <span class="text-gray-300 font-semibold ml-1" data-i18n="hero_reviews">App Store & Google Play lansmanı</span>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Hero Interactive Mobile Screen Mockup Right -->
+                <div class="lg:col-span-5 flex justify-center relative mt-4 lg:mt-0">
+                    
+                    <div class="absolute inset-0 bg-gradient-to-tr from-turkRed/25 to-transparent rounded-full filter blur-2xl transform scale-90"></div>
+
+                    <!-- Floating Badge 1: Live Voice Room -->
+                    <div class="absolute -top-3 -left-2 z-20 glass-panel p-2.5 rounded-2xl border border-turkRed/40 shadow-xl animate-float hidden sm:flex items-center space-x-2.5">
+                        <div class="w-8 h-8 rounded-full bg-turkRed/20 flex items-center justify-center text-turkRed-light font-bold text-xs">
+                            <i class="fa-solid fa-headset animate-pulse"></i>
+                        </div>
+                        <div class="text-left">
+                            <div class="text-[9px] text-gray-400 font-bold uppercase tracking-wider" data-i18n="badge_voice_title">CANLI SESLİ ODA</div>
+                            <div class="text-xs font-extrabold text-white" data-i18n="badge_voice_sub">Gece Vardiyası & Tırcılar</div>
+                            <div class="text-[9px] text-emerald-400 font-medium" data-i18n="badge_voice_count">● Özellik Önizlemesi</div>
+                        </div>
+                    </div>
+
+                    <!-- Floating Badge 2: SOS Alert -->
+                    <div class="absolute -bottom-4 -right-2 z-20 glass-panel p-2.5 rounded-2xl border border-red-500/60 bg-red-950/40 shadow-xl hidden sm:flex items-center space-x-2.5">
+                        <div class="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center font-extrabold text-xs animate-bounce">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div class="text-left">
+                            <div class="text-[9px] text-red-300 font-bold" data-i18n="badge_sos_title">SOS GÜVENLİK AĞI</div>
+                            <div class="text-xs font-bold text-white" data-i18n="badge_sos_sub">Yakındaki 12 Sürücüye Bildirim</div>
+                            <div class="text-[9px] text-gray-300" data-i18n="badge_sos_loc">Paterson, NJ • Anında Destek</div>
+                        </div>
+                    </div>
+
+                    <!-- Phone Frame Container -->
+                    <div class="phone-preview relative w-[280px] sm:w-[320px] h-[560px] sm:h-[620px] bg-black rounded-[44px] p-2.5 sm:p-3 border-4 border-gray-800 shadow-[0_0_50px_rgba(0,0,0,0.9)] flex flex-col justify-between overflow-hidden">
+                        
+                        <!-- Screen Notch -->
+                        <div class="absolute top-0 left-1/2 transform -translate-x-1/2 w-28 sm:w-32 h-5 sm:h-6 bg-black rounded-b-2xl z-30 flex items-center justify-center">
+                            <div class="w-10 h-1 bg-gray-800 rounded-full"></div>
+                        </div>
+
+                        <!-- App Screen Frame -->
+                        <div class="w-full h-full bg-[#0D0E12] rounded-[34px] pt-6 px-2.5 sm:px-3 pb-2.5 flex flex-col justify-between overflow-y-auto custom-scrollbar relative">
+                            
+                            <!-- App Top Header in Phone -->
+                            <div class="flex items-center justify-between pb-2.5 border-b border-gray-800/80">
+                                <div class="flex items-center space-x-1.5">
+                                    <div class="w-6 h-6 rounded-lg bg-turkRed flex items-center justify-center text-white text-[10px] font-black">TS</div>
+                                    <span class="text-xs font-black text-white">TurkSquare</span>
+                                </div>
+                                <div class="flex items-center space-x-1.5 text-xs">
+                                    <span class="px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold">Texas • Canlı</span>
+                                    <i class="fa-solid fa-bell text-gray-400 text-[10px]"></i>
+                                </div>
+                            </div>
+
+                            <!-- Screen Inner Content Carousel -->
+                            <div id="phoneMockupContent" class="space-y-2.5 py-2 my-auto">
+                                
+                                <!-- Card 1: Auction Item -->
+                                <div class="p-2.5 rounded-xl bg-cardBg border border-gray-800 text-left space-y-1.5">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-[8px] bg-red-600/30 text-red-400 border border-red-500/30 px-1.5 py-0.5 rounded font-bold uppercase" data-i18n="mockup_auction_badge">CANLI AÇIK ARTIRMA</span>
+                                        <span class="text-[9px] text-gray-400"><i class="fa-regular fa-clock text-turkRed"></i> <span data-i18n="mockup_auction_time">14dk Kaldı</span></span>
+                                    </div>
+                                    <div class="flex space-x-2">
+                                        <img width="56" height="56" src="https://images.unsplash.com/photo-1552519507-da3b142c6e3d?auto=format&fit=crop&w=128&q=40" class="w-14 h-14 rounded-lg object-cover" alt="Mustang Car preview" loading="lazy">
+                                        <div class="flex-1 text-left">
+                                            <h5 class="text-xs font-bold text-white leading-tight">2021 Ford Mustang GT</h5>
+                                            <p class="text-[9px] text-gray-400" data-i18n="mockup_car_desc">Miami, FL • Temiz Title</p>
+                                            <div class="text-xs font-black text-turkRed-light mt-0.5">$22,400 <span class="text-[8px] font-normal text-gray-400" data-i18n="mockup_bids">(18 Teklif)</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Card 2: Voice Room -->
+                                <div class="p-2.5 rounded-xl bg-gradient-to-r from-red-950/40 to-cardBg border border-turkRed/30 space-y-1.5 text-left">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center space-x-1">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></span>
+                                            <span class="text-[9px] font-extrabold text-white" data-i18n="mockup_room_title">SESLİ ODA: TIRCILAR SOHBET</span>
+                                        </div>
+                                        <span class="text-[8px] text-gray-400" data-i18n="mockup_room_loc">I-80 Otoyolu</span>
+                                    </div>
+                                    <div class="flex items-center justify-between pt-0.5">
+                                        <div class="flex -space-x-1.5">
+                                            <div class="w-5 h-5 rounded-full bg-gray-700 border border-red-500 flex items-center justify-center text-[8px] text-white">AH</div>
+                                            <div class="w-5 h-5 rounded-full bg-gray-600 border border-red-500 flex items-center justify-center text-[8px] text-white">MY</div>
+                                            <div class="w-5 h-5 rounded-full bg-gray-800 border border-red-500 flex items-center justify-center text-[8px] text-white">EK</div>
+                                        </div>
+                                        <div class="flex items-center space-x-1">
+                                            <div class="w-1 h-2 bg-turkRed audio-bar"></div>
+                                            <div class="w-1 h-4 bg-turkRed audio-bar" style="animation-delay: 0.2s"></div>
+                                            <div class="w-1 h-2.5 bg-turkRed audio-bar" style="animation-delay: 0.4s"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Card 3: Forum Q&A -->
+                                <div class="p-2.5 rounded-xl bg-cardBg border border-gray-800 text-left space-y-1">
+                                    <div class="flex justify-between items-center text-[8px]">
+                                        <span class="text-gray-400"><i class="fa-solid fa-scale-balanced text-turkRed"></i> <span data-i18n="mockup_forum_cat">Göçmenlik Soru-Cevap</span></span>
+                                        <span class="text-gray-500" data-i18n="mockup_forum_time">2dk önce</span>
+                                    </div>
+                                    <p class="text-[11px] font-semibold text-gray-200 leading-tight" data-i18n="mockup_forum_q">H1B vize transferi kaç günde sonuçlanır?</p>
+                                    <p class="text-[9px] text-emerald-400 font-medium"><i class="fa-solid fa-circle-check"></i> <span data-i18n="mockup_forum_a">Av. Mehmet B. tarafından yanıtlandı</span></p>
+                                </div>
+
+                            </div>
+
+                            <!-- Phone Bottom App Bar -->
+                            <div class="pt-2 border-t border-gray-800 grid grid-cols-5 text-center text-gray-500 text-[9px]">
+                                <div class="text-turkRed font-bold flex flex-col items-center cursor-pointer">
+                                    <i class="fa-solid fa-house text-[11px]"></i>
+                                    <span data-i18n="nav_feed">Akış</span>
+                                </div>
+                                <div class="flex flex-col items-center cursor-pointer">
+                                    <i class="fa-solid fa-bag-shopping text-[11px]"></i>
+                                    <span data-i18n="nav_market_sm">Çarşı</span>
+                                </div>
+                                <div class="flex flex-col items-center cursor-pointer">
+                                    <div class="w-5 h-5 rounded-full bg-turkRed text-white flex items-center justify-center -mt-1 shadow-md">
+                                        <i class="fa-solid fa-microphone text-[10px]"></i>
+                                    </div>
+                                </div>
+                                <div class="flex flex-col items-center cursor-pointer" onclick="openModal('sosDemoModal')">
+                                    <i class="fa-solid fa-triangle-exclamation text-[11px] text-red-500"></i>
+                                    <span class="text-red-400 font-bold">SOS</span>
+                                </div>
+                                <div class="flex flex-col items-center cursor-pointer">
+                                    <i class="fa-solid fa-user text-[11px]"></i>
+                                    <span data-i18n="nav_profile">Profil</span>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- STATS COUNTER BAR -->
+    <section class="border-y border-gray-800/80 bg-cardBg/60 backdrop-blur-md py-6 sm:py-8 relative z-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-8 text-center">
+                
+                <div class="space-y-0.5">
+                    <div class="text-2xl sm:text-4xl font-black text-white flex items-center justify-center">
+                        <span>USA 51</span>
+                    </div>
+                    <p class="text-[11px] sm:text-xs text-gray-400 font-medium" data-i18n="stat1_desc">Eyalet Kapsama Planı</p>
+                </div>
+
+                <div class="space-y-0.5">
+                    <div class="text-2xl sm:text-4xl font-black text-white flex items-center justify-center">
+                        <span>Erken</span>
+                    </div>
+                    <p class="text-[11px] sm:text-xs text-gray-400 font-medium" data-i18n="stat2_desc">Erişim Listesi</p>
+                </div>
+
+                <div class="space-y-0.5">
+                    <div class="text-2xl sm:text-4xl font-black text-white flex items-center justify-center">
+                        <span class="text-turkRed">Hazırlık</span>
+                    </div>
+                    <p class="text-[11px] sm:text-xs text-gray-400 font-medium" data-i18n="stat3_desc">Çarşı Modülü</p>
+                </div>
+
+                <div class="space-y-0.5">
+                    <div class="text-2xl sm:text-4xl font-black text-white flex items-center justify-center">
+                        <span>Yakında</span>
+                    </div>
+                    <p class="text-[11px] sm:text-xs text-gray-400 font-medium" data-i18n="stat4_desc">Sesli Odalar & SOS</p>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- MAIN FEATURES SECTION -->
+    <section id="ozellikler" class="py-16 sm:py-24 relative">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="text-center max-w-3xl mx-auto mb-10 sm:mb-16 space-y-2.5">
+                <h2 class="text-xs font-extrabold text-turkRed tracking-widest uppercase" data-i18n="feat_sub">Gelişmiş Uygulama Modülleri</h2>
+                <p class="text-2xl sm:text-4xl lg:text-5xl font-extrabold text-white" data-i18n="feat_title">
+                    Amerika Hayatını Kolaylaştıran <span class="text-gradient-bright">8 Temel Özellik</span>
+                </p>
+                <p class="text-gray-400 text-xs sm:text-sm" data-i18n="feat_desc">
+                    Alışveriş yapın, hukuki sorularınıza yanıt bulun, uzmanlarla iletişime geçin—hepsi tek bir mobil platformda.
+                </p>
+            </div>
+
+            <!-- Core Features Mobile Friendly Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-8">
+                
+                <!-- Card 1: Çarşı -->
+                <div id="carsi" class="glass-panel p-6 sm:p-8 rounded-3xl border border-gray-800 hover:border-turkRed/50 transition-all hover:-translate-y-1 group">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_20px_rgba(227,10,23,0.4)]">
+                        <i class="fa-solid fa-store"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card1_title">TurkSquare Çarşı (Marketplace)</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card1_desc">
+                        51 eyaletteki Türk toplumu için özel hazırlanmış ikinci el ve sıfır eşya pazarı. Araba, mobilya, elektronik veya kiralık ev ilanlarını saniyeler içinde ücretsiz yayınlayın.
+                    </p>
+                    <ul class="space-y-2 text-xs text-gray-300 font-medium">
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card1_li1">Konum bazlı filtreleme</span></li>
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card1_li2">Onaylı satıcı profilleri</span></li>
+                    </ul>
+                </div>
+
+                <!-- Card 2: Açık Artırma -->
+                <div class="glass-panel p-6 sm:p-8 rounded-3xl border border-gray-800 hover:border-turkRed/50 transition-all hover:-translate-y-1 group">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_20px_rgba(227,10,23,0.4)]">
+                        <i class="fa-solid fa-gavel"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card2_title">Açık Artırma Sistemi</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card2_desc">
+                        Ürünlerinizi açık artırmaya çıkararak en yüksek teklifi verene satın. Canlı geri sayım ve anlık teklif bildirimleri ile heyecanlı alışveriş deneyimi.
+                    </p>
+                    <ul class="space-y-2 text-xs text-gray-300 font-medium">
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card2_li1">Canlı Teklif Akışı</span></li>
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card2_li2">Minimum Taban Fiyat Garantisi</span></li>
+                    </ul>
+                </div>
+
+                <!-- Card 3: Sesli Odalar -->
+                <div id="sesli-oda" class="glass-panel p-6 sm:p-8 rounded-3xl border border-turkRed/40 bg-red-950/10 hover:border-turkRed transition-all hover:-translate-y-1 group relative overflow-hidden">
+                    <div class="absolute top-3 right-3 px-2.5 py-1 bg-turkRed text-white text-[9px] font-black rounded-full uppercase tracking-wider" data-i18n="card3_badge">
+                        Popüler
+                    </div>
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_20px_rgba(227,10,23,0.4)]">
+                        <i class="fa-solid fa-microphone"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card3_title">Canlı Sesli Sohbet Odaları</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card3_desc">
+                        Amerika’nın dört bir yanındaki Türklerle anında sesli iletişim kurun. Günlük sohbet, yeni arkadaşlıklar ve ortak ilgi alanları için her zaman açık odalar. <strong class="text-white">Uber ve DoorDash sürücüleri</strong> de yoldayken kolayca katılabilir.
+                    </p>
+                    <ul class="space-y-2 text-xs text-gray-300 font-medium">
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card3_li1">Eller serbest güvenli sürüş modu</span></li>
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card3_li2">Sektörel ve Bölgesel Odalar</span></li>
+                    </ul>
+                </div>
+
+                <!-- Card 4: Forum & Göçmenlik -->
+                <div id="forum" class="glass-panel p-6 sm:p-8 rounded-3xl border border-gray-800 hover:border-turkRed/50 transition-all hover:-translate-y-1 group">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_20px_rgba(227,10,23,0.4)]">
+                        <i class="fa-solid fa-comments"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card4_title">Göçmenlik & Hukuk Forumu</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card4_desc">
+                        Green Card, Vize türleri, Çalışma İzni, Vatandaşlık ve Amerika'daki tüm hukuki süreçlerde tecrübeli üyelerden ve uzmanlardan rehberlik alın.
+                    </p>
+                    <ul class="space-y-2 text-xs text-gray-300 font-medium">
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card4_li1">Onaylı Uzman Yanıtları</span></li>
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card4_li2">Anonim Soru Sorma İmkanı</span></li>
+                    </ul>
+                </div>
+
+                <!-- Card 5: Uzman Rehberi -->
+                <div id="uzmanlar" class="glass-panel p-6 sm:p-8 rounded-3xl border border-gray-800 hover:border-turkRed/50 transition-all hover:-translate-y-1 group">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_20px_rgba(227,10,23,0.4)]">
+                        <i class="fa-solid fa-user-doctor"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card5_title">Uzman Rehberi & Randevu</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card5_desc">
+                        Doktor, Avukat, Mühendis, Muhasebeci veya Tamirci... Yakınınızdaki uzman Türk profesyonelleri bulun, yorumları okuyun ve randevu oluşturun.
+                    </p>
+                    <ul class="space-y-2 text-xs text-gray-300 font-medium">
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card5_li1">Harita Bazlı Konum Araması</span></li>
+                        <li class="flex items-center"><i class="fa-solid fa-circle-check text-turkRed mr-2"></i> <span data-i18n="card5_li2">Doğrudan Randevu Talebi</span></li>
+                    </ul>
+                </div>
+
+                <!-- Card 6: SOS Acil Yardım -->
+                <div id="sos" class="glass-panel p-6 sm:p-8 rounded-3xl border border-red-600/60 bg-red-950/20 hover:border-red-500 transition-all hover:-translate-y-1 group relative">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-red-600 flex items-center justify-center text-white text-xl sm:text-2xl mb-5 shadow-[0_0_25px_rgba(227,10,23,0.8)] animate-pulse">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                    </div>
+                    <h3 class="text-lg sm:text-xl font-bold text-white mb-2 group-hover:text-turkRed-light transition-colors" data-i18n="card6_title">SOS Acil Yardım Sistemi</h3>
+                    <p class="text-gray-400 text-xs sm:text-sm leading-relaxed mb-4" data-i18n="card6_desc">
+                        Kaza, medikal acil durum veya hukuki kriz anında Konsolosluk, Polis ve yakındaki Türk üyelerle tek tıkla anında iletişime geçin.
+                    </p>
+                    <button onclick="openModal('sosDemoModal')" class="mt-2 w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-lg active:scale-95">
+                        <i class="fa-solid fa-shield-halved mr-1"></i> <span data-i18n="card6_btn">SOS Sistemini Test Et</span>
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- INTERACTIVE APP SCREEN SHOWCASE (HORIZONTAL SWIPE TABS) -->
+    <section class="py-16 sm:py-20 bg-cardBg/40 border-y border-gray-800">
+        <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+            
+            <div class="text-center max-w-3xl mx-auto mb-8 sm:mb-12">
+                <h2 class="text-xs font-bold text-turkRed tracking-widest uppercase" data-i18n="tab_sub">Canlı Arayüz Deneyimi</h2>
+                <h3 class="text-2xl sm:text-4xl font-extrabold text-white mt-1.5" data-i18n="tab_heading">TurkSquare İçinde Ne Var?</h3>
+                <p class="text-gray-400 text-xs sm:text-sm mt-1" data-i18n="tab_heading_sub">Aşağıdaki sekmelere tıklayarak uygulama içi ekranları keşfedin.</p>
+            </div>
+
+            <!-- Mobile Touch Scrollable Tab Buttons -->
+            <div class="flex items-center overflow-x-auto no-scrollbar space-x-2.5 pb-4 mb-6 sm:mb-12 snap-x" id="featureTabs">
+                <button onclick="switchTab('tab-carsi')" id="btn-tab-carsi" class="tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all bg-gradient-red text-white shadow-lg active:scale-95">
+                    <i class="fa-solid fa-cart-shopping mr-1.5"></i> <span data-i18n="btn_carsi">Çarşı & Açık Artırma</span>
+                </button>
+                <button onclick="switchTab('tab-sesli')" id="btn-tab-sesli" class="tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all glass-panel text-gray-400 hover:text-white active:scale-95">
+                    <i class="fa-solid fa-headset mr-1.5"></i> <span data-i18n="btn_sesli">Gece Sesli Odaları</span>
+                </button>
+                <button onclick="switchTab('tab-forum')" id="btn-tab-forum" class="tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all glass-panel text-gray-400 hover:text-white active:scale-95">
+                    <i class="fa-solid fa-scale-balanced mr-1.5"></i> <span data-i18n="btn_forum">Göçmenlik Forumu</span>
+                </button>
+                <button onclick="switchTab('tab-isletme')" id="btn-tab-isletme" class="tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all glass-panel text-gray-400 hover:text-white active:scale-95">
+                    <i class="fa-solid fa-building-user mr-1.5"></i> <span data-i18n="btn_isletme">İşletme Rehberi</span>
+                </button>
+            </div>
+
+            <!-- Tab Displays -->
+            <div class="glass-panel rounded-3xl p-5 sm:p-10 border border-gray-800">
+                
+                <!-- Tab 1: Çarşı -->
+                <div id="tab-carsi" class="tab-content grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-center">
+                    <div class="space-y-3.5 text-left">
+                        <span class="inline-block px-3 py-1 bg-turkRed/20 text-turkRed-light text-xs font-bold rounded-md" data-i18n="t1_tag">İkinci El & Açık Artırma Modülü</span>
+                        <h4 class="text-xl sm:text-3xl font-extrabold text-white" data-i18n="t1_title">Komisyonsuz Alım, Satım ve Canlı İhale</h4>
+                        <p class="text-gray-300 text-xs sm:text-sm leading-relaxed" data-i18n="t1_desc">
+                            Amerika genelindeki Türk toplumu üyeleriyle güvenle alışveriş yapın. İster sabit fiyata satın, ister açık artırma başlatarak teklif toplayın.
+                        </p>
+                        <div class="grid grid-cols-2 gap-3 pt-1">
+                            <div class="p-3 sm:p-4 rounded-2xl bg-black/40 border border-gray-800">
+                                <div class="text-turkRed font-bold text-base sm:text-lg">%0</div>
+                                <div class="text-[10px] sm:text-xs text-gray-400" data-i18n="t1_stat1_sub">Üyelik veya İlan Ücreti</div>
+                            </div>
+                            <div class="p-3 sm:p-4 rounded-2xl bg-black/40 border border-gray-800">
+                                <div class="text-emerald-400 font-bold text-base sm:text-lg" data-i18n="t1_stat2_title">51 Eyalet</div>
+                                <div class="text-[10px] sm:text-xs text-gray-400" data-i18n="t1_stat2_sub">Lokal Teslimat & Kargo</div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Mock items display -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800">
+                            <img width="300" height="128" src="https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=300&q=40" class="w-full h-28 sm:h-32 object-cover rounded-xl mb-2.5" alt="Phone preview" loading="lazy">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h5 class="text-xs font-bold text-white">iPhone 14 Pro Max 256GB</h5>
+                                    <p class="text-[10px] text-gray-400" data-i18n="t1_item1_sub">Chicago, IL • Kutulu</p>
+                                </div>
+                                <span class="text-xs font-black text-turkRed-light">$780</span>
+                            </div>
+                        </div>
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800">
+                            <img width="300" height="128" src="https://images.unsplash.com/photo-1555041469-a586c61ea9bc?auto=format&fit=crop&w=300&q=40" class="w-full h-28 sm:h-32 object-cover rounded-xl mb-2.5" alt="Sofa preview" loading="lazy">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h5 class="text-xs font-bold text-white">IKEA Koltuk Takımı</h5>
+                                    <p class="text-[10px] text-gray-400" data-i18n="t1_item2_sub">Paterson, NJ • Temiz</p>
+                                </div>
+                                <span class="text-xs font-black text-turkRed-light">$250</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Sesli Oda -->
+                <div id="tab-sesli" class="tab-content hidden grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-center">
+                    <div class="space-y-3.5 text-left">
+                        <span class="inline-block px-3 py-1 bg-turkRed/20 text-turkRed-light text-xs font-bold rounded-md" data-i18n="t2_tag">Topluluk Sesli İletişimi</span>
+                        <h4 class="text-xl sm:text-3xl font-extrabold text-white" data-i18n="t2_title">Amerika’daki Türkler İçin Canlı Sohbet Odaları</h4>
+                        <p class="text-gray-300 text-xs sm:text-sm leading-relaxed" data-i18n="t2_desc">
+                            Amerika’daki Türk topluluğuyla günün her saatinde sohbet edin, yeni insanlarla tanışın ve bulunduğunuz bölgeden haberdar olun. Uber, Lyft veya DoorDash gibi yolda çalışanlar da diledikleri anda katılabilir.
+                        </p>
+                        <div class="flex items-center space-x-3 pt-1">
+                            <button onclick="playAudioDemo()" class="px-4 py-2.5 bg-turkRed hover:bg-turkRed-dark text-white font-bold text-xs rounded-xl transition-all flex items-center space-x-2 active:scale-95">
+                                <i class="fa-solid fa-play" id="audioDemoIcon"></i>
+                                <span id="audioDemoText" data-i18n="t2_btn">Sesli Oda Demosunu Dinle</span>
+                            </button>
+                            <span class="text-xs text-gray-400" id="audioDemoStatus" data-i18n="t2_status_off">Mikrofon Kapalı</span>
+                        </div>
+                    </div>
+                    <div class="p-5 rounded-2xl bg-black/80 border border-turkRed/30 space-y-3.5">
+                        <div class="flex justify-between items-center pb-3 border-b border-gray-800">
+                            <div class="flex items-center space-x-2">
+                                <i class="fa-solid fa-truck text-turkRed text-base"></i>
+                                <div class="text-left">
+                                    <h5 class="text-xs font-bold text-white" data-i18n="t2_room_name">I-95 Güzergahı Tırcılar & Sürücüler</h5>
+                                    <p class="text-[10px] text-gray-400" data-i18n="t2_room_sub">48 Aktif Konuşmacı • Canlı Yayın</p>
+                                </div>
+                            </div>
+                            <span class="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded" data-i18n="t2_live_badge">CANLI</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2.5 text-center">
+                            <div class="p-2.5 rounded-xl bg-cardBg border border-gray-800">
+                                <div class="w-8 h-8 sm:w-10 sm:h-10 mx-auto rounded-full bg-turkRed/30 text-white flex items-center justify-center font-bold text-xs mb-1 border border-turkRed">KÖ</div>
+                                <span class="text-[10px] text-white font-semibold block truncate">Kadir Ö.</span>
+                                <span class="text-[8px] text-gray-400">Texas</span>
+                            </div>
+                            <div class="p-2.5 rounded-xl bg-cardBg border border-gray-800">
+                                <div class="w-8 h-8 sm:w-10 sm:h-10 mx-auto rounded-full bg-blue-600/30 text-white flex items-center justify-center font-bold text-xs mb-1 border border-blue-500">BS</div>
+                                <span class="text-[10px] text-white font-semibold block truncate">Burak S.</span>
+                                <span class="text-[8px] text-gray-400">Ohio</span>
+                            </div>
+                            <div class="p-2.5 rounded-xl bg-cardBg border border-gray-800">
+                                <div class="w-8 h-8 sm:w-10 sm:h-10 mx-auto rounded-full bg-emerald-600/30 text-white flex items-center justify-center font-bold text-xs mb-1 border border-emerald-500">MÇ</div>
+                                <span class="text-[10px] text-white font-semibold block truncate">Mustafa Ç.</span>
+                                <span class="text-[8px] text-gray-400">Florida</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Forum -->
+                <div id="tab-forum" class="tab-content hidden grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-center">
+                    <div class="space-y-3.5 text-left">
+                        <span class="inline-block px-3 py-1 bg-turkRed/20 text-turkRed-light text-xs font-bold rounded-md" data-i18n="t3_tag">Hukuki Danışma & Forum</span>
+                        <h4 class="text-xl sm:text-3xl font-extrabold text-white" data-i18n="t3_title">Sorularınıza Birebir Uzman Yanıtları</h4>
+                        <p class="text-gray-300 text-xs sm:text-sm leading-relaxed" data-i18n="t3_desc">
+                            Vize, çalışma izni, vergi ve eyalet kanunları gibi konularda gerçek deneyim sahibi topluluk üyeleri ve Türk avukatlardan tavsiye alın.
+                        </p>
+                    </div>
+                    <div class="space-y-2.5">
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800 text-left space-y-1">
+                            <span class="text-[9px] text-turkRed-light font-bold">H1B Transfer Soru</span>
+                            <h5 class="text-xs font-bold text-white">Transfer sürecinde eski işten ne zaman ayrılmalıyım?</h5>
+                            <p class="text-[10px] text-gray-400">12 Cevap • Son yanıt Av. Selin T.</p>
+                        </div>
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800 text-left space-y-1">
+                            <span class="text-[9px] text-emerald-400 font-bold">Green Card Soru</span>
+                            <h5 class="text-xs font-bold text-white">EB-2 NIW başvurusunda makale sayısı kaç olmalı?</h5>
+                            <p class="text-[10px] text-gray-400">24 Cevap • Onaylanmış yanıt mevcut</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 4: İşletme -->
+                <div id="tab-isletme" class="tab-content hidden grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-center">
+                    <div class="space-y-3.5 text-left">
+                        <span class="inline-block px-3 py-1 bg-turkRed/20 text-turkRed-light text-xs font-bold rounded-md" data-i18n="t4_tag">Türk İşletme Rehberi</span>
+                        <h4 class="text-xl sm:text-3xl font-extrabold text-white" data-i18n="t4_title">Amerika'daki Türk İşletmelerini Destekleyin</h4>
+                        <p class="text-gray-300 text-xs sm:text-sm leading-relaxed" data-i18n="t4_desc">
+                            Türk fırını, lokanta, oto tamirhanesi, berber veya market... Size en yakın Türk işletmelerine tek tıkla yol tarifi alın.
+                        </p>
+                        <button onclick="openModal('businessModal')" class="px-4 py-2.5 bg-gradient-red text-white text-xs font-bold rounded-xl active:scale-95 transition-transform" data-i18n="t4_btn">
+                            İşletmenizi TurkSquare'e Ekleyin
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800 text-left flex space-x-3 items-center">
+                            <div class="w-10 h-10 rounded-xl bg-turkRed/20 flex items-center justify-center text-turkRed text-lg"><i class="fa-solid fa-utensils"></i></div>
+                            <div>
+                                <h5 class="text-xs font-bold text-white">Bosphorus Restaurant</h5>
+                                <p class="text-[10px] text-gray-400">Paterson, NJ • ★ 4.9</p>
+                            </div>
+                        </div>
+                        <div class="p-3.5 rounded-2xl bg-black/60 border border-gray-800 text-left flex space-x-3 items-center">
+                            <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 text-lg"><i class="fa-solid fa-wrench"></i></div>
+                            <div>
+                                <h5 class="text-xs font-bold text-white">Anatolia Auto Repair</h5>
+                                <p class="text-[10px] text-gray-400">Houston, TX • ★ 4.8</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER CTA & PRE-REGISTRATION -->
+    <footer class="py-12 sm:py-16 border-t border-gray-800 bg-[#050507]">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-center mb-10 pb-10 border-b border-gray-800/80">
+                <div class="text-center md:text-left space-y-2">
+                    <h3 class="text-2xl font-black text-white" data-i18n="foot_title">TurkSquare Lansmanı Kaçırmayın</h3>
+                    <p class="text-xs sm:text-sm text-gray-400" data-i18n="foot_desc">İlk 1,000 üyeye özel Onaylı Profil rozeti ve ücretsiz ilan hakları verilecektir.</p>
+                </div>
+                <div class="flex justify-center md:justify-end">
+                    <button onclick="openModal('downloadModal')" class="px-8 py-4 bg-gradient-red hover:brightness-110 text-white font-black text-sm rounded-2xl shadow-[0_0_20px_rgba(227,10,23,0.5)] active:scale-95 transition-transform" data-i18n="foot_btn">
+                        Lansman Listesine Katıl
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex flex-col sm:flex-row items-center justify-between text-xs text-gray-500 gap-4">
+                <div>
+                    © 2026 TurkSquare Inc. All rights reserved. Built for the American Turkish Community.
+                </div>
+                <div class="flex space-x-4">
+                    <a href="#" class="hover:text-gray-300"><i class="fa-brands fa-instagram text-base"></i></a>
+                    <a href="#" class="hover:text-gray-300"><i class="fa-brands fa-facebook text-base"></i></a>
+                    <a href="#" class="hover:text-gray-300"><i class="fa-brands fa-x-twitter text-base"></i></a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- MODAL 1: DOWNLOAD & PRE-REGISTER MODAL -->
+    <div id="downloadModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+        <div class="glass-panel w-full max-w-md rounded-3xl p-6 border border-turkRed/30 relative text-left animate-slide-up">
+            <button onclick="closeModal('downloadModal')" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <div class="w-12 h-12 rounded-2xl bg-gradient-red flex items-center justify-center text-white text-xl mb-4">
+                <i class="fa-solid fa-rocket"></i>
+            </div>
+            <h3 class="text-xl font-extrabold text-white mb-1" data-i18n="m_down_title">Erken Erişim Katılım Formu</h3>
+            <p class="text-xs text-gray-400 mb-4" data-i18n="m_down_sub">Uygulama App Store ve Google Play'de yayınlandığı an bildirim alın.</p>
+            
+            <form onsubmit="handleFormSubmit(event, 'downloadSuccess', 'launch')" class="space-y-3">
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_down_name">Ad Soyad</label>
+                    <input type="text" name="name" required placeholder="Ad Soyad / Full name" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_down_email">E-posta veya Telefon</label>
+                    <input type="email" name="email" required placeholder="email@example.com" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_down_state">Bulunduğunuz Eyalet</label>
+                    <select name="state" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                        <option>New York (NY)</option>
+                        <option>New Jersey (NJ)</option>
+                        <option>Texas (TX)</option>
+                        <option>California (CA)</option>
+                        <option>Florida (FL)</option>
+                        <option>Diğer (51 Eyalet)</option>
+                    </select>
+                </div>
+                <button type="submit" class="w-full py-3 bg-gradient-red text-white text-xs font-black rounded-xl shadow-lg active:scale-95 transition-transform" data-i18n="m_down_btn">
+                    Lansman Listesine Kaydol
+                </button>
+            </form>
+            <div id="downloadSuccess" class="hidden mt-3 p-3 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-emerald-400 text-xs font-bold text-center">
+                ✓ Harika! Lansman listesine eklendiniz. Yayınlandığında bilgilendirileceksiniz.
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: BUSINESS REGISTRATION MODAL -->
+    <div id="businessModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+        <div class="glass-panel w-full max-w-md rounded-3xl p-6 border border-gray-700 relative text-left animate-slide-up">
+            <button onclick="closeModal('businessModal')" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <div class="w-12 h-12 rounded-2xl bg-blue-600/30 text-blue-400 border border-blue-500/40 flex items-center justify-center text-xl mb-4">
+                <i class="fa-solid fa-briefcase"></i>
+            </div>
+            <h3 class="text-xl font-extrabold text-white mb-1" data-i18n="m_biz_title">İşletme Profil Talebi</h3>
+            <p class="text-xs text-gray-400 mb-4" data-i18n="m_biz_sub">ABD'deki Türk müşterilere doğrudan ulaşın.</p>
+            
+            <form onsubmit="handleFormSubmit(event, 'businessSuccess', 'business')" class="space-y-3">
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_biz_name">İşletme Adı</label>
+                    <input type="text" name="business_name" required placeholder="Business name / İşletme adı" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_biz_category">Kategori</label>
+                    <select name="category" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                        <option>Restoran / Cafe / Fırın</option>
+                        <option>Oto Tamir / Çekici / Lojistik</option>
+                        <option>Hukuk / Avukatlık Bürosu</option>
+                        <option>Sağlık / Doktor / Diş Hekimi</option>
+                        <option>Market / İthalat</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-300 mb-1" data-i18n="m_biz_phone">İletişim Telefonu</label>
+                    <input type="tel" name="phone" required placeholder="+1 (555) 000-0000" class="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-gray-800 text-xs text-white focus:outline-none focus:border-turkRed">
+                </div>
+                <button type="submit" class="w-full py-3 bg-gradient-red text-white text-xs font-black rounded-xl shadow-lg active:scale-95 transition-transform" data-i18n="m_biz_btn">
+                    İşletme Kaydını Gönder
+                </button>
+            </form>
+            <div id="businessSuccess" class="hidden mt-3 p-3 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-emerald-400 text-xs font-bold text-center">
+                ✓ Başvurunuz alındı. Ekibimiz doğrulama için sizinle iletişime geçecektir.
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: QR CODE PREVIEW MODAL -->
+    <div id="qrModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+        <div class="glass-panel w-full max-w-sm rounded-3xl p-6 border border-gray-700 relative text-center animate-slide-up">
+            <button onclick="closeModal('qrModal')" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 class="text-lg font-extrabold text-white mb-2" data-i18n="m_qr_title">Mobil İndirme Kodu</h3>
+            <p class="text-xs text-gray-400 mb-4" data-i18n="m_qr_sub">Kameranızla QR kodu tarayarak doğrudan mobil indirme sayfasına gidin.</p>
+            
+            <div class="w-48 h-48 mx-auto bg-white p-3 rounded-2xl flex items-center justify-center shadow-2xl mb-4">
+                <img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=https://turksquare.app" alt="TurkSquare App QR Code" class="w-full h-full object-contain">
+            </div>
+            
+            <p class="text-[11px] text-gray-400" data-i18n="m_qr_foot">iOS & Android destekli TurkSquare Süper App</p>
+        </div>
+    </div>
+
+    <!-- MODAL 4: SOS EMERGENCY SIMULATION MODAL -->
+    <div id="sosDemoModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+        <div class="glass-panel w-full max-w-md rounded-3xl p-6 border border-red-600/80 bg-red-950/40 relative text-left animate-slide-up">
+            <button onclick="closeModal('sosDemoModal')" class="absolute top-4 right-4 text-gray-400 hover:text-white text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <div class="w-12 h-12 rounded-2xl bg-red-600 text-white flex items-center justify-center text-xl mb-3 animate-pulse">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-lg font-extrabold text-white mb-1" data-i18n="m_sos_title">SOS Acil Yardım Demosu</h3>
+            <p class="text-xs text-gray-300 mb-4" data-i18n="m_sos_desc">Bu bir simülasyondur. Gerçek uygulamada acil durumlarda yakındaki üyelerle otomatik GPS konumunuz paylaşılır.</p>
+
+            <div class="p-4 rounded-2xl bg-black/60 border border-red-500/40 space-y-3 mb-4">
+                <div class="flex items-center justify-between text-xs">
+                    <span class="text-gray-400" data-i18n="m_sos_status">Durum:</span>
+                    <span class="text-emerald-400 font-bold" id="sosStatusText">● GPS Konumu Alındı</span>
+                </div>
+                <div class="flex items-center justify-between text-xs">
+                    <span class="text-gray-400" data-i18n="m_sos_loc">Mevcut Bölge:</span>
+                    <span class="text-white font-bold">Paterson, NJ (1.2 mil yarıçap)</span>
+                </div>
+                <div class="flex items-center justify-between text-xs">
+                    <span class="text-gray-400" data-i18n="m_sos_notified">Bildirilecek Üyeler:</span>
+                    <span class="text-turkRed-light font-bold">14 Yakın Sürücü / Üye</span>
+                </div>
+            </div>
+
+            <button onclick="triggerSosSignal()" id="sosBtn" class="w-full py-3.5 bg-red-600 hover:bg-red-700 text-white text-xs font-black rounded-xl shadow-[0_0_20px_rgba(227,10,23,0.8)] active:scale-95 transition-transform" data-i18n="m_sos_btn">
+                Simülasyon SOS Sinyali Gönder
+            </button>
+            <p id="sosAlertMessage" class="hidden mt-3 text-center text-xs font-bold text-emerald-400">
+                ✓ SOS Sinyali Gönderildi! Yakındaki 14 üyeye canlı konum iletildi.
+            </p>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT APP LOGIC ENGINE -->
+    <script>
+        const translations = {
+            tr: {
+                logo_sub: "American Turkish Community",
+                nav_features: "Özellikler",
+                nav_market: "Çarşı & İhale",
+                nav_voice: "Sesli Odalar",
+                nav_forum: "Göçmenlik Forumu",
+                nav_experts: "Uzman Rehberi",
+                nav_sos: "SOS Acil Yardım",
+                btn_business_reg: "İşletme Kaydı",
+                btn_download_app: "Uygulamayı İndir",
+                nav_voice_mobile: "Sesli Odalar & Gece Sohbeti",
+                nav_forum_mobile: "Göçmenlik & Forum",
+                nav_experts_mobile: "Doktor, Avukat & Uzmanlar",
+                nav_sos_mobile: "SOS Acil Yardım Ağı",
+                m_create_profile: "İşletme Profili Oluştur",
+                m_download_now: "Hemen Uygulamayı İndir",
+                hero_tag: "ABD'deki Türk toplumu için çok yakında",
+                hero_title: "Amerika'daki Türkler İçin <br><span class=\"text-gradient-bright\">Süper Mobil Uygulama</span>",
+                hero_desc: "İkinci el pazarı, canlı açık artırmalar, 7/24 sesli sohbet odaları, göçmenlik forumu, Türk avukat/doktor randevuları ve anlık SOS acil yardım ağı. <strong class=\"text-white font-semibold\">Hepsi TurkSquare'de!</strong>",
+                hero_drivers_title: "Amerika’daki Türk Topluluğu İçin",
+                hero_drivers_desc: "Amerika’daki Türklerle günün her saatinde sıcak ve güvenli sohbet. Uber veya DoorDash gibi yolda çalışanlar da dilediğinde katılabilir.",
+                hero_drivers_btn: "Dinlemeye Başla",
+                hero_cta_free: "Lansman Listesine Katıl",
+                hero_cta_qr: "QR Kod ile Yükle",
+                hero_members: "<strong class=\"text-white\">Erken erişim</strong> çok yakında açılıyor",
+                hero_reviews: "App Store & Google Play lansmanı",
+                badge_voice_title: "CANLI SESLİ ODA",
+                badge_voice_sub: "Gece Vardiyası & Tırcılar",
+                badge_voice_count: "● Özellik Önizlemesi",
+                badge_sos_title: "SOS GÜVENLİK AĞI",
+                badge_sos_sub: "Yakındaki 12 Sürücüye Bildirim",
+                badge_sos_loc: "Paterson, NJ • Anında Destek",
+                mockup_auction_badge: "CANLI AÇIK ARTIRMA",
+                mockup_auction_time: "14dk Kaldı",
+                mockup_car_desc: "Miami, FL • Temiz Title",
+                mockup_bids: "(18 Teklif)",
+                mockup_room_title: "SESLİ ODA: TIRCILAR SOHBET",
+                mockup_room_loc: "I-80 Otoyolu",
+                mockup_forum_cat: "Göçmenlik Soru-Cevap",
+                mockup_forum_time: "2dk önce",
+                mockup_forum_q: "H1B vize transferi kaç günde sonuçlanır?",
+                mockup_forum_a: "Av. Mehmet B. tarafından yanıtlandı",
+                nav_feed: "Akış",
+                nav_market_sm: "Çarşı",
+                nav_profile: "Profil",
+                stat1_desc: "Eyalet Kapsama Planı",
+                stat2_desc: "Erişim Listesi",
+                stat3_desc: "Çarşı Modülü",
+                stat4_desc: "Sesli Odalar & SOS",
+                feat_sub: "Gelişmiş Uygulama Modülleri",
+                feat_title: "Amerika Hayatını Kolaylaştıran <span class=\"text-gradient-bright\">8 Temel Özellik</span>",
+                feat_desc: "Alışveriş yapın, hukuki sorularınıza yanıt bulun, uzmanlarla iletişime geçin—hepsi tek bir mobil platformda.",
+                card1_title: "TurkSquare Çarşı (Marketplace)",
+                card1_desc: "51 eyaletteki Türk toplumu için özel hazırlanmış ikinci el ve sıfır eşya pazarı. Araba, mobilya, elektronik veya kiralık ev ilanlarını saniyeler içinde ücretsiz yayınlayın.",
+                card1_li1: "Konum bazlı filtreleme",
+                card1_li2: "Onaylı satıcı profilleri",
+                card2_title: "Açık Artırma Sistemi",
+                card2_desc: "Ürünlerinizi açık artırmaya çıkararak en yüksek teklifi verene satın. Canlı geri sayım ve anlık teklif bildirimleri ile heyecanlı alışveriş deneyimi.",
+                card2_li1: "Canlı Teklif Akışı",
+                card2_li2: "Minimum Taban Fiyat Garantisi",
+                card3_badge: "Popüler",
+                card3_title: "Canlı Sesli Sohbet Odaları",
+                card3_desc: "51 eyaletteki Türklerle anında sesli iletişim. Özellikle Uber, DoorDash ve Tır Sürücüleri için özel tasarlanmış gece sohbet odaları!",
+                card3_li1: "Eller serbest güvenli sürüş modu",
+                card3_li2: "Sektörel ve Bölgesel Odalar",
+                card4_title: "Göçmenlik & Hukuk Forumu",
+                card4_desc: "Green Card, Vize türleri, Çalışma İzni, Vatandaşlık ve Amerika'daki tüm hukuki süreçlerde tecrübeli üyelerden ve uzmanlardan rehberlik alın.",
+                card4_li1: "Onaylı Uzman Yanıtları",
+                card4_li2: "Anonim Soru Sorma İmkanı",
+                card5_title: "Uzman Rehberi & Randevu",
+                card5_desc: "Doktor, Avukat, Mühendis, Muhasebeci veya Tamirci... Yakınınızdaki uzman Türk profesyonelleri bulun, yorumları okuyun ve randevu oluşturun.",
+                card5_li1: "Harita Bazlı Konum Araması",
+                card5_li2: "Doğrudan Randevu Talebi",
+                card6_title: "SOS Acil Yardım Sistemi",
+                card6_desc: "Kaza, medikal acil durum veya hukuki kriz anında Konsolosluk, Polis ve yakındaki Türk üyelerle tek tıkla anında iletişime geçin.",
+                card6_btn: "SOS Sistemini Test Et",
+                tab_sub: "Canlı Arayüz Deneyimi",
+                tab_heading: "TurkSquare İçinde Ne Var?",
+                tab_heading_sub: "Aşağıdaki sekmelere tıklayarak uygulama içi ekranları keşfedin.",
+                btn_carsi: "Çarşı & Açık Artırma",
+                btn_sesli: "Gece Sesli Odaları",
+                btn_forum: "Göçmenlik Forumu",
+                btn_isletme: "İşletme Rehberi",
+                t1_tag: "İkinci El & Açık Artırma Modülü",
+                t1_title: "Komisyonsuz Alım, Satım ve Canlı İhale",
+                t1_desc: "Amerika genelindeki Türk toplumu üyeleriyle güvenle alışveriş yapın. İster sabit fiyata satın, ister açık artırma başlatarak teklif toplayın.",
+                t1_stat1_sub: "Üyelik veya İlan Ücreti",
+                t1_stat2_title: "51 Eyalet",
+                t1_stat2_sub: "Lokal Teslimat & Kargo",
+                t1_item1_sub: "Chicago, IL • Kutulu",
+                t1_item2_sub: "Paterson, NJ • Temiz",
+                t2_tag: "Topluluk Sesli İletişimi",
+                t2_title: "Amerika’daki Türkler İçin Canlı Sohbet Odaları",
+                t2_desc: "Amerika’daki Türk topluluğuyla günün her saatinde sohbet edin, yeni insanlarla tanışın ve bulunduğunuz bölgeden haberdar olun. Uber, Lyft veya DoorDash gibi yolda çalışanlar da diledikleri anda katılabilir.",
+                t2_btn: "Sesli Oda Demosunu Dinle",
+                t2_status_off: "Mikrofon Kapalı",
+                t2_room_name: "I-95 Güzergahı Tırcılar & Sürücüler",
+                t2_room_sub: "48 Aktif Konuşmacı • Canlı Yayın",
+                t2_live_badge: "CANLI",
+                t3_tag: "Hukuki Danışma & Forum",
+                t3_title: "Sorularınıza Birebir Uzman Yanıtları",
+                t3_desc: "Vize, çalışma izni, vergi ve eyalet kanunları gibi konularda gerçek deneyim sahibi topluluk üyeleri ve Türk avukatlardan tavsiye alın.",
+                t4_tag: "Türk İşletme Rehberi",
+                t4_title: "Amerika'daki Türk İşletmelerini Destekleyin",
+                t4_desc: "Türk fırını, lokanta, oto tamirhanesi, berber veya market... Size en yakın Türk işletmelerine tek tıkla yol tarifi alın.",
+                t4_btn: "İşletmenizi TurkSquare'e Ekleyin",
+                foot_title: "TurkSquare Lansmanı Kaçırmayın",
+                foot_desc: "İlk 1,000 üyeye özel Onaylı Profil rozeti ve ücretsiz ilan hakları verilecektir.",
+                foot_btn: "Lansman Listesine Katıl",
+                m_down_title: "Erken Erişim Katılım Formu",
+                m_down_sub: "Uygulama App Store ve Google Play'de yayınlandığı an bildirim alın.",
+                m_down_name: "Ad Soyad",
+                m_down_email: "E-posta veya Telefon",
+                m_down_state: "Bulunduğunuz Eyalet",
+                m_down_btn: "Lansman Listesine Kaydol",
+                m_biz_title: "İşletme Profil Talebi",
+                m_biz_sub: "ABD'deki Türk müşterilere doğrudan ulaşın.",
+                m_biz_name: "İşletme Adı",
+                m_biz_category: "Kategori",
+                m_biz_phone: "İletişim Telefonu",
+                m_biz_btn: "İşletme Kaydını Gönder",
+                m_qr_title: "Mobil İndirme Kodu",
+                m_qr_sub: "Kameranızla QR kodu tarayarak doğrudan mobil indirme sayfasına gidin.",
+                m_qr_foot: "iOS & Android destekli TurkSquare Süper App",
+                m_sos_title: "SOS Acil Yardım Demosu",
+                m_sos_desc: "Bu bir simülasyondur. Gerçek uygulamada acil durumlarda yakındaki üyelerle otomatik GPS konumunuz paylaşılır.",
+                m_sos_status: "Durum:",
+                m_sos_loc: "Mevcut Bölge:",
+                m_sos_notified: "Bildirilecek Üyeler:",
+                m_sos_btn: "Simülasyon SOS Sinyali Gönder"
+            },
+            en: {
+                logo_sub: "American Turkish Community",
+                nav_features: "Features",
+                nav_market: "Marketplace & Auction",
+                nav_voice: "Voice Rooms",
+                nav_forum: "Immigration Forum",
+                nav_experts: "Expert Guide",
+                nav_sos: "SOS Emergency",
+                btn_business_reg: "Business Reg.",
+                btn_download_app: "Download App",
+                nav_voice_mobile: "Voice Rooms & Night Chat",
+                nav_forum_mobile: "Immigration & Forum",
+                nav_experts_mobile: "Doctors, Lawyers & Experts",
+                nav_sos_mobile: "SOS Emergency Help",
+                m_create_profile: "Create Business Profile",
+                m_download_now: "Download App Now",
+                hero_tag: "Coming soon for the Turkish community in USA",
+                hero_title: "The Super Mobile App For <br><span class=\"text-gradient-bright\">Turks in America</span>",
+                hero_desc: "Marketplace, live auctions, 24/7 voice chat rooms, immigration forum, Turkish lawyers/doctors appointments, and instant SOS emergency network. <strong class=\"text-white font-semibold\">All in TurkSquare!</strong>",
+                hero_drivers_title: "For the Turkish Community Across America",
+                hero_drivers_desc: "Meet and talk with Turkish people across America at any time. Drivers using Uber or DoorDash can join easily while on the road.",
+                hero_drivers_btn: "Start Listening",
+                hero_cta_free: "Join Launch List",
+                hero_cta_qr: "Scan QR Code",
+                hero_members: "<strong class=\"text-white\">Early access</strong> opening soon",
+                hero_reviews: "App Store & Google Play Launch",
+                badge_voice_title: "LIVE VOICE ROOM",
+                badge_voice_sub: "Night Shift & Drivers",
+                badge_voice_count: "● Feature Preview",
+                badge_sos_title: "SOS SAFETY NETWORK",
+                badge_sos_sub: "Alert Sent to 12 Nearby Drivers",
+                badge_sos_loc: "Paterson, NJ • Instant Support",
+                mockup_auction_badge: "LIVE AUCTION",
+                mockup_auction_time: "14m Left",
+                mockup_car_desc: "Miami, FL • Clean Title",
+                mockup_bids: "(18 Bids)",
+                mockup_room_title: "VOICE ROOM: TRUCKERS CHAT",
+                mockup_room_loc: "I-80 Highway",
+                mockup_forum_cat: "Immigration Q&A",
+                mockup_forum_time: "2m ago",
+                mockup_forum_q: "How many days for H1B visa transfer result?",
+                mockup_forum_a: "Answered by Atty. Mehmet B.",
+                nav_feed: "Feed",
+                nav_market_sm: "Market",
+                nav_profile: "Profile",
+                stat1_desc: "State Coverage Plan",
+                stat2_desc: "Early Access List",
+                stat3_desc: "Marketplace Module",
+                stat4_desc: "Voice Rooms & SOS",
+                feat_sub: "Advanced App Modules",
+                feat_title: "8 Essential Features <span class=\"text-gradient-bright\">Simplifying Life in USA</span>",
+                feat_desc: "Shop second-hand items, find legal advice, consult verified experts—all in a single mobile platform.",
+                card1_title: "TurkSquare Marketplace",
+                card1_desc: "Buy and sell new/used goods across 51 states. Post cars, furniture, electronics, or apartment rentals for free in seconds.",
+                card1_li1: "Location-based filtering",
+                card1_li2: "Verified seller profiles",
+                card2_title: "Live Auction System",
+                card2_desc: "Sell your items via auction to the highest bidder. Live countdown timers and instant bid push notifications.",
+                card2_li1: "Live Bid Stream",
+                card2_li2: "Minimum Reserve Price Protection",
+                card3_badge: "Popular",
+                card3_title: "Live Voice Chat Rooms",
+                card3_desc: "Connect instantly with Turkish people across America. Open rooms make it easy to meet, chat, and share local experiences—Uber and DoorDash drivers are welcome too.",
+                card3_li1: "Hands-free safe driving mode",
+                card3_li2: "Industry & Regional Rooms",
+                card4_title: "Immigration & Legal Forum",
+                card4_desc: "Get guidance on Green Cards, Visa types, Work Permits, Citizenship, and legal processes from experienced expats and attorneys.",
+                card4_li1: "Verified Expert Responses",
+                card4_li2: "Anonymous Question Option",
+                card5_title: "Expert Guide & Appointments",
+                card5_desc: "Doctors, Lawyers, Engineers, CPAs, or Mechanics... Find Turkish professionals near you, read reviews, and book appointments.",
+                card5_li1: "Map-Based Location Search",
+                card5_li2: "Direct Appointment Requests",
+                card6_title: "SOS Emergency Network",
+                card6_desc: "One-tap emergency communication during accidents, medical crises, or legal issues with consulate contacts, police, and nearby members.",
+                card6_btn: "Test SOS System",
+                tab_sub: "Live UI Showcase",
+                tab_heading: "What's Inside TurkSquare?",
+                tab_heading_sub: "Click the tabs below to explore internal app screens.",
+                btn_carsi: "Marketplace & Auction",
+                btn_sesli: "Night Voice Rooms",
+                btn_forum: "Immigration Forum",
+                btn_isletme: "Business Directory",
+                t1_tag: "Marketplace & Auction Module",
+                t1_title: "Zero-Commission Buy, Sell & Live Bidding",
+                t1_desc: "Shop safely with Turkish community members across the USA. Sell at a fixed price or host an auction to collect bids.",
+                t1_stat1_sub: "Membership or Listing Fees",
+                t1_stat2_title: "51 States",
+                t1_stat2_sub: "Local Pickup & Shipping",
+                t1_item1_sub: "Chicago, IL • Boxed",
+                t1_item2_sub: "Paterson, NJ • Clean",
+                t2_tag: "Community Voice Communication",
+                t2_title: "Live Rooms for the Turkish Community",
+                t2_desc: "Join voice rooms to meet Turkish people across America, share local experiences, and stay connected throughout the day. Uber, Lyft, and DoorDash drivers are welcome to join too.",
+                t2_btn: "Listen to Voice Demo",
+                t2_status_off: "Microphone Off",
+                t2_room_name: "I-95 Highway Truckers & Drivers",
+                t2_room_sub: "48 Active Speakers • Live Stream",
+                t2_live_badge: "LIVE",
+                t3_tag: "Legal Advice & Forum",
+                t3_title: "Direct Expert Answers to Your Questions",
+                t3_desc: "Receive advice on visas, work permits, taxes, and state regulations from experienced community members and attorneys.",
+                t4_tag: "Turkish Business Directory",
+                t4_title: "Support Turkish Businesses in America",
+                t4_desc: "Turkish bakeries, restaurants, auto mechanics, barbers, or grocery stores... Get one-tap directions to Turkish businesses nearby.",
+                t4_btn: "Add Your Business to TurkSquare",
+                foot_title: "Don't Miss the TurkSquare Launch",
+                foot_desc: "The first 1,000 members get an exclusive Verified Profile badge and free listing perks.",
+                foot_btn: "Join Launch List",
+                m_down_title: "Early Access Form",
+                m_down_sub: "Get notified the moment the app goes live on App Store and Google Play.",
+                m_down_name: "Full Name",
+                m_down_email: "Email or Phone",
+                m_down_state: "Your State",
+                m_down_btn: "Register for Launch List",
+                m_biz_title: "Business Profile Request",
+                m_biz_sub: "Reach Turkish customers across the United States directly.",
+                m_biz_name: "Business Name",
+                m_biz_category: "Category",
+                m_biz_phone: "Contact Phone",
+                m_biz_btn: "Submit Business Registration",
+                m_qr_title: "Mobile Download Code",
+                m_qr_sub: "Scan the QR code with your camera to open the direct mobile download page.",
+                m_qr_foot: "TurkSquare Super App for iOS & Android",
+                m_sos_title: "SOS Emergency Demo",
+                m_sos_desc: "This is a simulation. In real emergencies, your GPS location is automatically shared with nearby verified members.",
+                m_sos_status: "Status:",
+                m_sos_loc: "Current Area:",
+                m_sos_notified: "Members to Notify:",
+                m_sos_btn: "Send Simulated SOS Signal"
+            }
+        };
+
+        let currentLang = 'tr';
+
+        function setLanguage(lang) {
+            currentLang = lang;
+            const trBtn = document.getElementById('langBtnTr');
+            const enBtn = document.getElementById('langBtnEn');
+
+            if (lang === 'tr') {
+                trBtn.className = 'px-2.5 py-1 rounded-lg transition-all bg-turkRed text-white shadow-sm';
+                enBtn.className = 'px-2.5 py-1 rounded-lg transition-all text-gray-400 hover:text-white';
+            } else {
+                enBtn.className = 'px-2.5 py-1 rounded-lg transition-all bg-turkRed text-white shadow-sm';
+                trBtn.className = 'px-2.5 py-1 rounded-lg transition-all text-gray-400 hover:text-white';
+            }
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[lang] && translations[lang][key]) {
+                    el.innerHTML = translations[lang][key];
+                }
+            });
+        }
+
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobileMenu');
+            const icon = document.getElementById('menuIcon');
+            if (menu.classList.contains('hidden')) {
+                menu.classList.remove('hidden');
+                icon.className = 'fa-solid fa-xmark text-lg';
+            } else {
+                menu.classList.add('hidden');
+                icon.className = 'fa-solid fa-bars text-lg';
+            }
+        }
+
+        function switchTab(tabId) {
+            // Hide all contents
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            
+            // Show target content
+            const target = document.getElementById(tabId);
+            if (target) target.classList.remove('hidden');
+
+            // Reset tab button styles
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.className = 'tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all glass-panel text-gray-400 hover:text-white active:scale-95';
+            });
+
+            // Highlight active button
+            const activeBtn = document.getElementById('btn-' + tabId);
+            if (activeBtn) {
+                activeBtn.className = 'tab-btn snap-start shrink-0 px-5 py-2.5 sm:px-6 sm:py-3 rounded-xl text-xs sm:text-sm font-bold transition-all bg-gradient-red text-white shadow-lg active:scale-95';
+            }
+        }
+
+        function openModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.remove('hidden');
+                document.body.classList.add('modal-active');
+            }
+        }
+
+        function closeModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('hidden');
+                document.body.classList.remove('modal-active');
+            }
+        }
+
+        function handleFormSubmit(e, successId, formType) {
+            e.preventDefault();
+            const successEl = document.getElementById(successId);
+            if (successEl) {
+                successEl.classList.remove('hidden');
+            }
+            const fields = new FormData(e.currentTarget);
+            const subject = formType === 'business' ? 'TurkSquare business registration' : 'TurkSquare launch-list registration';
+            const body = [...fields.entries()].map(([key, value]) => key + ': ' + value).join('\n');
+            window.location.href = 'mailto:info@turksquare.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        }
+
+        let isAudioPlaying = false;
+        let audioCtx = null;
+        let audioOscillator = null;
+
+        function playAudioDemo() {
+            const icon = document.getElementById('audioDemoIcon');
+            const text = document.getElementById('audioDemoText');
+            const status = document.getElementById('audioDemoStatus');
+
+            if (!isAudioPlaying) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(320, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start();
+
+                    audioOscillator = osc;
+                    isAudioPlaying = true;
+
+                    icon.className = 'fa-solid fa-square';
+                    text.innerText = currentLang === 'tr' ? 'Yayını Durdur' : 'Stop Audio';
+                    status.innerText = currentLang === 'tr' ? '● Yayın Dinleniyor' : '● Listening Live';
+                    status.className = 'text-xs text-emerald-400 font-bold animate-pulse';
+                } catch(e) {
+                    console.log("Audio not supported", e);
+                }
+            } else {
+                if (audioOscillator) {
+                    audioOscillator.stop();
+                }
+                isAudioPlaying = false;
+                icon.className = 'fa-solid fa-play';
+                text.innerText = currentLang === 'tr' ? 'Sesli Oda Demosunu Dinle' : 'Listen to Voice Demo';
+                status.innerText = currentLang === 'tr' ? 'Mikrofon Kapalı' : 'Microphone Off';
+                status.className = 'text-xs text-gray-400';
+            }
+        }
+
+        function triggerSosSignal() {
+            const btn = document.getElementById('sosBtn');
+            const msg = document.getElementById('sosAlertMessage');
+            btn.innerText = currentLang === 'tr' ? 'Sinyal İletiliyor...' : 'Transmitting Signal...';
+            btn.disabled = true;
+
+            setTimeout(() => {
+                btn.innerText = currentLang === 'tr' ? '✓ Sinyal Başarıyla Gönderildi' : '✓ Signal Sent Successfully';
+                btn.className = 'w-full py-3.5 bg-emerald-600 text-white text-xs font-black rounded-xl shadow-lg';
+                if (msg) msg.classList.remove('hidden');
+            }, 1200);
+        }
+    </script>
+</body>
+</html>
