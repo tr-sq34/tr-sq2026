@@ -174,6 +174,17 @@ resource "azurerm_container_app" "main" {
         value = var.tenant_id
       }
 
+      # Told, not guessed. Ingress was pointed at container_port while each
+      # service picked its own default out of the air - community listened on
+      # 8081 against an ingress on 8080, so every request to it timed out and
+      # the revision never went ready. Every service here reads PORT with a
+      # fallback, so handing it the same number ingress uses removes the chance
+      # of the two disagreeing.
+      env {
+        name  = "PORT"
+        value = tostring(var.container_port)
+      }
+
       # The identity has to be named, not discovered. These apps carry a
       # user-assigned identity and no system-assigned one, and the credential
       # chain cannot choose between user-assigned identities on its own - it
