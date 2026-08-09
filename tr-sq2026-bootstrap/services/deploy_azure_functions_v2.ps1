@@ -54,18 +54,19 @@ function Upload-ZipAndGetSas {
     $resolvedZip = Resolve-Path $LocalZipPath -ErrorAction Stop
     Write-Host "`n[UPLOAD] Yukleniyor: $resolvedZip -> $StorageAccount/$Container/$BlobName"
 
-    # Piped straight into ConvertFrom-Json this used to swallow its own
-    # diagnosis: az writes a plain-text "ERROR: ..." line on failure, the
-    # converter choked on the 'E', and $ErrorActionPreference = "Stop" aborted
-    # the run with a JSON parse error before the message below could be printed.
-    # Capture first, check the exit code, convert last.
+    # Deliberately not parsed. This used to ask for -o json, merge stderr in with
+    # 2>&1 and pipe the lot into ConvertFrom-Json, which meant az's own output
+    # broke the script twice over: the plain-text "ERROR: ..." line on failure,
+    # and - once that was fixed - the "Alive[####]" progress bar az writes to
+    # stderr on success. Both surfaced as "Conversion from JSON failed",
+    # obscuring the real cause. Nothing here needed a field out of that JSON; the
+    # blob name is already known. The exit code is the only signal required.
     #
     # The retry is for a fresh role assignment. Terraform grants Storage Blob
     # Data Contributor in the same pipeline run a couple of jobs earlier, and
     # Azure's RBAC caches can take a few minutes to catch up - the first attempt
     # gets 403 on a permission that is already correct.
     $attempt = 0
-    $uploadResult = $null
     while ($true) {
         $attempt++
         $uploadOutput = & az storage blob upload `
@@ -75,10 +76,10 @@ function Upload-ZipAndGetSas {
             --name $BlobName `
             --overwrite true `
             --auth-mode login `
-            -o json 2>&1
+            --only-show-errors `
+            -o none 2>&1
 
         if ($LASTEXITCODE -eq 0) {
-            $uploadResult = $uploadOutput | Out-String | ConvertFrom-Json
             break
         }
 
@@ -91,20 +92,25 @@ function Upload-ZipAndGetSas {
         Write-Warning "   $($uploadOutput -join "`n")"
         Start-Sleep -Seconds 30
     }
-    Write-Host "   Blob yuklendi: $($uploadResult.name)"
+    Write-Host "   Blob yuklendi: $BlobName"
 
     $sasExpiry = (Get-Date).AddYears(1).ToString("yyyy-MM-ddTHH:mm:ssZ")
     Write-Host "   SAS token olusturuluyor... (expiry: $sasExpiry)"
 
-    $sasToken = & az storage blob generate-sas `
-        --account-name $StorageAccount `
-        --container-name $Container `
-        --name $BlobName `
-        --permissions r `
-        --expiry $sasExpiry `
-        --https-only `
-        --auth-mode login `
-        -o tsv
+    # Trimmed because the token goes straight into a URL: a trailing newline off
+    # the CLI would be carried into WEBSITE_RUN_FROM_PACKAGE and the Function App
+    # would fetch a package URL it cannot resolve.
+    $sasToken = (& az storage blob generate-sas `
+            --account-name $StorageAccount `
+            --container-name $Container `
+            --name $BlobName `
+            --permissions r `
+            --expiry $sasExpiry `
+            --https-only `
+            --auth-mode login `
+            --only-show-errors `
+            -o tsv) | Out-String
+    $sasToken = $sasToken.Trim()
 
     if ($LASTEXITCODE -ne 0 -or -not $sasToken) {
         throw "SAS token olusturulamadi: $StorageAccount/$Container/$BlobName"
