@@ -10,7 +10,13 @@ terraform {
 data "azurerm_client_config" "current" {}
 
 locals {
-  deployer_object_id = var.deployer_object_id != "" ? var.deployer_object_id : data.azurerm_client_config.current.object_id
+  # Every principal that uploads a function zip, not just one. The single-ID
+  # version of this held the human owner, so the CI service principal - which has
+  # Contributor but no data-plane role - got 403 from `az storage blob upload
+  # --auth-mode login` and the deploy step died. Contributor grants control-plane
+  # rights over the account; reading or writing a blob needs a separate role.
+  deployer_object_ids = length(var.deployer_object_ids) > 0 ? toset(var.deployer_object_ids) : toset([data.azurerm_client_config.current.object_id])
+
   tags = {
     project     = "turksquare"
     environment = var.environment
@@ -62,11 +68,20 @@ resource "azurerm_role_assignment" "storage_account_contributor" {
 }
 
 resource "azurerm_role_assignment" "deployer_storage_blob_data_contributor" {
-  count = local.deployer_object_id != "" ? 1 : 0
+  for_each = local.deployer_object_ids
 
   scope                = azurerm_storage_account.app.id
   role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = local.deployer_object_id
+  principal_id         = each.value
+}
+
+# The single assignment this replaced holds the human owner - that is the ID the
+# deployer_object_id secret carried. Azure rejects a duplicate assignment for a
+# principal that already has the role, so without this the create collides with
+# the instance already in state.
+moved {
+  from = azurerm_role_assignment.deployer_storage_blob_data_contributor[0]
+  to   = azurerm_role_assignment.deployer_storage_blob_data_contributor["5c8d6271-40f5-47fe-a3a8-c5adcafc8e29"]
 }
 
 resource "azurerm_key_vault_access_policy" "function" {

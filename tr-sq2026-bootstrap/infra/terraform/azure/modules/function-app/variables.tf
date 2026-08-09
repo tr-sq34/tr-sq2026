@@ -23,10 +23,10 @@ variable "tenant_id" {
   type        = string
 }
 
-variable "deployer_object_id" {
-  description = "Optional Azure AD object ID of the user, group or service principal that deploys function zip packages to the storage account. Defaults to the Terraform caller."
-  type        = string
-  default     = ""
+variable "deployer_object_ids" {
+  description = "Object IDs of every principal that uploads function zip packages to this storage account - the CI service principal and any human operator. All of them get Storage Blob Data Contributor. Empty means the Terraform caller only, which leaves everyone else with 403 on the data plane even if they are Contributor on the account."
+  type        = list(string)
+  default     = []
 }
 
 variable "service_plan_sku" {

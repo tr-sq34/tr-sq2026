@@ -268,7 +268,6 @@ jobs:
           TF_VAR_matrix_synapse_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_resend_api_key_initial: ${{ secrets.RESEND_API_KEY_INITIAL }}
           TF_VAR_jwt_secret_initial: ${{ secrets.JWT_SECRET_INITIAL }}
-          TF_VAR_deployer_object_id: ${{ secrets.AZURE_DEPLOYER_OBJECT_ID }}
         run: terraform plan -input=false -out=tfplan
 
       - name: Upload plan artifact
