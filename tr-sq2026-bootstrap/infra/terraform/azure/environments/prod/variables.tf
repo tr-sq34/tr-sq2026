@@ -78,6 +78,11 @@ variable "messaging_gateway_image_tag" {
   default = "latest"
 }
 
+variable "gatework_console_image_tag" {
+  type    = string
+  default = "latest"
+}
+
 variable "matrix_synapse_image_tag" {
   type    = string
   default = "latest"

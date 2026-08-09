@@ -27,6 +27,19 @@ locals {
     }
   ]
 
+  sidecar_secret_env_normalized = var.sidecar == null ? [] : [
+    for s in var.sidecar.secret_env : {
+      name                = lower(s.name)
+      key_vault_secret_id = s.key_vault_secret_id
+      env_name            = s.env_name
+    }
+  ]
+
+  # Secrets are declared once on the app and referenced by name from a container.
+  # The two lists stay separate above so that each container is given only its
+  # own: the tunnel token has no business being readable by the console process.
+  all_secret_env_normalized = concat(local.secret_env_normalized, local.sidecar_secret_env_normalized)
+
   container_app_environment_id = var.container_app_environment_id != "" ? var.container_app_environment_id : one(azurerm_container_app_environment.main[*].id)
 }
 
@@ -161,9 +174,12 @@ resource "azurerm_container_app" "main" {
         value = var.tenant_id
       }
 
-      env {
-        name  = "DATABASE_URL"
-        value = "postgresql://${var.postgres_admin_username}:${var.postgres_admin_password}@${var.postgres_fqdn}:5432/${var.database_name}?sslmode=require"
+      dynamic "env" {
+        for_each = var.database_name != "" ? [1] : []
+        content {
+          name  = "DATABASE_URL"
+          value = "postgresql://${var.postgres_admin_username}:${var.postgres_admin_password}@${var.postgres_fqdn}:5432/${var.database_name}?sslmode=require"
+        }
       }
 
       dynamic "env" {
@@ -208,6 +224,26 @@ resource "azurerm_container_app" "main" {
       }
 
     }
+
+    dynamic "container" {
+      for_each = var.sidecar == null ? [] : [var.sidecar]
+      content {
+        name   = container.value.name
+        image  = container.value.image
+        cpu    = container.value.cpu
+        memory = container.value.memory
+        args   = container.value.args
+
+        dynamic "env" {
+          for_each = local.sidecar_secret_env_normalized
+          iterator = secret_env
+          content {
+            name        = secret_env.value.env_name
+            secret_name = secret_env.value.name
+          }
+        }
+      }
+    }
   }
 
   dynamic "secret" {
@@ -229,7 +265,7 @@ resource "azurerm_container_app" "main" {
   }
 
   dynamic "secret" {
-    for_each = local.secret_env_normalized
+    for_each = local.all_secret_env_normalized
     iterator = secret_env
     content {
       name                = secret_env.value.name

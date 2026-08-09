@@ -9,6 +9,7 @@ on:
       - 'tr-sq2026-bootstrap/services/community-service/**'
       - 'tr-sq2026-bootstrap/services/messaging-gateway/**'
       - 'tr-sq2026-bootstrap/services/matrix-synapse/**'
+      - 'tr-sq2026-bootstrap/services/gatework-console/**'
       - 'tr-sq2026-bootstrap/services/password-breach-check/**'
       - 'tr-sq2026-bootstrap/services/email-relay/**'
       - 'tr-sq2026-bootstrap/infra/terraform/azure/**'
@@ -147,6 +148,26 @@ jobs:
             ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:${{ steps.meta.outputs.image_tag }}
             ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:latest
 
+      - name: Build & push gatework-console container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/gatework-console
+          file: ./tr-sq2026-bootstrap/services/gatework-console/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/gatework-console:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/gatework-console:latest
+
+      # The tunnel connector runs beside the console and is the only way into it.
+      # Mirrored into ACR rather than pulled from Docker Hub at deploy time: an
+      # anonymous-pull rate limit would leave the console with no ingress at all.
+      # Idempotent, so re-running a deploy is free.
+      - name: Mirror cloudflared image into ACR
+        run: |
+          az acr import --name ${{ env.ACR_NAME }} --force \
+            --source docker.io/cloudflare/cloudflared:2025.2.0 \
+            --image cloudflare/cloudflared:2025.2.0
+
       # Upstream Synapse plus the startup script that renders its config. The
       # Synapse version itself is pinned in the Dockerfile, not here: its schema
       # upgrades are one-way, so it must never move as a side effect of a deploy.
@@ -243,6 +264,7 @@ jobs:
           TF_VAR_verification_vault_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_community_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_messaging_gateway_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_gatework_console_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_matrix_synapse_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_resend_api_key_initial: ${{ secrets.RESEND_API_KEY_INITIAL }}
           TF_VAR_jwt_secret_initial: ${{ secrets.JWT_SECRET_INITIAL }}

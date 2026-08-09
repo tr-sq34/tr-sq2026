@@ -97,6 +97,13 @@ variable "stripe_webhook_secret_initial" {
   default     = "whsec_change_me_stripe_webhook_secret"
 }
 
+variable "cloudflare_tunnel_token_initial" {
+  description = "Initial placeholder value for the CLOUDFLARE-TUNNEL-TOKEN Key Vault secret. Cloudflare issues the real token when the tunnel is created; set it out of band, since Terraform ignores subsequent changes. The gatework console has no ingress, so until this is real the console is reachable from nowhere."
+  type        = string
+  sensitive   = true
+  default     = "CHANGE-ME-CLOUDFLARE-TUNNEL-TOKEN"
+}
+
 variable "jwt_secret_initial" {
   description = "Initial placeholder value for the JWT-SECRET Key Vault secret. The real value must be updated manually or via a secure pipeline after provisioning because Terraform ignores subsequent changes."
   type        = string

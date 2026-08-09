@@ -99,21 +99,29 @@ variable "max_replicas" {
   default = 3
 }
 
+# The four below default to empty for apps that hold no data of their own. The
+# gatework console is the only such caller: it reaches every domain over its
+# HTTP API precisely so that an operator console never holds a database
+# credential. DATABASE_URL is omitted entirely when database_name is empty.
 variable "postgres_admin_username" {
-  type = string
+  type    = string
+  default = ""
 }
 
 variable "postgres_admin_password" {
   type      = string
   sensitive = true
+  default   = ""
 }
 
 variable "postgres_fqdn" {
-  type = string
+  type    = string
+  default = ""
 }
 
 variable "database_name" {
-  type = string
+  type    = string
+  default = ""
 }
 
 variable "servicebus_connection_string" {
@@ -160,6 +168,26 @@ variable "extra_secret_env" {
     env_name            = string
   }))
   default = []
+}
+
+# A second container in the same app. Containers of one container app share a
+# network namespace, so a sidecar reaches the main container on localhost — which
+# is what lets an app be published through a Cloudflare Tunnel while having no
+# ingress of its own.
+variable "sidecar" {
+  type = object({
+    name   = string
+    image  = string
+    args   = optional(list(string), [])
+    cpu    = optional(number, 0.25)
+    memory = optional(string, "0.5Gi")
+    secret_env = optional(list(object({
+      name                = string
+      key_vault_secret_id = string
+      env_name            = string
+    })), [])
+  })
+  default = null
 }
 
 variable "dapr_enabled" {

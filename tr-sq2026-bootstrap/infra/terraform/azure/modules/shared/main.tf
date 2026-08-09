@@ -255,6 +255,40 @@ resource "azurerm_key_vault_secret" "email_code_hmac_secret" {
   depends_on = [azurerm_key_vault_access_policy.deployer]
 }
 
+# --- Gatework console secrets --------------------------------------------
+
+# Encrypts the operator session cookie. Knowing it means being able to forge a
+# session for any role, including owner, so it is generated rather than listed
+# in key_vault_secrets. Rotating it signs every operator out; nothing else.
+resource "random_password" "gatework_session_secret" {
+  length  = 48
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "gatework_session_secret" {
+  name         = "GATEWORK-SESSION-SECRET"
+  value        = random_password.gatework_session_secret.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# Cloudflare issues this one, so Terraform creates it as a placeholder and the
+# real token is set out of band. ignore_changes is what stops the next apply
+# from resetting a working tunnel back to the placeholder. Until it is set, the
+# console runs but is unreachable — which is the safe direction to fail in.
+resource "azurerm_key_vault_secret" "cloudflare_tunnel_token" {
+  name         = "CLOUDFLARE-TUNNEL-TOKEN"
+  value        = var.cloudflare_tunnel_token_initial
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
 # --- Matrix secrets ------------------------------------------------------
 # These four are generated instead of being listed in key_vault_secrets. That
 # map lives in environments/prod/main.tf, so anything in it is a literal in a
