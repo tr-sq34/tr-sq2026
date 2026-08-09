@@ -97,6 +97,17 @@ function Upload-ZipAndGetSas {
     $sasExpiry = (Get-Date).AddYears(1).ToString("yyyy-MM-ddTHH:mm:ssZ")
     Write-Host "   SAS token olusturuluyor... (expiry: $sasExpiry)"
 
+    # Account key, not --auth-mode login, and not by accident. Asking for a SAS
+    # under a logged-in identity requires --as-user, which issues a *user
+    # delegation* SAS - and Azure caps those at seven days no matter what expiry
+    # is requested. WEBSITE_RUN_FROM_PACKAGE holds this URL for the life of the
+    # deployment, so a seven-day token means the Function App stops finding its
+    # own package a week after a successful deploy. A service SAS signed with the
+    # account key honours the year below.
+    #
+    # No key appears on the command line: with the default key auth mode the CLI
+    # resolves it through the caller's control-plane rights on the account.
+    #
     # Trimmed because the token goes straight into a URL: a trailing newline off
     # the CLI would be carried into WEBSITE_RUN_FROM_PACKAGE and the Function App
     # would fetch a package URL it cannot resolve.
@@ -107,7 +118,7 @@ function Upload-ZipAndGetSas {
             --permissions r `
             --expiry $sasExpiry `
             --https-only `
-            --auth-mode login `
+            --auth-mode key `
             --only-show-errors `
             -o tsv) | Out-String
     $sasToken = $sasToken.Trim()
