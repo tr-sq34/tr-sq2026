@@ -28,23 +28,32 @@ async function claimJob(): Promise<Job | null> {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    // The joins hang off n, not j. Postgres builds the FROM list before the
+    // update target is in scope, so `JOIN ... ON s.media_id=j.media_id` is
+    // rejected outright with `invalid reference to FROM-clause entry for table
+    // "j"` - the worker threw that on its first poll and never started. The CTE
+    // carries media_id out so the joins have something legal to hang off.
+    //
+    // FOR UPDATE OF j, not a bare FOR UPDATE: the bare form also locks the
+    // media_assets row this job happens to join to, which nothing here is
+    // claiming and which blocks unrelated writers.
     const result = await client.query<Job>(`
       WITH next_job AS (
-        SELECT j.id
+        SELECT j.id, j.media_id
         FROM media_processing_jobs j
         JOIN media_assets m ON m.id=j.media_id
         WHERE j.job_type='scan'
           AND (j.status='queued' OR (j.status='running' AND j.created_at < now()-interval '15 minutes'))
           AND m.status='scanning'
         ORDER BY j.created_at
-        FOR UPDATE SKIP LOCKED
+        FOR UPDATE OF j SKIP LOCKED
         LIMIT 1
       )
       UPDATE media_processing_jobs j
       SET status='running', attempts=j.attempts+1
       FROM next_job n
-      JOIN media_upload_sessions s ON s.media_id=j.media_id
-      JOIN media_assets m ON m.id=j.media_id
+      JOIN media_upload_sessions s ON s.media_id=n.media_id
+      JOIN media_assets m ON m.id=n.media_id
       WHERE j.id=n.id
       RETURNING j.id AS "jobId",m.id AS "mediaId",s.quarantine_key AS "quarantineKey",s.content_type AS "contentType",s.expected_size_bytes AS "expectedSizeBytes"
     `);
