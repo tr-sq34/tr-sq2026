@@ -25,6 +25,14 @@ abstract final class ApiConfig {
     defaultValue: 'https://verify.turksquare.com/v1/',
   );
 
+  /// The messaging gateway. It is the only client of the Matrix homeserver,
+  /// which has no public address at all — the app talks to this service and
+  /// never learns that Matrix is the transport underneath.
+  static const messagingBaseUrl = String.fromEnvironment(
+    'MESSAGING_API_BASE_URL',
+    defaultValue: 'https://messages-api.turksquare.com/v1/',
+  );
+
   static const connectTimeout = Duration(seconds: 15);
   static const receiveTimeout = Duration(seconds: 20);
 }

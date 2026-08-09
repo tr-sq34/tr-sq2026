@@ -7,6 +7,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/test_member_capabilities.dart';
+
 void main() {
   testWidgets('seller storefront renders without an exception', (tester) async {
     final controller = MarketplaceController(repository: MockMarketplaceRepository());
@@ -39,7 +41,12 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: MarketplaceScreen(controller: controller)),
+        home: Scaffold(
+          body: MarketplaceScreen(
+            controller: controller,
+            memberCapabilitiesController: testMemberCapabilitiesController(),
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -72,7 +79,11 @@ void main() {
                 index: 1,
                 children: [
                   const SizedBox.shrink(),
-                  MarketplaceScreen(controller: controller),
+                  MarketplaceScreen(
+                    controller: controller,
+                    memberCapabilitiesController:
+                        testMemberCapabilitiesController(),
+                  ),
                 ],
               ),
               const Positioned(

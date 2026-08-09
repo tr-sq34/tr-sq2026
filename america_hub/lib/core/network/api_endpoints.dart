@@ -25,6 +25,21 @@ abstract final class ApiEndpoints {
       '/community/me/story-audience-contacts';
   static const communityMyStoryHighlights = '/community/me/story-highlights';
   static const mediaUploadPresign = '/media/uploads/presign';
+  // Served by the messaging gateway, so these resolve against
+  // ApiConfig.messagingBaseUrl rather than the identity or community base URL.
+  static const messagingConversations = '/messages/conversations';
+  static const messagingDirectConversations = '/messages/direct-conversations';
+  static String messagingConversationMessages(String conversationId) =>
+      '/messages/conversations/$conversationId/messages';
+  static const messagingGroups = '/messages/groups';
+  static String messagingGroupJoin(String groupId) =>
+      '/messages/groups/$groupId/join';
+  static String messagingGroupLeave(String groupId) =>
+      '/messages/groups/$groupId/leave';
+  static String messagingGroupRequests(String groupId) =>
+      '/messages/groups/$groupId/requests';
+  static String messagingGroupRequest(String groupId, String userId) =>
+      '/messages/groups/$groupId/requests/$userId';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

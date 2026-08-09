@@ -38,7 +38,10 @@ import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer
 import 'features/profile/application/profile_controller.dart';
 import 'features/profile/data/repositories/mock_profile_repository.dart';
 import 'features/messaging/application/messaging_controller.dart';
+import 'features/messaging/data/repositories/api_messaging_repository.dart';
+import 'features/messaging/data/repositories/mock_direct_message_repository.dart';
 import 'features/messaging/data/repositories/mock_messaging_repository.dart';
+import 'features/messaging/domain/repositories/direct_message_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
@@ -77,6 +80,11 @@ Future<void> main() async {
   final verificationApiClient = ApiClient(
     tokenStore: tokenStore,
     baseUrl: ApiConfig.verificationBaseUrl,
+    onSessionExpired: () => authController.expireSession(),
+  );
+  final messagingApiClient = ApiClient(
+    tokenStore: tokenStore,
+    baseUrl: ApiConfig.messagingBaseUrl,
     onSessionExpired: () => authController.expireSession(),
   );
 
@@ -172,9 +180,19 @@ Future<void> main() async {
     repository: MockProfileRepository(),
   );
 
-  final messagingController = MessagingController(
-    repository: MockMessagingRepository(),
+  // One object serves both messaging roles against the gateway, so the inbox
+  // list and an open thread always agree about what a conversation is.
+  final apiMessagingRepository = ApiMessagingRepository(
+    client: messagingApiClient,
   );
+  final messagingController = MessagingController(
+    repository: useMockServices
+        ? MockMessagingRepository()
+        : apiMessagingRepository,
+  );
+  final DirectMessageRepository directMessageRepository = useMockServices
+      ? MockDirectMessageRepository(viewerId: authController.user?.id ?? 'me')
+      : apiMessagingRepository;
 
   runApp(
     AmericaHubApp(
@@ -189,6 +207,7 @@ Future<void> main() async {
       marketplaceController: marketplaceController,
       profileController: profileController,
       messagingController: messagingController,
+      directMessageRepository: directMessageRepository,
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
     ),
