@@ -97,3 +97,15 @@ output "verification_capability_queue_name" {
 output "document_scan_queue_name" {
   value = azurerm_servicebus_queue.document_scan.name
 }
+
+output "messaging_projection_queue_name" {
+  value = azurerm_servicebus_queue.messaging_projection.name
+}
+
+output "matrix_database_name" {
+  value = azurerm_postgresql_flexible_server_database.matrix.name
+}
+
+output "storage_account_id" {
+  value = azurerm_storage_account.media.id
+}

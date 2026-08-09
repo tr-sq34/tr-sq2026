@@ -30,6 +30,14 @@ output "identity_container_app_id" {
   value = module.identity_container_app.container_app_id
 }
 
+output "matrix_synapse_internal_fqdn" {
+  value = module.matrix_synapse.internal_fqdn
+}
+
+output "matrix_synapse_container_app_name" {
+  value = module.matrix_synapse.container_app_name
+}
+
 output "email_relay_function_name" {
   value = module.email_relay_function.function_app_name
 }

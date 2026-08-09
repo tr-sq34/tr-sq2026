@@ -13,3 +13,7 @@ output "managed_identity_client_id" {
 output "managed_identity_principal_id" {
   value = azurerm_user_assigned_identity.app.principal_id
 }
+
+output "container_app_environment_id" {
+  value = local.container_app_environment_id
+}

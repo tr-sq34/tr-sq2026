@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.75"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -159,6 +163,188 @@ resource "azurerm_key_vault_secret" "jwt_secret" {
   depends_on = [azurerm_key_vault_access_policy.deployer]
 }
 
+# --- Externally issued secrets -------------------------------------------
+# Stripe issues these; Terraform cannot generate them. They are created with a
+# placeholder and then set to the real value out of band, so ignore_changes is
+# what keeps the next apply from resetting live payment credentials back to the
+# placeholder. Without it, rotating the key in the portal silently breaks the
+# next deploy instead of the deploy adopting it.
+
+moved {
+  from = azurerm_key_vault_secret.app["STRIPE-SECRET-KEY"]
+  to   = azurerm_key_vault_secret.stripe_secret_key
+}
+
+moved {
+  from = azurerm_key_vault_secret.app["STRIPE-WEBHOOK-SECRET"]
+  to   = azurerm_key_vault_secret.stripe_webhook_secret
+}
+
+resource "azurerm_key_vault_secret" "stripe_secret_key" {
+  name         = "STRIPE-SECRET-KEY"
+  value        = var.stripe_secret_key_initial
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+resource "azurerm_key_vault_secret" "stripe_webhook_secret" {
+  name         = "STRIPE-WEBHOOK-SECRET"
+  value        = var.stripe_webhook_secret_initial
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# --- Service-to-service secrets -----------------------------------------
+# Same reasoning as the Matrix block below: a value committed to key_vault_secrets
+# is a value published in a git repository. Both of these were placeholders there.
+
+# Authorises internal calls between services — the auction hand-off from
+# community-service to the messaging gateway is the only current caller. Holding
+# it means being able to open a conversation between any two users.
+resource "random_password" "internal_service_token" {
+  length  = 48
+  special = false
+}
+
+# Keys the HMAC over email verification codes, so it decides whether a code is
+# accepted. Replacing it invalidates codes that are already in users' inboxes;
+# they are valid for minutes, so the cost is a handful of resend requests.
+resource "random_password" "email_code_hmac_secret" {
+  length  = 48
+  special = false
+}
+
+moved {
+  from = azurerm_key_vault_secret.app["INTERNAL-SERVICE-TOKEN"]
+  to   = azurerm_key_vault_secret.internal_service_token
+}
+
+moved {
+  from = azurerm_key_vault_secret.app["EMAIL-CODE-HMAC-SECRET"]
+  to   = azurerm_key_vault_secret.email_code_hmac_secret
+}
+
+# Neither carries ignore_changes: both are replacing a value that was committed
+# to the repository and must therefore actually change on this apply. Once
+# written, random_password keeps its result in state, so later applies are
+# no-ops. To rotate deliberately, taint the random_password and redeploy the
+# consuming services together.
+resource "azurerm_key_vault_secret" "internal_service_token" {
+  name         = "INTERNAL-SERVICE-TOKEN"
+  value        = random_password.internal_service_token.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+resource "azurerm_key_vault_secret" "email_code_hmac_secret" {
+  name         = "EMAIL-CODE-HMAC-SECRET"
+  value        = random_password.email_code_hmac_secret.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# --- Matrix secrets ------------------------------------------------------
+# These four are generated instead of being listed in key_vault_secrets. That
+# map lives in environments/prod/main.tf, so anything in it is a literal in a
+# git repository — and each of these values is enough on its own to impersonate
+# any user on the homeserver.
+
+# The token the gateway presents to Synapse. It authorises impersonation of
+# every user in the application service namespace.
+resource "random_password" "matrix_appservice_token" {
+  length  = 48
+  special = false
+}
+
+# Synapse presents this one when calling the application service back. It must
+# never equal the as_token; Synapse rejects a registration file where they match.
+resource "random_password" "matrix_appservice_hs_token" {
+  length  = 48
+  special = false
+}
+
+# Signs every access token Synapse issues. Knowing it means being able to mint a
+# valid token for any account.
+resource "random_password" "matrix_macaroon" {
+  length  = 48
+  special = false
+}
+
+resource "random_password" "matrix_form" {
+  length  = 48
+  special = false
+}
+
+moved {
+  from = azurerm_key_vault_secret.app["MATRIX-APPSERVICE-TOKEN"]
+  to   = azurerm_key_vault_secret.matrix_appservice_token
+}
+
+moved {
+  from = azurerm_key_vault_secret.app["MATRIX-APPSERVICE-HS-TOKEN"]
+  to   = azurerm_key_vault_secret.matrix_appservice_hs_token
+}
+
+# No ignore_changes on the two tokens below: they previously held a committed
+# `change_me_...` placeholder, and this apply has to replace it. Both consumers
+# read the secret at container start, so they stay in agreement until the next
+# deploy restarts them together.
+resource "azurerm_key_vault_secret" "matrix_appservice_token" {
+  name         = "MATRIX-APPSERVICE-TOKEN"
+  value        = random_password.matrix_appservice_token.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+resource "azurerm_key_vault_secret" "matrix_appservice_hs_token" {
+  name         = "MATRIX-APPSERVICE-HS-TOKEN"
+  value        = random_password.matrix_appservice_hs_token.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# These two are pinned to their first value. Changing macaroon_secret_key
+# invalidates every access token Synapse has ever issued, logging out every
+# device on the platform, so it must survive losing and rebuilding the state
+# file.
+resource "azurerm_key_vault_secret" "matrix_macaroon_secret" {
+  name         = "MATRIX-MACAROON-SECRET"
+  value        = random_password.matrix_macaroon.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+resource "azurerm_key_vault_secret" "matrix_form_secret" {
+  name         = "MATRIX-FORM-SECRET"
+  value        = random_password.matrix_form.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
 resource "azurerm_key_vault_key" "jwt_signing" {
   name         = "turksquare-identity-jwt-signing"
   key_vault_id = azurerm_key_vault.main.id
@@ -210,17 +396,41 @@ resource "azurerm_servicebus_queue" "community_profile_projection" {
   name         = "community-profile-projection"
   namespace_id = azurerm_servicebus_namespace.main.id
 
-  default_message_ttl = "P14D"
-  lock_duration       = "PT5M"
+  default_message_ttl   = "P14D"
+  lock_duration         = "PT5M"
   max_size_in_megabytes = 1024
+}
+
+# Identity publishes user upserts here and Community publishes block edges; the
+# messaging projection worker is the only consumer. It is a separate queue from
+# community-profile-projection so a poisoned community event cannot stall the
+# projection that gates every direct message.
+resource "azurerm_servicebus_queue" "messaging_projection" {
+  name         = "messaging-projection"
+  namespace_id = azurerm_servicebus_namespace.main.id
+
+  default_message_ttl   = "P14D"
+  lock_duration         = "PT5M"
+  max_size_in_megabytes = 1024
+
+  # Producers set message_id to the outbox row id, so a crash between the send
+  # and the published_at update is collapsed by the broker instead of being
+  # re-delivered. The consumer is idempotent regardless; this is defence in depth.
+  requires_duplicate_detection            = true
+  duplicate_detection_history_time_window = "PT1H"
+
+  # A message that fails ten times is a poison message, not a transient fault.
+  # Dead-lettering it keeps the queue draining while the failure stays visible.
+  max_delivery_count                   = 10
+  dead_lettering_on_message_expiration = true
 }
 
 resource "azurerm_servicebus_queue" "verification_capability" {
   name         = "verification-capability"
   namespace_id = azurerm_servicebus_namespace.main.id
 
-  default_message_ttl = "P14D"
-  lock_duration       = "PT5M"
+  default_message_ttl   = "P14D"
+  lock_duration         = "PT5M"
   max_size_in_megabytes = 1024
 }
 
@@ -228,18 +438,18 @@ resource "azurerm_servicebus_queue" "document_scan" {
   name         = "document-scan"
   namespace_id = azurerm_servicebus_namespace.main.id
 
-  default_message_ttl = "P14D"
-  lock_duration       = "PT5M"
+  default_message_ttl   = "P14D"
+  lock_duration         = "PT5M"
   max_size_in_megabytes = 1024
 }
 
 resource "azurerm_storage_account" "media" {
-  name                     = "stturksquaremedia${var.environment}cu"
-  resource_group_name      = azurerm_resource_group.turksquare.name
-  location                 = azurerm_resource_group.turksquare.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  min_tls_version          = "TLS1_2"
+  name                            = "stturksquaremedia${var.environment}cu"
+  resource_group_name             = azurerm_resource_group.turksquare.name
+  location                        = azurerm_resource_group.turksquare.location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
 
   tags = local.base_tags
@@ -320,4 +530,42 @@ resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.main.id
   value     = "POSTGIS"
+}
+
+# A flexible server is created with only `postgres` and the template databases.
+# Every service's DATABASE_URL names one of these, so without them each service
+# fails at the first connection with `database "identity" does not exist` — and
+# the migration jobs never get far enough to create anything.
+#
+# If a database was already created by hand, `terraform apply` will report that
+# the resource already exists; import it rather than renaming it:
+#   terraform import 'module.shared.azurerm_postgresql_flexible_server_database.service["identity"]' <server_id>/databases/identity
+resource "azurerm_postgresql_flexible_server_database" "service" {
+  for_each = toset(["identity", "community", "messaging", "verification"])
+
+  name      = each.key
+  server_id = azurerm_postgresql_flexible_server.main.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+
+  # Both attributes above are ForceNew, and dropping a database takes every row
+  # in it with no confirmation step.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Synapse refuses to start against a database whose collation or ctype is not
+# `C`: PostgreSQL sorts differently under a locale-aware collation, and Synapse's
+# state resolution depends on byte ordering. This cannot be changed after
+# creation, so it is deliberately not part of the loop above.
+resource "azurerm_postgresql_flexible_server_database" "matrix" {
+  name      = "matrix"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  charset   = "UTF8"
+  collation = "C"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

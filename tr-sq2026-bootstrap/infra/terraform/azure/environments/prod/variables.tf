@@ -78,6 +78,11 @@ variable "messaging_gateway_image_tag" {
   default = "latest"
 }
 
+variable "matrix_synapse_image_tag" {
+  type    = string
+  default = "latest"
+}
+
 variable "resend_api_key_initial" {
   description = "Initial placeholder value for the RESEND-API-KEY Key Vault secret. The real value must be updated manually after provisioning."
   type        = string
