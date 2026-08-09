@@ -13,6 +13,7 @@ import '../../features/profile/application/profile_controller.dart';
 import '../../features/messaging/application/direct_conversation_controller.dart';
 import '../../features/messaging/application/messaging_controller.dart';
 import '../../features/messaging/domain/repositories/direct_message_repository.dart';
+import '../../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
 import '../../features/home/application/community_home_controller.dart';
 import '../../features/verification/application/member_capabilities_controller.dart';
@@ -40,6 +41,7 @@ class AppRouter {
     required this.profileController,
     required this.messagingController,
     required this.directMessageRepository,
+    required this.messageModerationRepository,
     required this.communityHomeController,
     required this.memberCapabilitiesController,
   });
@@ -56,6 +58,7 @@ class AppRouter {
   final ProfileController profileController;
   final MessagingController messagingController;
   final DirectMessageRepository directMessageRepository;
+  final MessageModerationRepository messageModerationRepository;
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
 
@@ -124,6 +127,7 @@ class AppRouter {
                   conversationId: conversationId,
                   viewerId: authController.user?.id ?? '',
                 ),
+            moderationRepository: messageModerationRepository,
           ),
         );
       case AppRoutes.register:

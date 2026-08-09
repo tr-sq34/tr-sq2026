@@ -4,9 +4,10 @@ import { ContentStudio } from '@/components/content-studio';
 const sections: Record<string, { title: string; text: string }> = {
   content: { title: 'İçerik Stüdyosu', text: 'Resmî hesaplar, Akış postları ve Story yayınlama sözleşmesi Gatework API üzerinden etkinleştirilecek.' },
   members: { title: 'Üyeler', text: 'Üye arama, durum, oturum iptali ve destek notları; parolalar veya tokenlar asla gösterilmez.' },
-  moderation: { title: 'Moderasyon Merkezi', text: 'Gerçek rapor sözleşmeleri bağlandığında inceleme kuyruğu burada açılır.' },
+  // moderation and communications now have their own routes backed by the
+  // messaging gateway; a static segment wins over this catch-all, so leaving
+  // their placeholders here would only be dead copy.
   marketplace: { title: 'Çarşı ve İhaleler', text: 'İlan ve ihale operasyonları Community API hazır olduğunda role bağlı açılır.' },
-  communications: { title: 'Mesajlar ve Forum', text: 'Matrix ve Flarum henüz etkin değil. Özel mesaj içerikleri varsayılan olarak görüntülenmez.' },
   safety: { title: 'Güvenlik ve SOS', text: 'SOS iş akışı, ayrı yetki ve süreli konum erişimi gerektirir.' },
   analytics: { title: 'Analitik ve Konum', text: 'Yalnızca toplulaştırılmış şehir/eyalet metrikleri gösterilecektir.' },
   verification: { title: 'Doğrulama', text: 'Stripe Identity sonuçları ileride belge içeriği olmadan burada görünür.' },

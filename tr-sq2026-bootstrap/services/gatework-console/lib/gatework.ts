@@ -11,7 +11,7 @@ async function identityFetch(path: string, init: RequestInit, accessToken: strin
   const response = await fetch(`${identityBase()}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}`, ...(init.headers ?? {}) }, cache: 'no-store' });
   if (!response.ok) throw new Error(`IDENTITY_${response.status}`); return response;
 }
-async function delegation(accessToken: string) {
+export async function delegation(accessToken: string) {
   const response = await identityFetch('/v1/auth/gatework/delegation', { method: 'POST', body: '{}' }, accessToken);
   return delegationSchema.parse(await response.json()).data.accessToken;
 }

@@ -45,6 +45,9 @@ class ApiMessagingRepository
     preview: '',
     updatedAt: DateTime.parse(json['lastMessageAt'] as String).toLocal(),
     kind: ConversationKind.direct,
+    // Who to block if the user asks to. The gateway resolves it per viewer, so
+    // it is already the other side rather than either end of the pair.
+    participantId: json['participantId'] as String?,
   );
 
   @override
