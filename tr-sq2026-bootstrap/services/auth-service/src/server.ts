@@ -7,7 +7,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { importJWK, jwtVerify } from 'jose';
 import { keyClient, signWithKeyVault } from './infrastructure/azureKeyVault.js';
-import { sendCommunityProfileEvent } from './infrastructure/azureServiceBus.js';
+import { closeServiceBus, isQueueConfigured, sendOutboxEvent, type OutboxQueue } from './infrastructure/azureServiceBus.js';
 
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
@@ -35,9 +35,15 @@ const authActionBaseUrl = required('AUTH_ACTION_BASE_URL');
 const emailRelayEndpoint = required('EMAIL_RELAY_FUNCTION_NAME');
 const passwordSafetyEndpoint = required('PASSWORD_SAFETY_FUNCTION_NAME');
 
-const communityProjectionQueueEnabled = Boolean(
-  process.env.AZURE_SERVICE_BUS_CONNECTION_STRING && process.env.AZURE_COMMUNITY_PROFILE_QUEUE_NAME
-);
+/**
+ * Each outbox event type drains to its own queue. A queue that is not
+ * configured is not an error: the events stay durable in
+ * `identity_outbox_events` and are delivered once the variable is set.
+ */
+const OUTBOX_ROUTES: ReadonlyArray<{ queue: OutboxQueue; eventType: string }> = [
+  { queue: 'community-profile', eventType: 'community.profile_upserted' },
+  { queue: 'messaging-projection', eventType: 'messaging.user_upserted' },
+];
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
 
 const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128) });
@@ -183,26 +189,58 @@ async function signAccessToken(user: { id: string }, options: { audience?: strin
 // outbox record, then this publisher delivers it to Community. A crash between
 // those two operations is safe because pending records are retried. Consumers
 // use the event id as their idempotency key, so duplicate SQS delivery is safe.
-async function publishCommunityProfileOutbox() {
-  if (!communityProjectionQueueEnabled) return;
-  const pending = await db.query<{ id: string; payload: unknown }>(
-    `SELECT id,payload FROM identity_outbox_events
-     WHERE published_at IS NULL AND event_type='community.profile_upserted'
+async function publishOutbox(queue: OutboxQueue, eventType: string) {
+  if (!isQueueConfigured(queue)) return;
+  const pending = await db.query<{ id: string; payload: unknown; created_at: Date }>(
+    `SELECT id,payload,created_at FROM identity_outbox_events
+     WHERE published_at IS NULL AND event_type=$1
      ORDER BY created_at ASC LIMIT 20`,
+    [eventType],
   );
   for (const event of pending.rows) {
     try {
-      await sendCommunityProfileEvent({
+      await sendOutboxEvent(queue, {
         eventId: event.id,
-        eventType: 'community.profile_upserted',
+        eventType,
+        // created_at is assigned inside the same transaction as the domain
+        // write, so it is the moment the state actually changed. Using publish
+        // time here would let a retried old event overwrite newer state.
+        occurredAt: event.created_at.toISOString(),
         payload: event.payload,
       });
       await db.query('UPDATE identity_outbox_events SET published_at=now(),attempts=attempts+1 WHERE id=$1 AND published_at IS NULL', [event.id]);
     } catch (error) {
       await db.query('UPDATE identity_outbox_events SET attempts=attempts+1 WHERE id=$1', [event.id]);
-      app.log.warn({ err: error, eventId: event.id }, 'Community profile outbox delivery deferred');
+      app.log.warn({ err: error, eventId: event.id, eventType }, 'Identity outbox delivery deferred');
     }
   }
+}
+
+async function publishAllOutboxes() {
+  for (const route of OUTBOX_ROUTES) {
+    await publishOutbox(route.queue, route.eventType).catch((error) => {
+      app.log.warn({ err: error, queue: route.queue }, 'Identity outbox drain failed');
+    });
+  }
+}
+
+/**
+ * Queues the messaging projection event for a user.
+ *
+ * Must be called with the same client as the domain write. The messaging
+ * gateway refuses conversations for users missing from its projection, so an
+ * event lost between the two writes would leave an account permanently unable
+ * to receive messages.
+ */
+async function queueMessagingUserUpsert(
+  client: pg.PoolClient,
+  user: { id: string; displayName: string; active: boolean },
+) {
+  await client.query(
+    `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
+     VALUES('user',$1,'messaging.user_upserted',$2::jsonb)`,
+    [user.id, JSON.stringify({ userId: user.id, displayName: user.displayName, active: user.active })],
+  );
 }
 
 async function issueSession(user: { id: string; email: string }, existingFamilyId?: string) {
@@ -338,7 +376,16 @@ async function verifyEmailVerificationCode(userId: string, code: string): Promis
       return 'invalid';
     }
     await client.query('UPDATE email_verification_codes SET consumed_at=now() WHERE id=$1', [record.id]);
-    await client.query('UPDATE users SET email_verified_at=COALESCE(email_verified_at, now()), updated_at=now() WHERE id=$1', [userId]);
+    // The WHERE clause makes the transition observable: rowCount is 1 only the
+    // first time the account is verified, so the messaging projection event is
+    // queued exactly once rather than on every replayed verification.
+    const verified = await client.query<{ display_name: string }>(
+      'UPDATE users SET email_verified_at=now(), updated_at=now() WHERE id=$1 AND email_verified_at IS NULL RETURNING display_name',
+      [userId],
+    );
+    if (verified.rowCount) {
+      await queueMessagingUserUpsert(client, { id: userId, displayName: verified.rows[0]!.display_name, active: true });
+    }
     await client.query('COMMIT');
     return 'verified';
   } catch (error) {
@@ -544,7 +591,26 @@ app.post('/v1/auth/email/verify', { config: { rateLimit: { max: 10, timeWindow: 
   const input = actionSchema.parse(request.body);
   const userId = await consumeActionToken(input.token, 'verify_email');
   if (!userId) return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_TOKEN', message: 'Doğrulama bağlantısı geçersiz veya süresi dolmuş.' } });
-  await db.query('UPDATE users SET email_verified_at=COALESCE(email_verified_at, now()), updated_at=now() WHERE id=$1', [userId]);
+  // Wrapped in a transaction so the verification and its messaging projection
+  // event commit together; the link flow must reach the projection exactly like
+  // the code flow does.
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const verified = await client.query<{ display_name: string }>(
+      'UPDATE users SET email_verified_at=now(), updated_at=now() WHERE id=$1 AND email_verified_at IS NULL RETURNING display_name',
+      [userId],
+    );
+    if (verified.rowCount) {
+      await queueMessagingUserUpsert(client, { id: userId, displayName: verified.rows[0]!.display_name, active: true });
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
   return reply.code(204).send();
 });
 
@@ -811,17 +877,24 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
 await seedGateworkOwner();
 await app.listen({ port: Number(process.env.PORT ?? 8080), host: '0.0.0.0' });
 
-if (communityProjectionQueueEnabled) {
-  void publishCommunityProfileOutbox();
-  const outboxTimer = setInterval(() => void publishCommunityProfileOutbox(), 5000);
+for (const route of OUTBOX_ROUTES) {
+  if (isQueueConfigured(route.queue)) continue;
+  app.log.warn(
+    { queue: route.queue, eventType: route.eventType },
+    'Azure Service Bus queue is not configured; these events stay durable in the Identity outbox until it is',
+  );
+}
+
+if (OUTBOX_ROUTES.some((route) => isQueueConfigured(route.queue))) {
+  void publishAllOutboxes();
+  const outboxTimer = setInterval(() => void publishAllOutboxes(), 5000);
   outboxTimer.unref();
-} else {
-  app.log.warn('Azure Service Bus community projection queue is not configured; onboarding events remain durable in the Identity outbox');
 }
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'Identity service stopping');
   await app.close();
+  await closeServiceBus();
   await db.end();
   process.exit(0);
 };

@@ -5,7 +5,9 @@ import rateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
 import { importJWK, jwtVerify } from 'jose';
 import { z } from 'zod';
+import type pg from 'pg';
 import { createDatabasePool } from './database.js';
+import { closeServiceBus, isMessagingProjectionConfigured, sendMessagingProjectionEvent } from './infrastructure/azureServiceBus.js';
 import { generateMediaUploadSasUrl, generateMediaReadSasUrl, headMediaBlob } from './infrastructure/azureBlob.js';
 import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js';
 
@@ -465,4 +467,136 @@ app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/listings/:id/auction',async(request,reply)=>{try{const userId=await viewer(request.headers);const listingId=z.string().uuid().parse((request.params as {id:string}).id);const input=auctionBody.parse(request.body);const eligible=await db.query('SELECT 1 FROM member_capabilities WHERE user_id=$1 AND auction_seller_eligible',[userId]);if(!eligible.rows[0])return reply.code(403).send({error:{code:'VERIFICATION_REQUIRED',message:'İhale açmak için Onaylı Hesap rozeti gerekir.'}});const row=await db.query<{id:string}>('INSERT INTO marketplace_auctions(listing_id,seller_id,starting_price,minimum_increment,starts_at,ends_at) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND owner_id=$2 AND status=\'active\') RETURNING id',[listingId,userId,input.startingPrice,input.minimumIncrement,input.startsAt,input.endsAt]);if(!row.rows[0])return reply.code(404).send({error:{code:'LISTING_NOT_AVAILABLE'}});return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'AUCTION_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/auctions/:id/bids',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=bidBody.parse(request.body);await client.query('BEGIN');const auction=await client.query<{seller_id:string;starting_price:string;minimum_increment:string;starts_at:Date;ends_at:Date}>('SELECT seller_id,starting_price,minimum_increment,starts_at,ends_at FROM marketplace_auctions WHERE id=$1 FOR UPDATE',[id]);const a=auction.rows[0];if(!a||a.seller_id===userId||a.starts_at>new Date()||a.ends_at<=new Date())throw Error();const top=await client.query<{amount:string}>('SELECT amount FROM marketplace_auction_bids WHERE auction_id=$1 ORDER BY amount DESC,created_at ASC LIMIT 1',[id]);const minimum=Number(top.rows[0]?.amount??a.starting_price)+(top.rows[0]?Number(a.minimum_increment):0);if(input.amount<minimum)throw Error();const bid=await client.query<{id:string}>('INSERT INTO marketplace_auction_bids(auction_id,bidder_id,amount) VALUES($1,$2,$3) RETURNING id',[id,userId,input.amount]);await client.query('COMMIT');return reply.code(201).send({data:bid.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'BID_REJECTED',message:'Teklif kabul edilemedi.'}});}finally{client.release();}});
+// --- Blocking -----------------------------------------------------------
+// Community owns the block edge because it owns the social graph. Messaging
+// only ever sees a projection of it, published through the outbox below.
+const blockBody = z.object({ userId: z.string().uuid() });
+const blockQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100) });
+
+async function queueBlockEvent(client: pg.PoolClient, eventType: 'messaging.user_blocked' | 'messaging.user_unblocked', blockerId: string, blockedId: string) {
+  await client.query(
+    `INSERT INTO community_outbox_events(aggregate_type,aggregate_id,event_type,payload)
+     VALUES('user_block',$1,$2,$3::jsonb)`,
+    [blockerId, eventType, JSON.stringify({ blockerId, blockedId })],
+  );
+}
+
+app.post('/v1/community/blocks', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const blockerId = await viewer(request.headers);
+    const { userId: blockedId } = blockBody.parse(request.body);
+    if (blockerId === blockedId) return reply.code(400).send({ error: { code: 'BLOCK_SELF_NOT_ALLOWED', message: 'Kendinizi engelleyemezsiniz.' } });
+    await client.query('BEGIN');
+    await client.query('INSERT INTO user_blocks(blocker_id,blocked_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [blockerId, blockedId]);
+    // A block severs the relationship in both directions, otherwise the blocked
+    // account keeps story and friends-only feed access it can no longer be
+    // removed from.
+    await client.query(
+      'UPDATE relationship_projection SET active=false,updated_at=now() WHERE active AND ((viewer_id=$1 AND subject_id=$2) OR (viewer_id=$2 AND subject_id=$1))',
+      [blockerId, blockedId],
+    );
+    // Emitted even when the row already existed: a re-block is the cheapest way
+    // for a user to repair a projection whose earlier event was lost, and the
+    // consumer is idempotent.
+    await queueBlockEvent(client, 'messaging.user_blocked', blockerId, blockedId);
+    await client.query('COMMIT');
+    void publishCommunityOutbox();
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BLOCK_FAILED', message: 'Kullanıcı engellenemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/v1/community/blocks/:userId', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const blockerId = await viewer(request.headers);
+    const blockedId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    await client.query('BEGIN');
+    await client.query('DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2', [blockerId, blockedId]);
+    // The relationship is not restored: unblocking undoes the block, not the
+    // follow that the block removed.
+    await queueBlockEvent(client, 'messaging.user_unblocked', blockerId, blockedId);
+    await client.query('COMMIT');
+    void publishCommunityOutbox();
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'UNBLOCK_FAILED', message: 'Engel kaldırılamadı.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/v1/community/blocks', async (request, reply) => {
+  try {
+    const blockerId = await viewer(request.headers);
+    const { limit } = blockQuery.parse(request.query);
+    const rows = await db.query<{ blocked_id: string; display_name: string; created_at: Date }>(
+      `SELECT b.blocked_id,COALESCE(p.display_name,'TurkSquare üyesi') display_name,b.created_at
+       FROM user_blocks b
+       LEFT JOIN community_profile_projection p ON p.user_id=b.blocked_id
+       WHERE b.blocker_id=$1
+       ORDER BY b.created_at DESC
+       LIMIT $2`,
+      [blockerId, limit],
+    );
+    return { data: rows.rows.map((row) => ({ userId: row.blocked_id, displayName: row.display_name, createdAt: row.created_at.toISOString() })) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BLOCKS_UNAVAILABLE', message: 'Engellenen kullanıcılar yüklenemedi.' } });
+  }
+});
+
+// --- Outbox publisher ---------------------------------------------------
+// Same contract as Identity's: the domain write and the outbox row commit
+// together, delivery is retried until the broker accepts it, and `occurredAt`
+// is the row's commit time so the consumer can discard stale writes.
+let publishing = false;
+
+async function publishCommunityOutbox(): Promise<void> {
+  if (publishing || !isMessagingProjectionConfigured()) return;
+  publishing = true;
+  try {
+    const pending = await db.query<{ id: string; event_type: string; payload: unknown; created_at: Date }>(
+      `SELECT id,event_type,payload,created_at FROM community_outbox_events
+       WHERE published_at IS NULL ORDER BY created_at ASC LIMIT 20`,
+    );
+    for (const event of pending.rows) {
+      try {
+        await sendMessagingProjectionEvent({ eventId: event.id, eventType: event.event_type, occurredAt: event.created_at.toISOString(), payload: event.payload });
+        await db.query('UPDATE community_outbox_events SET published_at=now(),attempts=attempts+1 WHERE id=$1 AND published_at IS NULL', [event.id]);
+      } catch (error) {
+        await db.query('UPDATE community_outbox_events SET attempts=attempts+1 WHERE id=$1', [event.id]);
+        app.log.warn({ err: error, eventId: event.id, eventType: event.event_type }, 'Community outbox delivery deferred');
+        break; // The broker is unavailable; the remaining rows wait for the next tick.
+      }
+    }
+  } catch (error) {
+    app.log.warn({ err: error }, 'Community outbox drain failed');
+  } finally {
+    publishing = false;
+  }
+}
+
+if (isMessagingProjectionConfigured()) {
+  setInterval(() => { void publishCommunityOutbox(); }, 5_000).unref();
+} else {
+  app.log.warn('AZURE_MESSAGING_PROJECTION_QUEUE_NAME is not configured; blocks will not reach messaging');
+}
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    void (async () => {
+      await app.close().catch(() => undefined);
+      await closeServiceBus();
+      await db.end().catch(() => undefined);
+      process.exit(0);
+    })();
+  });
+}
+
 await app.listen({ port: Number(process.env.PORT ?? 8081), host: '0.0.0.0' });
