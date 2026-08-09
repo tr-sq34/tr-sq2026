@@ -5,6 +5,8 @@
   "main": "src/functions/*.js",
   "scripts": {
     "start": "func start",
+    "//build": "Plain JavaScript, so there is nothing to compile. The CI baseline still runs `npm run build` for every service, and a syntax check is the closest equivalent to the tsc pass the TypeScript services get.",
+    "build": "node --check src/functions/emailRelay.js",
     "test": "echo \"No tests yet\" && exit 0"
   },
   "dependencies": {
