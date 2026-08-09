@@ -559,7 +559,7 @@ module "email_relay_function" {
   location            = var.location
   resource_group_name = module.shared.resource_group_name
   tenant_id           = var.tenant_id
-  deployer_object_id  = var.deployer_object_id
+  deployer_object_ids = var.deployer_object_ids
 
   service_plan_sku                       = "Y1"
   key_vault_id                           = module.shared.key_vault_id
@@ -579,7 +579,7 @@ module "password_breach_check_function" {
   location            = var.location
   resource_group_name = module.shared.resource_group_name
   tenant_id           = var.tenant_id
-  deployer_object_id  = var.deployer_object_id
+  deployer_object_ids = var.deployer_object_ids
 
   service_plan_sku                       = "Y1"
   key_vault_id                           = module.shared.key_vault_id

@@ -54,18 +54,42 @@ function Upload-ZipAndGetSas {
     $resolvedZip = Resolve-Path $LocalZipPath -ErrorAction Stop
     Write-Host "`n[UPLOAD] Yukleniyor: $resolvedZip -> $StorageAccount/$Container/$BlobName"
 
-    $uploadResult = & az storage blob upload `
-        --account-name $StorageAccount `
-        --container-name $Container `
-        --file $resolvedZip `
-        --name $BlobName `
-        --overwrite true `
-        --auth-mode login `
-        -o json 2>&1 | Tee-Object -Variable uploadOutput | ConvertFrom-Json
+    # Piped straight into ConvertFrom-Json this used to swallow its own
+    # diagnosis: az writes a plain-text "ERROR: ..." line on failure, the
+    # converter choked on the 'E', and $ErrorActionPreference = "Stop" aborted
+    # the run with a JSON parse error before the message below could be printed.
+    # Capture first, check the exit code, convert last.
+    #
+    # The retry is for a fresh role assignment. Terraform grants Storage Blob
+    # Data Contributor in the same pipeline run a couple of jobs earlier, and
+    # Azure's RBAC caches can take a few minutes to catch up - the first attempt
+    # gets 403 on a permission that is already correct.
+    $attempt = 0
+    $uploadResult = $null
+    while ($true) {
+        $attempt++
+        $uploadOutput = & az storage blob upload `
+            --account-name $StorageAccount `
+            --container-name $Container `
+            --file $resolvedZip `
+            --name $BlobName `
+            --overwrite true `
+            --auth-mode login `
+            -o json 2>&1
 
-    if ($LASTEXITCODE -ne 0 -or -not $uploadResult) {
-        Write-Warning "Azure CLI cikti:`n$($uploadOutput -join "`n")"
-        throw "Blob upload basarisiz: $StorageAccount/$Container/$BlobName`n`nOlasI nedenler:`n- Oturumunuzun ilgili Storage Account'ta 'Storage Blob Data Contributor' rolU yok.`n- Azure CLI dogru subscription'a bagli degil: 'az account set --subscription <id>'`n- Entra ID hesabiniz yeterli izne sahip degil.`n`nCozum: Terraform'da var.deployer_object_id degerini deploy yapan hesabin Object ID'sine ayarlayin ve tekrar apply edin."
+        if ($LASTEXITCODE -eq 0) {
+            $uploadResult = $uploadOutput | Out-String | ConvertFrom-Json
+            break
+        }
+
+        if ($attempt -ge 5) {
+            Write-Warning "Azure CLI cikti:`n$($uploadOutput -join "`n")"
+            throw "Blob upload basarisiz: $StorageAccount/$Container/$BlobName`n`nOlasI nedenler:`n- Oturumunuzun ilgili Storage Account'ta 'Storage Blob Data Contributor' rolU yok.`n- Azure CLI dogru subscription'a bagli degil: 'az account set --subscription <id>'`n- Entra ID hesabiniz yeterli izne sahip degil.`n`nCozum: terraform.tfvars icindeki deployer_object_ids listesine deploy yapan hesabin Object ID'sini ekleyin ve tekrar apply edin."
+        }
+
+        Write-Warning "   Upload denemesi $attempt basarisiz, 30 saniye sonra tekrar denenecek."
+        Write-Warning "   $($uploadOutput -join "`n")"
+        Start-Sleep -Seconds 30
     }
     Write-Host "   Blob yuklendi: $($uploadResult.name)"
 
@@ -193,6 +217,12 @@ try {
     $pbOk = Test-PasswordBreachCheck
     if (-not $pbOk) {
         Write-Warning "Password Breach Check testi basarisiz! Email relay adimina gecmek istediginize emin misiniz?"
+        # Read-Host on a CI runner throws an end-of-input error, which the catch
+        # at the bottom reports as "HATA: ..." with no hint that the real problem
+        # was the failed test above. Ask only where someone can answer.
+        if ($env:CI) {
+            throw "Password Breach Check testi basarisiz ve ortam etkilesimsiz; email relay adimina gecilmiyor."
+        }
         $continue = Read-Host "Devam etmek icin 'yes' yazin"
         if ($continue -ne "yes") {
             throw "Kullanici email relay adimini iptal etti."

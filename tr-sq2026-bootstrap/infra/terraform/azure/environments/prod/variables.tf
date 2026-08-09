@@ -103,8 +103,8 @@ variable "key_vault_admin_object_ids" {
   default     = []
 }
 
-variable "deployer_object_id" {
-  description = "Azure AD object ID of the user, group or service principal that deploys function zip packages to the storage accounts. If empty, the Terraform caller is used."
-  type        = string
-  default     = ""
+variable "deployer_object_ids" {
+  description = "Object IDs of every principal that uploads function zip packages. Set in terraform.tfvars rather than an environment variable for the same reason as key_vault_admin_object_ids: a run without the variable would fall back to the caller alone and revoke everyone else."
+  type        = list(string)
+  default     = []
 }

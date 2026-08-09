@@ -12,6 +12,14 @@ key_vault_admin_object_ids = [
   "5c8d6271-40f5-47fe-a3a8-c5adcafc8e29",
 ]
 
+# Function zip'lerini blob'a yukleyen taraflar. Ayni iki kimlik. Storage
+# Account'ta Contributor olmak yetmiyor; blob yazmak icin ayrica veri duzlemi
+# rolu gerekiyor ve CI'da o rol yoktu.
+deployer_object_ids = [
+  "8551120e-7a3e-4651-ae23-6cd9b49784b9",
+  "5c8d6271-40f5-47fe-a3a8-c5adcafc8e29",
+]
+
 postgres_sku            = "GP_Standard_D2s_v3"
 postgres_storage_mb     = 131072
 postgres_admin_username = "turkadmin"
