@@ -56,6 +56,15 @@ output "postgresql_server_fqdn" {
   value = azurerm_postgresql_flexible_server.main.fqdn
 }
 
+# Every service and migration job builds its connection string from this. It
+# has to come from here rather than from a variable: the server is set to this
+# same value, so the two can never drift the way they did when the password was
+# supplied by hand.
+output "postgres_admin_password" {
+  value     = random_password.postgres_admin.result
+  sensitive = true
+}
+
 output "postgresql_server_id" {
   value = azurerm_postgresql_flexible_server.main.id
 }

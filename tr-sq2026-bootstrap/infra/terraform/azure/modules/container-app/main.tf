@@ -174,6 +174,16 @@ resource "azurerm_container_app" "main" {
         value = var.tenant_id
       }
 
+      # The identity has to be named, not discovered. These apps carry a
+      # user-assigned identity and no system-assigned one, and the credential
+      # chain cannot choose between user-assigned identities on its own - it
+      # needs the client ID or it gives up. Every service that reads a secret
+      # from Key Vault at startup refuses to boot without this.
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.app.client_id
+      }
+
       dynamic "env" {
         for_each = var.database_name != "" ? [1] : []
         content {

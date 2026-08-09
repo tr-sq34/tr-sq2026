@@ -59,11 +59,6 @@ variable "postgres_admin_username" {
   default = "turkadmin"
 }
 
-variable "postgres_admin_password" {
-  type      = string
-  sensitive = true
-}
-
 variable "azure_postgres_root_cert_url" {
   type    = string
   default = "https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem"

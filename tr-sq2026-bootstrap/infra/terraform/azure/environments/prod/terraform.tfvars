@@ -16,7 +16,7 @@ postgres_sku            = "GP_Standard_D2s_v3"
 postgres_storage_mb     = 131072
 postgres_admin_username = "turkadmin"
 
-# BU SIFRE ORNEKTIR. GUVENLI bir sifre girin.
-# Terraform apply calistirmadan once mutlaka degistirin.
-# Alternatif: TF_VAR_postgres_admin_password ortam degiskeni kullanin.
-postgres_admin_password = "@!TrkSq2027!"
+# Parola burada degil. Terraform uretiyor ve Key Vault'a POSTGRES-ADMIN-PASSWORD
+# adiyla yaziyor; sunucuya verilen deger ile servislerin kullandigi deger ayni
+# kaynaktan geldigi icin ikisi birbirinden ayrisamiyor. Buradaki eski deger git
+# gecmisine girdigi icin artik gecersiz sayilmalidir.
