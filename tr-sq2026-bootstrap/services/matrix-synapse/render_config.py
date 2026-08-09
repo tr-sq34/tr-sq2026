@@ -6,6 +6,7 @@ string, which would produce a syntactically valid homeserver.yaml with an empty
 database password and a Synapse that fails much later with a confusing error.
 """
 
+import json
 import os
 import re
 import sys
@@ -17,7 +18,12 @@ def render(template: str) -> str:
     missing = sorted({name for name in PATTERN.findall(template) if not os.environ.get(name)})
     if missing:
         raise SystemExit(f"Missing required environment variables: {', '.join(missing)}")
-    return PATTERN.sub(lambda match: os.environ[match.group(1)], template)
+    # Quoted, not pasted in raw. Every placeholder in these templates is a
+    # string scalar and several of them are generated secrets, so sooner or
+    # later one starts with a character YAML reads as syntax - a leading '@'
+    # already took Synapse down once. A JSON string is a valid YAML flow
+    # scalar and json.dumps handles the quoting and escaping.
+    return PATTERN.sub(lambda match: json.dumps(os.environ[match.group(1)]), template)
 
 
 def main() -> None:

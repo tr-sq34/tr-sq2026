@@ -53,11 +53,6 @@ variable "postgres_admin_username" {
   default = "turkadmin"
 }
 
-variable "postgres_admin_password" {
-  type      = string
-  sensitive = true
-}
-
 variable "identity_image_tag" {
   type    = string
   default = "latest"

@@ -275,6 +275,33 @@ resource "azurerm_key_vault_secret" "email_code_hmac_secret" {
   depends_on = [azurerm_key_vault_access_policy.deployer]
 }
 
+# --- PostgreSQL administrator password -------------------------------------
+
+# Generated rather than supplied. The value that used to sit in terraform.tfvars
+# is in the repository history, and it no longer matched the server anyway -
+# every migration job failed authentication because Terraform believed a
+# password the server had never been told about.
+#
+# special = false is not cosmetic. This value is interpolated into a
+# postgresql:// URL for every service and into Synapse's homeserver.yaml; a '@'
+# or a ':' or a leading '#' turns one of those into a parse error at container
+# start, which is exactly how Synapse died. Alphanumeric at 40 characters is
+# stronger than the punctuation would have made it.
+resource "random_password" "postgres_admin" {
+  length  = 40
+  special = false
+}
+
+# Recorded so an operator can reach the database without a Terraform run. It is
+# the only copy outside state.
+resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  name         = "POSTGRES-ADMIN-PASSWORD"
+  value        = random_password.postgres_admin.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
 # --- Gatework console secrets --------------------------------------------
 
 # Encrypts the operator session cookie. Knowing it means being able to forge a
@@ -565,7 +592,7 @@ resource "azurerm_postgresql_flexible_server" "main" {
   backup_retention_days = 7
 
   administrator_login    = var.postgres_admin_username
-  administrator_password = var.postgres_admin_password
+  administrator_password = random_password.postgres_admin.result
 
   delegated_subnet_id = azurerm_subnet.postgres.id
   private_dns_zone_id = azurerm_private_dns_zone.postgres.id

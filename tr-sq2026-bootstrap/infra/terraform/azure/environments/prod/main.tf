@@ -14,7 +14,6 @@ module "shared" {
   postgres_sku            = var.postgres_sku
   postgres_storage_mb     = var.postgres_storage_mb
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
 
   key_vault_admin_object_ids = var.key_vault_admin_object_ids
 
@@ -71,7 +70,7 @@ module "identity_container_app" {
   container_port   = 8080
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "identity"
 
@@ -141,7 +140,7 @@ module "verification_vault_container_app" {
   container_port   = 8082
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "verification"
 
@@ -190,7 +189,7 @@ module "community_container_app" {
   container_port   = 8080
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "community"
 
@@ -251,7 +250,7 @@ module "messaging_gateway_container_app" {
   container_port   = 8080
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "messaging"
 
@@ -316,7 +315,7 @@ module "matrix_synapse" {
 
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   database_name           = module.shared.matrix_database_name
 }
 
@@ -432,7 +431,7 @@ module "messaging_projection_worker" {
   max_replicas = 3
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "messaging"
 
@@ -483,7 +482,7 @@ module "community_profile_projection_worker" {
   max_replicas = 2
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "community"
 
@@ -532,7 +531,7 @@ module "community_media_processor" {
   max_replicas = 2
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "community"
 
@@ -611,7 +610,7 @@ module "identity_migrate_job" {
   image_tag        = var.identity_image_tag
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "identity"
 }
@@ -632,7 +631,7 @@ module "community_migrate_job" {
   image_tag        = var.community_image_tag
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "community"
 }
@@ -653,7 +652,7 @@ module "messaging_migrate_job" {
   image_tag        = var.messaging_gateway_image_tag
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "messaging"
 }
@@ -674,7 +673,7 @@ module "verification_migrate_job" {
   image_tag        = var.verification_vault_image_tag
 
   postgres_admin_username = var.postgres_admin_username
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password = module.shared.postgres_admin_password
   postgres_fqdn           = module.shared.postgresql_server_fqdn
   database_name           = "verification"
 }
