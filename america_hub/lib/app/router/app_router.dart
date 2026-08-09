@@ -10,7 +10,9 @@ import '../../features/community/application/community_special_request_controlle
 import '../../features/events/application/events_controller.dart';
 import '../../features/marketplace/application/marketplace_controller.dart';
 import '../../features/profile/application/profile_controller.dart';
+import '../../features/messaging/application/direct_conversation_controller.dart';
 import '../../features/messaging/application/messaging_controller.dart';
+import '../../features/messaging/domain/repositories/direct_message_repository.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
 import '../../features/home/application/community_home_controller.dart';
 import '../../features/verification/application/member_capabilities_controller.dart';
@@ -37,6 +39,7 @@ class AppRouter {
     required this.marketplaceController,
     required this.profileController,
     required this.messagingController,
+    required this.directMessageRepository,
     required this.communityHomeController,
     required this.memberCapabilitiesController,
   });
@@ -52,6 +55,7 @@ class AppRouter {
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
   final MessagingController messagingController;
+  final DirectMessageRepository directMessageRepository;
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
 
@@ -110,7 +114,17 @@ class AppRouter {
       case AppRoutes.inbox:
         return MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => InboxScreen(controller: messagingController),
+          builder: (_) => InboxScreen(
+            controller: messagingController,
+            // Read at open time, not at construction: the signed-in user is
+            // only known once authentication has completed.
+            createConversationController: (conversationId) =>
+                DirectConversationController(
+                  repository: directMessageRepository,
+                  conversationId: conversationId,
+                  viewerId: authController.user?.id ?? '',
+                ),
+          ),
         );
       case AppRoutes.register:
         return MaterialPageRoute<void>(

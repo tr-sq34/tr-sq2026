@@ -11,6 +11,7 @@ import '../features/events/application/events_controller.dart';
 import '../features/marketplace/application/marketplace_controller.dart';
 import '../features/profile/application/profile_controller.dart';
 import '../features/messaging/application/messaging_controller.dart';
+import '../features/messaging/domain/repositories/direct_message_repository.dart';
 import '../features/home/application/community_home_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
@@ -31,6 +32,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.marketplaceController,
     required this.profileController,
     required this.messagingController,
+    required this.directMessageRepository,
     required this.communityHomeController,
     required this.memberCapabilitiesController,
   });
@@ -46,6 +48,10 @@ class AmericaHubApp extends StatelessWidget {
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
   final MessagingController messagingController;
+
+  /// A chat thread gets its own controller when it is opened, so what is held
+  /// here is the repository behind it rather than a controller instance.
+  final DirectMessageRepository directMessageRepository;
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
 
@@ -68,6 +74,7 @@ class AmericaHubApp extends StatelessWidget {
         marketplaceController: marketplaceController,
         profileController: profileController,
         messagingController: messagingController,
+        directMessageRepository: directMessageRepository,
         communityHomeController: communityHomeController,
         memberCapabilitiesController: memberCapabilitiesController,
       ).onGenerateRoute,

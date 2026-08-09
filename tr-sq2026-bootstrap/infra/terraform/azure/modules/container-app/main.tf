@@ -26,6 +26,16 @@ locals {
       env_name            = s.env_name
     }
   ]
+
+  container_app_environment_id = var.container_app_environment_id != "" ? var.container_app_environment_id : one(azurerm_container_app_environment.main[*].id)
+}
+
+# Keeps callers already in state on their existing environment when the resource
+# above gained `count`. Without this, Terraform would read the un-indexed address
+# as orphaned and plan to destroy the environment every other service runs in.
+moved {
+  from = azurerm_container_app_environment.main
+  to   = azurerm_container_app_environment.main[0]
 }
 
 resource "azurerm_user_assigned_identity" "app" {
@@ -50,7 +60,15 @@ resource "azurerm_key_vault_access_policy" "app" {
   key_permissions    = ["Get", "List", "Sign", "Verify"]
 }
 
+# Every instance of this module declares the same environment name, so each one
+# is a separate state entry pointing at a single ARM resource. That is tolerated
+# for the services already in state, but new callers should pass
+# container_app_environment_id instead: concurrent PUTs to one environment race
+# and ARM rejects the losers with 409. Consolidating the existing callers needs a
+# `terraform state mv`, so it is deliberately not done here.
 resource "azurerm_container_app_environment" "main" {
+  count = var.container_app_environment_id == "" ? 1 : 0
+
   name                = "cae-turksquare-${var.environment}-cu"
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -71,7 +89,7 @@ resource "azurerm_container_app" "main" {
   name                = "ca-${var.service_name}-${var.environment}"
   resource_group_name = var.resource_group_name
 
-  container_app_environment_id = azurerm_container_app_environment.main.id
+  container_app_environment_id = local.container_app_environment_id
   revision_mode                = "Single"
 
   identity {
@@ -79,14 +97,26 @@ resource "azurerm_container_app" "main" {
     identity_ids = [azurerm_user_assigned_identity.app.id]
   }
 
-  ingress {
-    external_enabled = var.expose_externally
-    target_port      = var.container_port
-    transport        = "auto"
+  # Workers (enable_ingress = false) have no listener. Declaring ingress for them
+  # would leave the revision permanently unhealthy.
+  #
+  # The conditional dynamic blocks further down wrap their condition in
+  # nonsensitive(). Comparing a sensitive variable yields a sensitive bool, and
+  # Terraform 1.8 - the version CI pins - refuses to iterate a marked value in a
+  # dynamic for_each. Only whether the URI is empty is unmasked; the URI itself
+  # stays sensitive. Newer Terraform tolerates the mark, which is why this
+  # passed locally and failed in CI.
+  dynamic "ingress" {
+    for_each = var.enable_ingress ? [1] : []
+    content {
+      external_enabled = var.expose_externally
+      target_port      = var.container_port
+      transport        = "auto"
 
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
+      traffic_weight {
+        latest_revision = true
+        percentage      = 100
+      }
     }
   }
 
@@ -109,10 +139,12 @@ resource "azurerm_container_app" "main" {
     max_replicas = var.max_replicas
 
     container {
-      name   = var.service_name
-      image  = "${var.acr_login_server}/${var.image_repository}:${var.image_tag}"
-      cpu    = var.cpu
-      memory = var.memory
+      name    = var.service_name
+      image   = "${var.acr_login_server}/${var.image_repository}:${var.image_tag}"
+      cpu     = var.cpu
+      memory  = var.memory
+      command = var.container_command
+      args    = var.container_args
 
       env {
         name  = "NODE_ENV"
@@ -135,7 +167,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.servicebus_connection_string_secret_uri != "" ? [1] : []
+        for_each = nonsensitive(var.servicebus_connection_string_secret_uri != "") ? [1] : []
         content {
           name        = "AZURE_SERVICE_BUS_CONNECTION_STRING"
           secret_name = "azure-service-bus-connection-string"
@@ -143,7 +175,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.servicebus_connection_string_secret_uri == "" ? [1] : []
+        for_each = nonsensitive(var.servicebus_connection_string_secret_uri == "") ? [1] : []
         content {
           name  = "AZURE_SERVICE_BUS_CONNECTION_STRING"
           value = var.servicebus_connection_string
@@ -168,7 +200,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.storage_account_key_secret_uri != "" ? [1] : []
+        for_each = nonsensitive(var.storage_account_key_secret_uri != "") ? [1] : []
         content {
           name        = "AZURE_STORAGE_ACCOUNT_KEY"
           secret_name = "storage-account-key"
@@ -179,7 +211,7 @@ resource "azurerm_container_app" "main" {
   }
 
   dynamic "secret" {
-    for_each = var.servicebus_connection_string_secret_uri != "" ? [1] : []
+    for_each = nonsensitive(var.servicebus_connection_string_secret_uri != "") ? [1] : []
     content {
       name                = "azure-service-bus-connection-string"
       identity            = azurerm_user_assigned_identity.app.id
@@ -188,7 +220,7 @@ resource "azurerm_container_app" "main" {
   }
 
   dynamic "secret" {
-    for_each = var.storage_account_key_secret_uri != "" ? [1] : []
+    for_each = nonsensitive(var.storage_account_key_secret_uri != "") ? [1] : []
     content {
       name                = "storage-account-key"
       identity            = azurerm_user_assigned_identity.app.id

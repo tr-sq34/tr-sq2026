@@ -1,1 +1,16 @@
-{"name":"password-breach-check","version":"1.0.0","main":"src/functions/*.js","dependencies":{"@azure/functions":"^4.0.0"}}
+{
+  "name": "password-breach-check",
+  "version": "1.0.0",
+  "description": "Azure Function that checks passwords against the k-anonymity breach API",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "//build": "Plain JavaScript, so there is nothing to compile. The CI baseline still runs `npm run build` for every service, and a syntax check is the closest equivalent to the tsc pass the TypeScript services get.",
+    "build": "node --check src/functions/passwordBreachCheck.js"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

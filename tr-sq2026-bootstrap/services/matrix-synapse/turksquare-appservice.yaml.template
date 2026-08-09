@@ -1,14 +1,27 @@
-# Supplied to Synapse at task startup from Secrets Manager. This application
-# service owns only the TurkSquare namespace, preventing normal registration.
+# Rendered at container startup from Key Vault. This application service owns
+# only the TurkSquare namespace, preventing normal registration.
 id: turksquare-messaging-gateway
-url: ${MESSAGING_GATEWAY_INTERNAL_URL}
+
+# `url: null` marks a passive application service: the gateway calls Synapse,
+# Synapse never calls the gateway. Pointing this at the gateway would make
+# Synapse push a transaction for every event in the namespace to an endpoint
+# that does not exist, and retry it indefinitely. Set it to the gateway's
+# internal URL only together with an implementation of
+# `PUT /_matrix/app/v1/transactions/{txnId}` — that is what push notifications
+# will need.
+url: null
 as_token: ${MATRIX_APPSERVICE_AS_TOKEN}
+# Unused while `url` is null, but Synapse rejects a registration file without
+# it. It must never be set to the same value as as_token.
 hs_token: ${MATRIX_APPSERVICE_HS_TOKEN}
 sender_localpart: turksquare_gateway
 rate_limited: true
 namespaces:
   users:
+    # Anchored, and 32 hex characters exactly: the gateway builds the localpart
+    # as `ts_` + a UUID with the dashes stripped. An unanchored pattern would
+    # claim exclusivity over any user ID merely containing this substring.
     - exclusive: true
-      regex: "@ts_[0-9a-f-]+:matrix\\.turksquare\\.com"
+      regex: "^@ts_[0-9a-f]{32}:matrix\\.turksquare\\.com$"
   aliases: []
   rooms: []

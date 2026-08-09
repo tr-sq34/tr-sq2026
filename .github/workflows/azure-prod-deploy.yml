@@ -8,6 +8,7 @@ on:
       - 'tr-sq2026-bootstrap/services/verification-vault-service/**'
       - 'tr-sq2026-bootstrap/services/community-service/**'
       - 'tr-sq2026-bootstrap/services/messaging-gateway/**'
+      - 'tr-sq2026-bootstrap/services/matrix-synapse/**'
       - 'tr-sq2026-bootstrap/services/password-breach-check/**'
       - 'tr-sq2026-bootstrap/services/email-relay/**'
       - 'tr-sq2026-bootstrap/infra/terraform/azure/**'
@@ -146,6 +147,19 @@ jobs:
             ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:${{ steps.meta.outputs.image_tag }}
             ${{ env.ACR_NAME }}.azurecr.io/turksquare/messaging-gateway:latest
 
+      # Upstream Synapse plus the startup script that renders its config. The
+      # Synapse version itself is pinned in the Dockerfile, not here: its schema
+      # upgrades are one-way, so it must never move as a side effect of a deploy.
+      - name: Build & push matrix-synapse container image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tr-sq2026-bootstrap/services/matrix-synapse
+          file: ./tr-sq2026-bootstrap/services/matrix-synapse/Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/matrix-synapse:${{ steps.meta.outputs.image_tag }}
+            ${{ env.ACR_NAME }}.azurecr.io/turksquare/matrix-synapse:latest
+
       - name: Setup Node.js for function packaging
         uses: actions/setup-node@v4
         with:
@@ -229,6 +243,7 @@ jobs:
           TF_VAR_verification_vault_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_community_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_messaging_gateway_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_matrix_synapse_image_tag: ${{ needs.build.outputs.image_tag }}
           TF_VAR_resend_api_key_initial: ${{ secrets.RESEND_API_KEY_INITIAL }}
           TF_VAR_jwt_secret_initial: ${{ secrets.JWT_SECRET_INITIAL }}
           TF_VAR_postgres_admin_password: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
@@ -291,10 +306,56 @@ jobs:
           ARM_USE_AZUREAD: true
         run: terraform apply -input=false tfplan
 
+  migrate-databases:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    steps:
+      - name: Azure CLI login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # PostgreSQL has public network access disabled, so migrations run as
+      # Container App jobs inside the VNet rather than from this runner. Each job
+      # uses the image just deployed for that service.
+      - name: Run migration jobs
+        run: |
+          set -euo pipefail
+          az account set --subscription "${{ env.AZURE_SUBSCRIPTION_ID }}"
+          RG=rg-turksquare-prod-centralus
+
+          for job in identity-migrate community-migrate messaging-migrate verification-migrate; do
+            name="caj-${job}-prod"
+            echo "::group::${name}"
+            execution=$(az containerapp job start --name "$name" -g "$RG" --query name -o tsv)
+            echo "Started execution ${execution}"
+
+            status=Running
+            for _ in $(seq 1 60); do
+              sleep 10
+              status=$(az containerapp job execution show --name "$name" -g "$RG" \
+                --job-execution-name "$execution" --query properties.status -o tsv)
+              [ "$status" = "Running" ] || break
+            done
+
+            echo "Final status: ${status}"
+            echo "::endgroup::"
+
+            if [ "$status" != "Succeeded" ]; then
+              echo "::error::Migration job ${name} finished with status ${status}."
+              # Application code for the new schema is already live at this point,
+              # so a failed migration must stop the deploy loudly.
+              exit 1
+            fi
+          done
+
   deploy-functions:
     name: Deploy Function Packages
     runs-on: ubuntu-latest
-    needs: [build, terraform-apply]
+    needs: [build, terraform-apply, migrate-databases]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -344,12 +405,60 @@ jobs:
 
       - name: Container App health checks
         run: |
+          set -euo pipefail
           FQDN="${{ secrets.CONTAINER_APP_ENV_FQDN }}"
-          echo "identity /health"
-          curl -sf "https://ca-identity-prod.${FQDN}/health" || true
-          echo "verification-vault /health"
-          curl -sf "https://ca-verification-vault-prod.${FQDN}/health" || true
-          echo "community /health"
-          curl -sf "https://ca-community-prod.${FQDN}/health" || true
-          echo "messaging-gateway /health"
-          curl -sf "https://ca-messaging-gateway-prod.${FQDN}/health" || true
+          if [ -z "$FQDN" ]; then
+            echo "::error::CONTAINER_APP_ENV_FQDN is not set, so the HTTP services cannot be checked."
+            exit 1
+          fi
+
+          failed=0
+          for app in identity verification-vault community messaging-gateway; do
+            url="https://ca-${app}-prod.${FQDN}/health"
+            if curl -sf --max-time 20 --retry 5 --retry-delay 6 --retry-all-errors "$url" >/dev/null; then
+              echo "ok   ${app}"
+            else
+              echo "::error::${app} did not answer ${url}"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      # The workers have no ingress and Synapse's is internal to the container
+      # app environment, so none of them can be reached from this runner. Their
+      # liveness is the revision state. A crash-looping projection worker is
+      # silent otherwise: messages simply stop being consumed and every new
+      # user's first DM fails.
+      - name: Worker and Synapse revision checks
+        run: |
+          set -euo pipefail
+          az account set --subscription "${{ env.AZURE_SUBSCRIPTION_ID }}"
+          RG=rg-turksquare-prod-centralus
+
+          failed=0
+          for app in messaging-projection-worker community-profile-worker community-media-processor matrix-synapse; do
+            state=$(az containerapp revision list --name "ca-${app}-prod" -g "$RG" \
+              --query "[?properties.active].properties.runningState | [0]" -o tsv)
+            echo "${app}: ${state}"
+            [ "$state" = "Running" ] || { echo "::error::${app} revision is ${state}"; failed=1; }
+          done
+          exit $failed
+
+      # Nothing else notices a dead consumer until users do. A queue that is not
+      # draining is the earliest signal.
+      - name: Projection queue depth
+        run: |
+          set -euo pipefail
+          az account set --subscription "${{ env.AZURE_SUBSCRIPTION_ID }}"
+          RG=rg-turksquare-prod-centralus
+
+          for queue in messaging-projection community-profile-projection; do
+            dead=$(az servicebus queue show --namespace-name sb-turksquare-prod-cu -g "$RG" \
+              --name "$queue" --query countDetails.deadLetterMessageCount -o tsv)
+            active=$(az servicebus queue show --namespace-name sb-turksquare-prod-cu -g "$RG" \
+              --name "$queue" --query countDetails.activeMessageCount -o tsv)
+            echo "${queue}: active=${active} dead-letter=${dead}"
+            if [ "${dead:-0}" -gt 0 ]; then
+              echo "::warning::${queue} has ${dead} dead-lettered messages; inspect before they expire (14 day TTL)."
+            fi
+          done

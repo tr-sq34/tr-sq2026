@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "migrate": "node dist/migrate.js",
-    "start:media-processor": "node dist/media_processor_worker.js"
+    "start:media-processor": "node dist/media_processor_worker.js",
+    "start:profile-projection": "node dist/profile_projection_worker.js"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",

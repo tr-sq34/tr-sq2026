@@ -1,6 +1,11 @@
 # Production template. Values marked ${...} are injected only by the deployment
-# task from Secrets Manager / Terraform outputs; this file must never contain a
+# task from Key Vault / Terraform outputs; this file must never contain a
 # real signing key, database password, or application-service token.
+#
+# server_name is written into every Matrix ID and event signature at first boot
+# and can never be changed afterwards. environments/prod/main.tf sets
+# MATRIX-SERVER-NAME from this value, and the gateway verifies the two agree at
+# startup before it opens its port.
 server_name: matrix.turksquare.com
 public_baseurl: https://matrix.turksquare.com/
 pid_file: /data/homeserver.pid
@@ -24,19 +29,23 @@ database:
     database: ${MATRIX_DB_NAME}
     host: ${MATRIX_DB_HOST}
     port: 5432
+    sslmode: require
     cp_min: 5
     cp_max: 15
 
-redis:
-  enabled: true
-  host: ${MATRIX_REDIS_HOST}
-  port: 6379
+# Redis exists in Synapse only to coordinate replication between worker
+# processes. This deployment is a single monolith pinned to one replica, so a
+# cache instance would have no reader.
 
 enable_registration: false
 enable_registration_without_verification: false
 macaroon_secret_key: ${MATRIX_MACAROON_SECRET}
 form_secret: ${MATRIX_FORM_SECRET}
-signing_key_path: /data/${MATRIX_SIGNING_KEY_FILE}
+
+# Generated on first boot onto the persistent volume. Losing this file
+# invalidates the signature on every event this server has ever sent, so the
+# volume is never recreated as part of a deploy.
+signing_key_path: /data/matrix.turksquare.com.signing.key
 
 # Only the TurkSquare-controlled application service can create the internal
 # Matrix identities. The mobile app never talks to this registration surface.
@@ -51,10 +60,25 @@ limit_profile_requests_to_users_who_share_rooms: true
 include_profile_data_on_invite: false
 allow_profile_lookup_over_federation: false
 
-# Federation is blocked in three layers: no federation listener above, ALB/VPC
-# security groups omit :8448, and every gateway-created room has m.federate=false.
-# This setting is intentionally not used as the sole federation control because
-# an empty whitelist does not itself prove that all federation traffic is blocked.
+# Federation is blocked in three layers: no federation listener above, the
+# container app ingress is internal to the Container App environment, and every
+# gateway-created room carries m.federate=false. The whitelist below is not the
+# sole control because an empty whitelist does not itself prove that all
+# federation traffic is blocked.
+federation_domain_whitelist: []
+
+# With federation disabled there is no other homeserver whose signing keys would
+# ever be needed. The default value would make Synapse periodically reach out to
+# matrix.org from a subnet that has no route to it.
+trusted_key_servers: []
+suppress_key_server_warning: true
+serve_server_wellknown: false
+
+# Presence broadcasts every user's online state to everyone sharing a room. For
+# backend-created 1:1 DMs it adds nothing and it is the largest single source of
+# background database write load.
+presence:
+  enabled: false
 
 media_store_path: /data/media_store
 max_upload_size: 20M

@@ -2,14 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../application/direct_conversation_controller.dart';
 import '../../application/messaging_controller.dart';
 import '../../domain/entities/conversation.dart';
 import 'conversation_screen.dart';
 import '../widgets/create_group_sheet.dart';
+import '../widgets/join_requests_sheet.dart';
 
 class InboxScreen extends StatefulWidget {
-  const InboxScreen({super.key, required this.controller});
+  const InboxScreen({
+    super.key,
+    required this.controller,
+    required this.createConversationController,
+  });
+
   final MessagingController controller;
+
+  /// Passed straight through to the chat screen, which owns the thread it
+  /// builds. The inbox never opens a thread itself.
+  final DirectConversationControllerFactory createConversationController;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -311,6 +322,19 @@ class _InboxScreenState extends State<InboxScreen> {
     }
   }
 
+  /// Clock time today, day/month before that — enough to place a conversation
+  /// without a date formatting dependency.
+  static String _stamp(DateTime value) {
+    final now = DateTime.now();
+    final sameDay = value.year == now.year &&
+        value.month == now.month &&
+        value.day == now.day;
+    final left = (sameDay ? value.hour : value.day).toString().padLeft(2, '0');
+    final right =
+        (sameDay ? value.minute : value.month).toString().padLeft(2, '0');
+    return sameDay ? '$left:$right' : '$left.$right';
+  }
+
   Widget _buildChatListView({required bool onlyUnread, required bool isDarkMode}) {
     List<Conversation> items = widget.controller.inbox;
     if (onlyUnread) {
@@ -367,7 +391,10 @@ class _InboxScreenState extends State<InboxScreen> {
               await widget.controller.markRead(chat.id);
               if (!mounted) return;
               Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => ConversationScreen(conversation: chat)));
+                  builder: (_) => ConversationScreen(
+                        conversation: chat,
+                        createController: widget.createConversationController,
+                      )));
             },
             borderRadius: BorderRadius.circular(20),
             child: Container(
@@ -456,9 +483,9 @@ class _InboxScreenState extends State<InboxScreen> {
                                 fontSize: 15,
                               ),
                             ),
-                            const Text(
-                              '10:42', // Mock time
-                              style: TextStyle(
+                            Text(
+                              _stamp(chat.updatedAt),
+                              style: const TextStyle(
                                 fontSize: 11,
                                 color: Color(0xFF94A3B8),
                               ),
@@ -467,7 +494,11 @@ class _InboxScreenState extends State<InboxScreen> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          chat.preview,
+                          // Message bodies never leave the homeserver, so a
+                          // direct conversation has no preview to show.
+                          chat.preview.isEmpty
+                              ? 'Sohbeti aç'
+                              : chat.preview,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -585,96 +616,234 @@ class _InboxScreenState extends State<InboxScreen> {
 
         // Community List
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            itemCount: widget.controller.groups.length,
-            itemBuilder: (context, index) {
-              final group = widget.controller.groups[index];
-              return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isDarkMode
-                        ? const Color(0xFF334155)
-                        : const Color(0xFFF1F5F9),
-                  ),
+          child: widget.controller.groups.isEmpty
+              ? _buildEmptyGroups(isDarkMode)
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  itemCount: widget.controller.groups.length,
+                  itemBuilder: (context, index) =>
+                      _buildGroupTile(widget.controller.groups[index], isDarkMode),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFE5DEFF), Color(0xFFD9D6FE)],
-                        ),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(Icons.groups_outlined,
-                          color: AppColors.primary, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            group.name,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 15),
-                          ),
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              const Icon(Icons.location_on_rounded,
-                                  size: 12, color: Color(0xFF6C5CE7)),
-                              const SizedBox(width: 2),
-                              Text(
-                                '${group.city} • ${group.members} üye',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: isDarkMode
-                                      ? const Color(0xFF94A3B8)
-                                      : const Color(0xFF64748B),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (group.isJoined)
-                      const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981))
-                    else
-                      ElevatedButton(
-                        onPressed: () => widget.controller.join(group.id),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isDarkMode
-                              ? const Color(0xFF6C5CE7).withValues(alpha: 0.2)
-                              : const Color(0xFFEEF2FF),
-                          foregroundColor: const Color(0xFF6C5CE7),
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
-                        ),
-                        child: const Text(
-                          'Katıl',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildEmptyGroups(bool isDarkMode) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.groups_outlined,
+                  size: 48,
+                  color: isDarkMode
+                      ? const Color(0xFF475569)
+                      : const Color(0xFFCBD5E1)),
+              const SizedBox(height: 12),
+              const Text('Henüz grup yok',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 4),
+              Text(
+                'İlk grubu sen kur, şehrindeki Türkleri bir araya getir.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isDarkMode
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  Widget _buildGroupTile(CommunityGroup group, bool isDarkMode) {
+    final card = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFE5DEFF), Color(0xFFD9D6FE)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(Icons.groups_outlined,
+                color: AppColors.primary, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        group.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ),
+                    if (group.privacy == GroupPrivacy.private) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.lock_outline_rounded,
+                          size: 12, color: Color(0xFF94A3B8)),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    const Icon(Icons.location_on_rounded,
+                        size: 12, color: Color(0xFF6C5CE7)),
+                    const SizedBox(width: 2),
+                    Flexible(
+                      child: Text(
+                        '${group.city} • ${group.members} üye',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isDarkMode
+                              ? const Color(0xFF94A3B8)
+                              : const Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          _buildGroupAction(group, isDarkMode),
+        ],
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: group.isJoined
+          // Only members have a room to open. A private group's history is not
+          // readable until an owner approves, so the card stays inert until then.
+          ? InkWell(
+              onTap: () => _openGroup(group),
+              borderRadius: BorderRadius.circular(20),
+              child: card,
+            )
+          : card,
+    );
+  }
+
+  Widget _buildGroupAction(CommunityGroup group, bool isDarkMode) {
+    if (group.isPending) {
+      return TextButton(
+        onPressed: () => _leaveGroup(group, withdraw: true),
+        style: TextButton.styleFrom(foregroundColor: const Color(0xFF94A3B8)),
+        child: const Text('İstek gönderildi',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 11)),
+      );
+    }
+
+    if (group.isJoined) {
+      return PopupMenuButton<String>(
+        icon: const Icon(Icons.more_horiz_rounded, color: Color(0xFF94A3B8)),
+        onSelected: (value) {
+          if (value == 'requests') {
+            _showJoinRequests(group);
+          } else {
+            _leaveGroup(group, withdraw: false);
+          }
+        },
+        itemBuilder: (_) => [
+          if (group.isOwner && group.privacy == GroupPrivacy.private)
+            const PopupMenuItem(
+                value: 'requests', child: Text('Katılım istekleri')),
+          // The owner is the room's only moderator; leaving would strand it.
+          if (!group.isOwner)
+            const PopupMenuItem(value: 'leave', child: Text('Gruptan ayrıl')),
+        ],
+      );
+    }
+
+    return ElevatedButton(
+      onPressed: () => _joinGroup(group),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isDarkMode
+            ? const Color(0xFF6C5CE7).withValues(alpha: 0.2)
+            : const Color(0xFFEEF2FF),
+        foregroundColor: const Color(0xFF6C5CE7),
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      ),
+      child: Text(
+        group.privacy == GroupPrivacy.private ? 'İstek Gönder' : 'Katıl',
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    );
+  }
+
+  void _openGroup(CommunityGroup group) {
+    HapticFeedback.selectionClick();
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ConversationScreen(
+        // A group ID is a valid conversation ID: both are Matrix rooms behind
+        // the same message routes.
+        conversation: Conversation(
+          id: group.id,
+          title: group.name,
+          preview: '',
+          updatedAt: DateTime.now(),
+          kind: ConversationKind.group,
+          contextLabel: '${group.city} • ${group.members} üye',
+        ),
+        createController: widget.createConversationController,
+      ),
+    ));
+  }
+
+  Future<void> _joinGroup(CommunityGroup group) async {
+    final status = await widget.controller.join(group.id);
+    if (!mounted) return;
+    _showSnackBar(switch (status) {
+      GroupMembershipStatus.joined => '${group.name} grubuna katıldın.',
+      GroupMembershipStatus.requested =>
+        'Katılım isteğin gönderildi. Grup yöneticisi onayladığında haber vereceğiz.',
+      _ => widget.controller.errorMessage ?? 'Gruba katılınamadı.',
+    });
+  }
+
+  Future<void> _leaveGroup(CommunityGroup group, {required bool withdraw}) async {
+    final ok = await widget.controller.leave(group.id);
+    if (!mounted) return;
+    _showSnackBar(ok
+        ? (withdraw ? 'Katılım isteğin geri çekildi.' : '${group.name} grubundan ayrıldın.')
+        : widget.controller.errorMessage ?? 'İşlem tamamlanamadı.');
+  }
+
+  void _showJoinRequests(CommunityGroup group) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => JoinRequestsSheet(
+        group: group,
+        controller: widget.controller,
+      ),
     );
   }
 
@@ -823,8 +992,11 @@ class _InboxScreenState extends State<InboxScreen> {
                             .respondToRequest(item.id, RequestDecision.accepted);
                         if (!mounted || conversation == null) return;
                         Navigator.of(context).push(MaterialPageRoute<void>(
-                            builder: (_) =>
-                                ConversationScreen(conversation: conversation)));
+                            builder: (_) => ConversationScreen(
+                                  conversation: conversation,
+                                  createController:
+                                      widget.createConversationController,
+                                )));
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF6C5CE7),

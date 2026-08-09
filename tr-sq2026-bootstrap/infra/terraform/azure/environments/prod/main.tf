@@ -20,7 +20,6 @@ module "shared" {
     "JWT-ISSUER"                    = "https://api.turksquare.com"
     "JWT-AUDIENCE"                  = "https://api.turksquare.com"
     "JWT-KEY-ID"                    = "turksquare-identity-jwt-signing"
-    "EMAIL-CODE-HMAC-SECRET"        = "T-NI8OM5AGC_kCbzoAqEU_9470eLMcXwTepeLyiQKtk"
     "WEBAUTHN-RP-ID"                = "turksquare.com"
     "WEBAUTHN-ORIGIN"               = "https://turksquare.com"
     "EMAIL-FROM"                    = "noreply@turksquare.com"
@@ -31,12 +30,18 @@ module "shared" {
     "PWNED-PASSWORDS-RANGE-URL"     = "https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck"
     "GATEWORK-COMMUNITY-AUDIENCE"   = "https://community-api.turksquare.com"
     "VERIFICATION-RETURN-URL"       = "https://turksquare.com/verification/callback"
-    "STRIPE-SECRET-KEY"             = "sk_change_me_stripe_secret_key"
-    "STRIPE-WEBHOOK-SECRET"         = "whsec_change_me_stripe_webhook_secret"
-    "MATRIX-BASE-URL"               = "https://matrix-api.turksquare.com"
-    "MATRIX-APPSERVICE-TOKEN"         = "change_me_matrix_appservice_token"
-    "MATRIX-SERVER-NAME"              = "turksquare.com"
-    "INTERNAL-SERVICE-TOKEN"          = "change_me_internal_service_token"
+    # Must agree with server_name in services/matrix-synapse/homeserver.yaml.template.
+    # server_name is written into every Matrix ID and event signature at first
+    # boot and can never be changed afterwards, so the template is authoritative
+    # and this value follows it — not the other way round.
+    "MATRIX-SERVER-NAME" = "matrix.turksquare.com"
+    # The gateway does not use this: Synapse has no public ingress, and the
+    # gateway reaches it on the environment-internal FQDN below. It is kept
+    # because homeserver.yaml advertises this hostname as public_baseurl.
+    "MATRIX-BASE-URL" = "https://matrix.turksquare.com"
+    # Secrets are not listed here. Every value in this map is a literal in a
+    # public-facing repository, so INTERNAL-SERVICE-TOKEN, EMAIL-CODE-HMAC-SECRET
+    # and the four MATRIX-* secrets are generated in the shared module instead.
   }
   resend_api_key_initial = var.resend_api_key_initial
   jwt_secret_initial     = var.jwt_secret_initial
@@ -99,6 +104,10 @@ module "identity_container_app" {
     {
       name  = "AZURE_COMMUNITY_PROFILE_QUEUE_NAME"
       value = module.shared.community_profile_projection_queue_name
+    },
+    {
+      name  = "AZURE_MESSAGING_PROJECTION_QUEUE_NAME"
+      value = module.shared.messaging_projection_queue_name
     }
   ]
 }
@@ -178,10 +187,15 @@ module "community_container_app" {
 
   servicebus_connection_string            = module.shared.servicebus_connection_string
   servicebus_connection_string_secret_uri = module.shared.servicebus_connection_string_secret_uri
-  storage_account_key_secret_uri        = "${module.shared.key_vault_secret_uri}STORAGE-ACCOUNT-KEY"
+  storage_account_key_secret_uri          = "${module.shared.key_vault_secret_uri}STORAGE-ACCOUNT-KEY"
 
   secret_env = [
-    { name = "STRIPE-SECRET-KEY", key_vault_secret_id = "STRIPE-SECRET-KEY", env_name = "STRIPE_SECRET_KEY" }
+    { name = "STRIPE-SECRET-KEY", key_vault_secret_id = "STRIPE-SECRET-KEY", env_name = "STRIPE_SECRET_KEY" },
+    # viewer() and gateworkActor() read these on every request. Without them the
+    # service starts healthy and then rejects every authenticated call.
+    { name = "JWT-ISSUER", key_vault_secret_id = "JWT-ISSUER", env_name = "JWT_ISSUER" },
+    { name = "JWT-AUDIENCE", key_vault_secret_id = "JWT-AUDIENCE", env_name = "JWT_AUDIENCE" },
+    { name = "GATEWORK-COMMUNITY-AUDIENCE", key_vault_secret_id = "GATEWORK-COMMUNITY-AUDIENCE", env_name = "GATEWORK_JWT_AUDIENCE" }
   ]
 
   extra_env = [
@@ -196,6 +210,10 @@ module "community_container_app" {
     {
       name  = "AZURE_MEDIA_CONTAINER_NAME"
       value = module.shared.community_media_container_name
+    },
+    {
+      name  = "AZURE_MESSAGING_PROJECTION_QUEUE_NAME"
+      value = module.shared.messaging_projection_queue_name
     }
   ]
 }
@@ -230,16 +248,211 @@ module "messaging_gateway_container_app" {
   servicebus_connection_string_secret_uri = module.shared.servicebus_connection_string_secret_uri
 
   secret_env = [
-    { name = "MATRIX-BASE-URL", key_vault_secret_id = "MATRIX-BASE-URL", env_name = "MATRIX_BASE_URL" },
     { name = "MATRIX-APPSERVICE-TOKEN", key_vault_secret_id = "MATRIX-APPSERVICE-TOKEN", env_name = "MATRIX_APPSERVICE_TOKEN" },
     { name = "MATRIX-SERVER-NAME", key_vault_secret_id = "MATRIX-SERVER-NAME", env_name = "MATRIX_SERVER_NAME" },
-    { name = "INTERNAL-SERVICE-TOKEN", key_vault_secret_id = "INTERNAL-SERVICE-TOKEN", env_name = "INTERNAL_SERVICE_TOKEN" }
+    { name = "INTERNAL-SERVICE-TOKEN", key_vault_secret_id = "INTERNAL-SERVICE-TOKEN", env_name = "INTERNAL_SERVICE_TOKEN" },
+    { name = "JWT-ISSUER", key_vault_secret_id = "JWT-ISSUER", env_name = "JWT_ISSUER" },
+    { name = "JWT-AUDIENCE", key_vault_secret_id = "JWT-AUDIENCE", env_name = "JWT_AUDIENCE" }
   ]
 
   extra_env = [
     {
       name  = "AZURE_JWT_SIGNING_KEY_NAME"
       value = "turksquare-identity-jwt-signing"
+    },
+    # Not the public hostname: Synapse has no public ingress. This is the
+    # environment-internal FQDN, which is why both apps must live in the same
+    # container app environment.
+    {
+      name  = "MATRIX_BASE_URL"
+      value = module.matrix_synapse.internal_base_url
+    }
+  ]
+}
+
+# The homeserver itself. Everything the messaging gateway does — creating the
+# per-user Matrix identity, the DM room, and sending the event — is a call to
+# this app, so until it exists the gateway's endpoints cannot succeed.
+module "matrix_synapse" {
+  source = "../../modules/matrix-synapse"
+
+  environment = var.environment
+  location    = var.location
+  tenant_id   = var.tenant_id
+
+  resource_group_name = module.shared.resource_group_name
+  # Internal ingress resolves only within one environment, and the gateway runs
+  # in the one identity created.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
+  acr_id               = module.shared.acr_id
+  acr_login_server     = module.shared.acr_login_server
+  key_vault_id         = module.shared.key_vault_id
+  key_vault_secret_uri = module.shared.key_vault_secret_uri
+
+  image_repository = "turksquare/matrix-synapse"
+  image_tag        = var.matrix_synapse_image_tag
+  server_name      = "matrix.turksquare.com"
+
+  storage_account_name = module.shared.storage_account_name
+  storage_account_key  = module.shared.storage_account_primary_access_key
+
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  database_name           = module.shared.matrix_database_name
+}
+
+# The projection worker ships in the messaging-gateway image and is pinned to the
+# same tag, so the consumer and the endpoints that read its output can never run
+# different versions of the event contract. It has no ingress: it is driven
+# entirely by Service Bus.
+module "messaging_projection_worker" {
+  source = "../../modules/container-app"
+
+  service_name = "messaging-projection-worker"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
+
+  resource_group_name        = module.shared.resource_group_name
+  acr_id                     = module.shared.acr_id
+  acr_login_server           = module.shared.acr_login_server
+  key_vault_id               = module.shared.key_vault_id
+  key_vault_uri              = module.shared.key_vault_uri
+  key_vault_secret_uri       = module.shared.key_vault_secret_uri
+  log_analytics_workspace_id = module.shared.log_analytics_workspace_id
+  aca_subnet_id              = module.shared.aca_subnet_id
+  # Reuses the environment identity already owns instead of declaring a second
+  # state entry for the same ARM resource.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
+  image_repository  = "turksquare/messaging-gateway"
+  image_tag         = var.messaging_gateway_image_tag
+  container_command = ["node", "--enable-source-maps", "dist/projection_worker.js"]
+  enable_ingress    = false
+  expose_externally = false
+
+  # Competing consumers on one queue; the handlers are idempotent and ordered by
+  # source_event_at, so replicas never need to coordinate.
+  min_replicas = 1
+  max_replicas = 3
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "messaging"
+
+  servicebus_connection_string            = module.shared.servicebus_connection_string
+  servicebus_connection_string_secret_uri = module.shared.servicebus_connection_string_secret_uri
+
+  extra_env = [
+    {
+      name  = "AZURE_MESSAGING_PROJECTION_QUEUE_NAME"
+      value = module.shared.messaging_projection_queue_name
+    },
+    {
+      name  = "PROJECTION_MAX_CONCURRENCY"
+      value = "8"
+    }
+  ]
+}
+
+# community-profile-projection had a producer (identity) and a consumer written,
+# but the consumer was never deployed, so the queue only accumulated.
+module "community_profile_projection_worker" {
+  source = "../../modules/container-app"
+
+  service_name = "community-profile-worker"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
+
+  resource_group_name        = module.shared.resource_group_name
+  acr_id                     = module.shared.acr_id
+  acr_login_server           = module.shared.acr_login_server
+  key_vault_id               = module.shared.key_vault_id
+  key_vault_uri              = module.shared.key_vault_uri
+  key_vault_secret_uri       = module.shared.key_vault_secret_uri
+  log_analytics_workspace_id = module.shared.log_analytics_workspace_id
+  aca_subnet_id              = module.shared.aca_subnet_id
+  # Reuses the environment identity already owns instead of declaring a second
+  # state entry for the same ARM resource.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
+  image_repository  = "turksquare/community-service"
+  image_tag         = var.community_image_tag
+  container_command = ["node", "dist/profile_projection_worker.js"]
+  enable_ingress    = false
+  expose_externally = false
+
+  min_replicas = 1
+  max_replicas = 2
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "community"
+
+  servicebus_connection_string            = module.shared.servicebus_connection_string
+  servicebus_connection_string_secret_uri = module.shared.servicebus_connection_string_secret_uri
+
+  extra_env = [
+    {
+      name  = "AZURE_COMMUNITY_PROFILE_QUEUE_NAME"
+      value = module.shared.community_profile_projection_queue_name
+    }
+  ]
+}
+
+# Uploaded media stays in status 'pending' until this worker processes it, and
+# every post/story insert requires status 'ready'.
+module "community_media_processor" {
+  source = "../../modules/container-app"
+
+  service_name = "community-media-processor"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
+
+  resource_group_name        = module.shared.resource_group_name
+  acr_id                     = module.shared.acr_id
+  acr_login_server           = module.shared.acr_login_server
+  key_vault_id               = module.shared.key_vault_id
+  key_vault_uri              = module.shared.key_vault_uri
+  key_vault_secret_uri       = module.shared.key_vault_secret_uri
+  log_analytics_workspace_id = module.shared.log_analytics_workspace_id
+  aca_subnet_id              = module.shared.aca_subnet_id
+  # Reuses the environment identity already owns instead of declaring a second
+  # state entry for the same ARM resource.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
+  image_repository  = "turksquare/community-service"
+  image_tag         = var.community_image_tag
+  container_command = ["node", "dist/media_processor_worker.js"]
+  enable_ingress    = false
+  expose_externally = false
+
+  min_replicas = 1
+  max_replicas = 2
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "community"
+
+  servicebus_connection_string            = module.shared.servicebus_connection_string
+  servicebus_connection_string_secret_uri = module.shared.servicebus_connection_string_secret_uri
+  storage_account_key_secret_uri          = "${module.shared.key_vault_secret_uri}STORAGE-ACCOUNT-KEY"
+
+  extra_env = [
+    {
+      name  = "AZURE_STORAGE_ACCOUNT_NAME"
+      value = module.shared.storage_account_name
+    },
+    {
+      name  = "AZURE_MEDIA_CONTAINER_NAME"
+      value = module.shared.community_media_container_name
     }
   ]
 }
@@ -281,4 +494,92 @@ module "password_breach_check_function" {
   app_settings = {
     WEBSITE_RUN_FROM_PACKAGE = "1"
   }
+}
+
+# --- Schema migrations --------------------------------------------------
+# Triggered by the deploy workflow after terraform apply and before the smoke
+# tests. Each runs the same image as its service, so a migration can never be
+# newer or older than the code that reads the tables it creates.
+module "identity_migrate_job" {
+  source = "../../modules/container-app-job"
+
+  job_name    = "identity-migrate"
+  environment = var.environment
+  location    = var.location
+
+  resource_group_name          = module.shared.resource_group_name
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+  acr_id                       = module.shared.acr_id
+  acr_login_server             = module.shared.acr_login_server
+
+  image_repository = "turksquare/identity-service"
+  image_tag        = var.identity_image_tag
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "identity"
+}
+
+module "community_migrate_job" {
+  source = "../../modules/container-app-job"
+
+  job_name    = "community-migrate"
+  environment = var.environment
+  location    = var.location
+
+  resource_group_name          = module.shared.resource_group_name
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+  acr_id                       = module.shared.acr_id
+  acr_login_server             = module.shared.acr_login_server
+
+  image_repository = "turksquare/community-service"
+  image_tag        = var.community_image_tag
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "community"
+}
+
+module "messaging_migrate_job" {
+  source = "../../modules/container-app-job"
+
+  job_name    = "messaging-migrate"
+  environment = var.environment
+  location    = var.location
+
+  resource_group_name          = module.shared.resource_group_name
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+  acr_id                       = module.shared.acr_id
+  acr_login_server             = module.shared.acr_login_server
+
+  image_repository = "turksquare/messaging-gateway"
+  image_tag        = var.messaging_gateway_image_tag
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "messaging"
+}
+
+module "verification_migrate_job" {
+  source = "../../modules/container-app-job"
+
+  job_name    = "verification-migrate"
+  environment = var.environment
+  location    = var.location
+
+  resource_group_name          = module.shared.resource_group_name
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+  acr_id                       = module.shared.acr_id
+  acr_login_server             = module.shared.acr_login_server
+
+  image_repository = "turksquare/verification-vault-service"
+  image_tag        = var.verification_vault_image_tag
+
+  postgres_admin_username = var.postgres_admin_username
+  postgres_admin_password = var.postgres_admin_password
+  postgres_fqdn           = module.shared.postgresql_server_fqdn
+  database_name           = "verification"
 }

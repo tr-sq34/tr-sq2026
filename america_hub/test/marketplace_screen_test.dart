@@ -4,6 +4,8 @@ import 'package:america_hub/features/marketplace/presentation/screens/marketplac
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/test_member_capabilities.dart';
+
 void main() {
   testWidgets('Çarşı renders after initial load without viewport exceptions', (tester) async {
     final controller = MarketplaceController(repository: MockMarketplaceRepository());
@@ -23,7 +25,9 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('Çarşı'), findsOneWidget);
-    expect(find.text('El yapımı çay seti'), findsOneWidget);
+    // The card prints the price and the title in one line ("$32 · …"), so the
+    // title is matched as a substring rather than as a whole label.
+    expect(find.textContaining('El yapımı çay seti'), findsOneWidget);
   });
 }
 
@@ -31,5 +35,8 @@ class MarketplaceTestHost extends StatelessWidget {
   const MarketplaceTestHost({super.key});
 
   @override
-  Widget build(BuildContext context) => MarketplaceScreen(controller: MarketplaceController(repository: MockMarketplaceRepository()));
+  Widget build(BuildContext context) => MarketplaceScreen(
+        controller: MarketplaceController(repository: MockMarketplaceRepository()),
+        memberCapabilitiesController: testMemberCapabilitiesController(),
+      );
 }

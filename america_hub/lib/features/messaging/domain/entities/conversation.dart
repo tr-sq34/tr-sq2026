@@ -15,13 +15,25 @@ class Conversation {
 }
 
 class CommunityGroup {
-  const CommunityGroup({required this.id, required this.name, required this.members, required this.city, this.privacy = GroupPrivacy.public, this.imageUrl, this.adminIds = const ['local-user'], this.membershipStatus = GroupMembershipStatus.none});
+  const CommunityGroup({required this.id, required this.name, required this.members, required this.city, this.privacy = GroupPrivacy.public, this.imageUrl, this.isOwner = false, this.membershipStatus = GroupMembershipStatus.none});
   final String id, name, city;
   final int members;
   final GroupPrivacy privacy;
   final String? imageUrl;
-  final List<String> adminIds;
+  /// True only for the account that created the group. Owners moderate the
+  /// Matrix room and are the only ones who see pending join requests.
+  final bool isOwner;
   final GroupMembershipStatus membershipStatus;
   bool get isJoined => membershipStatus == GroupMembershipStatus.joined;
-  CommunityGroup copyWith({GroupMembershipStatus? membershipStatus, List<String>? adminIds}) => CommunityGroup(id: id, name: name, members: members, city: city, privacy: privacy, imageUrl: imageUrl, adminIds: adminIds ?? this.adminIds, membershipStatus: membershipStatus ?? this.membershipStatus);
+  bool get isPending => membershipStatus == GroupMembershipStatus.requested;
+  CommunityGroup copyWith({GroupMembershipStatus? membershipStatus, int? members}) => CommunityGroup(id: id, name: name, members: members ?? this.members, city: city, privacy: privacy, imageUrl: imageUrl, isOwner: isOwner, membershipStatus: membershipStatus ?? this.membershipStatus);
+}
+
+/// Somebody waiting for an owner to let them into a private group.
+class GroupJoinRequest {
+  const GroupJoinRequest({required this.userId, required this.displayName, required this.requestedAt});
+  final String userId;
+  /// Null until the requester's profile reaches the messaging projection.
+  final String? displayName;
+  final DateTime requestedAt;
 }

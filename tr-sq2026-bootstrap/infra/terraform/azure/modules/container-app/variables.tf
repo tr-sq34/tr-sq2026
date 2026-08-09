@@ -61,6 +61,24 @@ variable "expose_externally" {
   default = true
 }
 
+variable "enable_ingress" {
+  description = "Whether the app serves HTTP. Background workers set this to false; a container app with an ingress block but no listener is reported unhealthy and never scales up."
+  type        = bool
+  default     = true
+}
+
+variable "container_command" {
+  description = "Overrides the image entrypoint. Used to run a worker out of the same image as its HTTP service so both always ship identical code."
+  type        = list(string)
+  default     = []
+}
+
+variable "container_args" {
+  description = "Arguments appended to container_command."
+  type        = list(string)
+  default     = []
+}
+
 variable "cpu" {
   type    = number
   default = 0.5
@@ -168,3 +186,9 @@ variable "dapr_app_protocol" {
   default     = "http"
 }
 
+
+variable "container_app_environment_id" {
+  description = "Reuse an existing Container App environment instead of declaring one. New callers should set this; see the comment on azurerm_container_app_environment.main."
+  type        = string
+  default     = ""
+}

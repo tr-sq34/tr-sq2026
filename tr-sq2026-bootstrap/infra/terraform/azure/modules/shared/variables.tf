@@ -83,6 +83,20 @@ variable "resend_api_key_initial" {
   default     = "CHANGE-ME-RESEND-API-KEY"
 }
 
+variable "stripe_secret_key_initial" {
+  description = "Initial placeholder value for the STRIPE-SECRET-KEY Key Vault secret. Stripe issues the real key; set it out of band after provisioning, since Terraform ignores subsequent changes."
+  type        = string
+  sensitive   = true
+  default     = "sk_change_me_stripe_secret_key"
+}
+
+variable "stripe_webhook_secret_initial" {
+  description = "Initial placeholder value for the STRIPE-WEBHOOK-SECRET Key Vault secret. Stripe issues the real value when the webhook endpoint is registered; set it out of band, since Terraform ignores subsequent changes."
+  type        = string
+  sensitive   = true
+  default     = "whsec_change_me_stripe_webhook_secret"
+}
+
 variable "jwt_secret_initial" {
   description = "Initial placeholder value for the JWT-SECRET Key Vault secret. The real value must be updated manually or via a secure pipeline after provisioning because Terraform ignores subsequent changes."
   type        = string
