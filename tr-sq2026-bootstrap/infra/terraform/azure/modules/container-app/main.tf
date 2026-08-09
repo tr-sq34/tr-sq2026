@@ -285,6 +285,14 @@ resource "azurerm_container_app" "main" {
     ignore_changes = [
       workload_profile_name,
     ]
+
+    # Azure rejects a longer name, and it does so at create time - after a plan
+    # has been approved and the rest of the apply has already run. Checking here
+    # turns a half-applied production deploy into a plan-time error.
+    precondition {
+      condition     = length("ca-${var.service_name}-${var.environment}") <= 32
+      error_message = "Container app name ca-${var.service_name}-${var.environment} is ${length("ca-${var.service_name}-${var.environment}")} characters; Azure allows at most 32. Shorten service_name."
+    }
   }
 }
 

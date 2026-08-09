@@ -458,7 +458,7 @@ jobs:
           RG=rg-turksquare-prod-centralus
 
           failed=0
-          for app in messaging-projection-worker community-profile-worker community-media-processor matrix-synapse; do
+          for app in messaging-projection community-profile-worker community-media matrix-synapse; do
             state=$(az containerapp revision list --name "ca-${app}-prod" -g "$RG" \
               --query "[?properties.active].properties.runningState | [0]" -o tsv)
             echo "${app}: ${state}"

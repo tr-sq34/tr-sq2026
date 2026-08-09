@@ -122,6 +122,11 @@ module "verification_vault_container_app" {
   location     = var.location
   tenant_id    = var.tenant_id
 
+  # Every app shares the one environment identity created. The module would
+  # otherwise declare its own, and each of those carries the same name, so the
+  # second one to be applied collides with the first.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
   resource_group_name        = module.shared.resource_group_name
   acr_id                     = module.shared.acr_id
   acr_login_server           = module.shared.acr_login_server
@@ -168,6 +173,8 @@ module "community_container_app" {
   environment  = var.environment
   location     = var.location
   tenant_id    = var.tenant_id
+
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
 
   resource_group_name        = module.shared.resource_group_name
   acr_id                     = module.shared.acr_id
@@ -227,6 +234,8 @@ module "messaging_gateway_container_app" {
   environment  = var.environment
   location     = var.location
   tenant_id    = var.tenant_id
+
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
 
   resource_group_name        = module.shared.resource_group_name
   acr_id                     = module.shared.acr_id
@@ -393,7 +402,8 @@ module "gatework_console_container_app" {
 module "messaging_projection_worker" {
   source = "../../modules/container-app"
 
-  service_name = "messaging-projection-worker"
+  # Same 32 character limit as community-media above.
+  service_name = "messaging-projection"
   environment  = var.environment
   location     = var.location
   tenant_id    = var.tenant_id
@@ -493,7 +503,9 @@ module "community_profile_projection_worker" {
 module "community_media_processor" {
   source = "../../modules/container-app"
 
-  service_name = "community-media-processor"
+  # Not "community-media-processor": Azure caps a container app name at 32
+  # characters and the module prefixes "ca-" and suffixes the environment.
+  service_name = "community-media"
   environment  = var.environment
   location     = var.location
   tenant_id    = var.tenant_id
