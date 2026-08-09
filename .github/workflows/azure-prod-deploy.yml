@@ -13,6 +13,10 @@ on:
       - 'tr-sq2026-bootstrap/services/password-breach-check/**'
       - 'tr-sq2026-bootstrap/services/email-relay/**'
       - 'tr-sq2026-bootstrap/infra/terraform/azure/**'
+      # The deploy script itself. It sits above the per-service directories, so
+      # none of the patterns above cover it - a fix to it merged to main and no
+      # deploy ran at all, which reads exactly like a green build.
+      - 'tr-sq2026-bootstrap/services/deploy_azure_functions_v2.ps1'
       - '.github/workflows/azure-prod-deploy.yml'
   workflow_dispatch:
     inputs:
