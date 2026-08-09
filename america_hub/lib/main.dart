@@ -38,10 +38,13 @@ import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer
 import 'features/profile/application/profile_controller.dart';
 import 'features/profile/data/repositories/mock_profile_repository.dart';
 import 'features/messaging/application/messaging_controller.dart';
+import 'features/messaging/data/repositories/api_message_moderation_repository.dart';
 import 'features/messaging/data/repositories/api_messaging_repository.dart';
 import 'features/messaging/data/repositories/mock_direct_message_repository.dart';
+import 'features/messaging/data/repositories/mock_message_moderation_repository.dart';
 import 'features/messaging/data/repositories/mock_messaging_repository.dart';
 import 'features/messaging/domain/repositories/direct_message_repository.dart';
+import 'features/messaging/domain/repositories/message_moderation_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
@@ -193,6 +196,13 @@ Future<void> main() async {
   final DirectMessageRepository directMessageRepository = useMockServices
       ? MockDirectMessageRepository(viewerId: authController.user?.id ?? 'me')
       : apiMessagingRepository;
+  final MessageModerationRepository messageModerationRepository =
+      useMockServices
+      ? MockMessageModerationRepository()
+      : ApiMessageModerationRepository(
+          messagingClient: messagingApiClient,
+          communityClient: communityApiClient,
+        );
 
   runApp(
     AmericaHubApp(
@@ -208,6 +218,7 @@ Future<void> main() async {
       profileController: profileController,
       messagingController: messagingController,
       directMessageRepository: directMessageRepository,
+      messageModerationRepository: messageModerationRepository,
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
     ),

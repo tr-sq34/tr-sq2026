@@ -69,6 +69,12 @@ variable "azure_postgres_root_cert_url" {
   default = "https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem"
 }
 
+variable "key_vault_admin_object_ids" {
+  description = "Object IDs of every principal that runs Terraform against this stack - the CI service principal and any human operator. All of them get an access policy regardless of which one is applying. Empty means the current caller only, which bootstraps a new vault but leaves the others locked out."
+  type        = list(string)
+  default     = []
+}
+
 variable "key_vault_secrets" {
   description = "Map of secret names to secret values stored in the shared Azure Key Vault."
   type        = map(string)
@@ -95,6 +101,13 @@ variable "stripe_webhook_secret_initial" {
   type        = string
   sensitive   = true
   default     = "whsec_change_me_stripe_webhook_secret"
+}
+
+variable "cloudflare_tunnel_token_initial" {
+  description = "Initial placeholder value for the CLOUDFLARE-TUNNEL-TOKEN Key Vault secret. Cloudflare issues the real token when the tunnel is created; set it out of band, since Terraform ignores subsequent changes. The gatework console has no ingress, so until this is real the console is reachable from nowhere."
+  type        = string
+  sensitive   = true
+  default     = "CHANGE-ME-CLOUDFLARE-TUNNEL-TOKEN"
 }
 
 variable "jwt_secret_initial" {

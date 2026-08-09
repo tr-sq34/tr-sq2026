@@ -113,15 +113,35 @@ resource "azurerm_key_vault" "main" {
   tags = local.base_tags
 }
 
+locals {
+  # Every principal that runs Terraform against this vault, not just the one
+  # running right now. This used to be pinned to the caller alone, which meant a
+  # human applying from a laptop replaced the CI principal's policy with their
+  # own; the next CI plan then got 403 on every secret read and could not even
+  # refresh state to repair itself. Falls back to the caller so a first-time
+  # bootstrap still works before the IDs are known.
+  key_vault_admin_object_ids = length(var.key_vault_admin_object_ids) > 0 ? toset(var.key_vault_admin_object_ids) : toset([data.azurerm_client_config.current.object_id])
+}
+
 resource "azurerm_key_vault_access_policy" "deployer" {
+  for_each = local.key_vault_admin_object_ids
+
   key_vault_id = azurerm_key_vault.main.id
   tenant_id    = var.tenant_id
-  object_id    = data.azurerm_client_config.current.object_id
+  object_id    = each.value
 
   secret_permissions = ["Get", "List", "Set", "Delete", "Purge", "Recover"]
   key_permissions    = ["Get", "List", "Create", "Delete", "Purge", "Recover", "Sign", "Verify", "GetRotationPolicy"]
 
   depends_on = [azurerm_key_vault.main]
+}
+
+# The un-keyed policy this replaced was last applied by the human owner, so that
+# is the identity it holds. The vault rejects a second policy for a principal
+# that already has one, so without this the create would collide with itself.
+moved {
+  from = azurerm_key_vault_access_policy.deployer
+  to   = azurerm_key_vault_access_policy.deployer["5c8d6271-40f5-47fe-a3a8-c5adcafc8e29"]
 }
 
 resource "azurerm_key_vault_secret" "app" {
@@ -251,6 +271,40 @@ resource "azurerm_key_vault_secret" "email_code_hmac_secret" {
   name         = "EMAIL-CODE-HMAC-SECRET"
   value        = random_password.email_code_hmac_secret.result
   key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# --- Gatework console secrets --------------------------------------------
+
+# Encrypts the operator session cookie. Knowing it means being able to forge a
+# session for any role, including owner, so it is generated rather than listed
+# in key_vault_secrets. Rotating it signs every operator out; nothing else.
+resource "random_password" "gatework_session_secret" {
+  length  = 48
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "gatework_session_secret" {
+  name         = "GATEWORK-SESSION-SECRET"
+  value        = random_password.gatework_session_secret.result
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# Cloudflare issues this one, so Terraform creates it as a placeholder and the
+# real token is set out of band. ignore_changes is what stops the next apply
+# from resetting a working tunnel back to the placeholder. Until it is set, the
+# console runs but is unreachable — which is the safe direction to fail in.
+resource "azurerm_key_vault_secret" "cloudflare_tunnel_token" {
+  name         = "CLOUDFLARE-TUNNEL-TOKEN"
+  value        = var.cloudflare_tunnel_token_initial
+  key_vault_id = azurerm_key_vault.main.id
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 
   depends_on = [azurerm_key_vault_access_policy.deployer]
 }

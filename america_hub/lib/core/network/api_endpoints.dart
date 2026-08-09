@@ -40,6 +40,12 @@ abstract final class ApiEndpoints {
       '/messages/groups/$groupId/requests';
   static String messagingGroupRequest(String groupId, String userId) =>
       '/messages/groups/$groupId/requests/$userId';
+  static const messagingReports = '/messages/reports';
+  // Blocking is a social-graph edge, so it is owned by the community service
+  // and resolves against ApiConfig.communityBaseUrl. Messaging only consumes
+  // the event it emits.
+  static const communityBlocks = '/community/blocks';
+  static String communityBlock(String userId) => '/community/blocks/$userId';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

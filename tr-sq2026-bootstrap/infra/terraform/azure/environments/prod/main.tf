@@ -16,6 +16,8 @@ module "shared" {
   postgres_admin_username = var.postgres_admin_username
   postgres_admin_password = var.postgres_admin_password
 
+  key_vault_admin_object_ids = var.key_vault_admin_object_ids
+
   key_vault_secrets = {
     "JWT-ISSUER"                    = "https://api.turksquare.com"
     "JWT-AUDIENCE"                  = "https://api.turksquare.com"
@@ -252,7 +254,13 @@ module "messaging_gateway_container_app" {
     { name = "MATRIX-SERVER-NAME", key_vault_secret_id = "MATRIX-SERVER-NAME", env_name = "MATRIX_SERVER_NAME" },
     { name = "INTERNAL-SERVICE-TOKEN", key_vault_secret_id = "INTERNAL-SERVICE-TOKEN", env_name = "INTERNAL_SERVICE_TOKEN" },
     { name = "JWT-ISSUER", key_vault_secret_id = "JWT-ISSUER", env_name = "JWT_ISSUER" },
-    { name = "JWT-AUDIENCE", key_vault_secret_id = "JWT-AUDIENCE", env_name = "JWT_AUDIENCE" }
+    { name = "JWT-AUDIENCE", key_vault_secret_id = "JWT-AUDIENCE", env_name = "JWT_AUDIENCE" },
+    # The moderation endpoints under /v1/internal/gatework/messaging reject every
+    # call without this. Identity mints one delegation token for all gatework
+    # traffic and stamps it with GATEWORK-COMMUNITY-AUDIENCE, so despite the name
+    # this is the audience every gatework-facing service must expect - the same
+    # secret community-service reads for the same reason.
+    { name = "GATEWORK-COMMUNITY-AUDIENCE", key_vault_secret_id = "GATEWORK-COMMUNITY-AUDIENCE", env_name = "GATEWORK_JWT_AUDIENCE" }
   ]
 
   extra_env = [
@@ -301,6 +309,81 @@ module "matrix_synapse" {
   postgres_admin_username = var.postgres_admin_username
   postgres_admin_password = var.postgres_admin_password
   database_name           = module.shared.matrix_database_name
+}
+
+# The operator console. It deliberately has no ingress of any kind — not even
+# internal — which is the same posture it had on ECS: the only way in is the
+# Cloudflare Tunnel connector running beside it, and a connector dials out. So
+# there is no address on this app to attack, and Cloudflare Access stays the one
+# authentication gate in front of the panel.
+#
+# It also holds no database credential. Every screen reads a domain API over
+# HTTP, which is why database_name is left unset here.
+module "gatework_console_container_app" {
+  source = "../../modules/container-app"
+
+  service_name = "gatework-console"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
+
+  resource_group_name        = module.shared.resource_group_name
+  acr_id                     = module.shared.acr_id
+  acr_login_server           = module.shared.acr_login_server
+  key_vault_id               = module.shared.key_vault_id
+  key_vault_uri              = module.shared.key_vault_uri
+  key_vault_secret_uri       = module.shared.key_vault_secret_uri
+  log_analytics_workspace_id = module.shared.log_analytics_workspace_id
+  aca_subnet_id              = module.shared.aca_subnet_id
+  # The console calls three services on their environment-internal addresses, so
+  # it has to sit in the environment they run in.
+  container_app_environment_id = module.identity_container_app.container_app_environment_id
+
+  image_repository  = "turksquare/gatework-console"
+  image_tag         = var.gatework_console_image_tag
+  container_port    = 3000
+  enable_ingress    = false
+  expose_externally = false
+
+  # Two at most: this is a handful of operators, and every extra replica is
+  # another tunnel connector registering with Cloudflare.
+  min_replicas = 1
+  max_replicas = 2
+
+  secret_env = [
+    { name = "GATEWORK-SESSION-SECRET", key_vault_secret_id = "GATEWORK-SESSION-SECRET", env_name = "GATEWORK_SESSION_SECRET" }
+  ]
+
+  extra_env = [
+    {
+      name  = "IDENTITY_API_BASE_URL"
+      value = module.identity_container_app.base_url
+    },
+    {
+      name  = "COMMUNITY_API_BASE_URL"
+      value = module.community_container_app.base_url
+    },
+    # Without this the moderation queue falls back to localhost:8082 and every
+    # report screen fails closed.
+    {
+      name  = "MESSAGING_API_BASE_URL"
+      value = module.messaging_gateway_container_app.base_url
+    }
+  ]
+
+  sidecar = {
+    name = "cloudflared"
+    # Mirrored into ACR by the deploy workflow rather than pulled from Docker
+    # Hub: an anonymous-pull rate limit here would leave the console with no way
+    # in at all.
+    image = "${module.shared.acr_login_server}/cloudflare/cloudflared:2025.2.0"
+    # --no-autoupdate: the image tag is the version, so a connector that updates
+    # itself in place would silently diverge from what was deployed.
+    args = ["tunnel", "--no-autoupdate", "run"]
+    secret_env = [
+      { name = "CLOUDFLARE-TUNNEL-TOKEN", key_vault_secret_id = "CLOUDFLARE-TUNNEL-TOKEN", env_name = "TUNNEL_TOKEN" }
+    ]
+  }
 }
 
 # The projection worker ships in the messaging-gateway image and is pinned to the

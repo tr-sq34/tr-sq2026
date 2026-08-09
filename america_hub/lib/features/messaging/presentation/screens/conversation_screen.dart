@@ -1,18 +1,28 @@
 import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/network/api_exception.dart';
 import '../../application/direct_conversation_controller.dart';
 import '../../domain/entities/conversation.dart';
 import '../../domain/entities/direct_message.dart';
+import '../../domain/repositories/message_moderation_repository.dart';
+import '../widgets/report_sheet.dart';
 
 class ConversationScreen extends StatefulWidget {
   const ConversationScreen({
     super.key,
     required this.conversation,
     required this.createController,
+    required this.moderationRepository,
   });
 
   final Conversation conversation;
   final DirectConversationControllerFactory createController;
+
+  /// Reporting and blocking. Required rather than optional: App Store guideline
+  /// 1.2 and Play's UGC policy both make an in-app report path a condition of
+  /// shipping user messaging at all, so a thread must never be able to render
+  /// without one.
+  final MessageModerationRepository moderationRepository;
 
   @override
   State<ConversationScreen> createState() => _ConversationScreenState();
@@ -195,9 +205,112 @@ class _ConversationScreenState extends State<ConversationScreen> {
               onPressed: () {},
             ),
           ],
+          _buildSafetyMenu(),
         ],
       ),
     );
+  }
+
+  /// Report and block on the thread itself, so the path exists even when the
+  /// offending message has already been deleted or scrolled past.
+  Widget _buildSafetyMenu() {
+    final participantId = widget.conversation.participantId;
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert_rounded, size: 20),
+      onSelected: (value) {
+        switch (value) {
+          case 'report':
+            _report();
+          case 'block':
+            if (participantId != null) {
+              _confirmBlock(participantId, widget.conversation.title);
+            }
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'report',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.flag_outlined, size: 20),
+            title: Text('Şikâyet et'),
+          ),
+        ),
+        if (participantId != null)
+          const PopupMenuItem(
+            value: 'block',
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.block_rounded, size: 20),
+              title: Text('Kullanıcıyı engelle'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _report({DirectMessage? message}) async {
+    final filed = await showReportSheet(
+      context,
+      repository: widget.moderationRepository,
+      conversationId: widget.conversation.id,
+      messageEventId: message?.id,
+      subjectLabel: widget.conversation.title,
+    );
+    if (!filed || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Şikâyetin alındı. Moderasyon ekibi inceleyecek.'),
+      ),
+    );
+  }
+
+  /// A block cannot be undone from this screen, so it asks first and names who
+  /// it is about — the thread title is not always the name on the message.
+  Future<void> _confirmBlock(String userId, String label) async {
+    final isDirect = widget.conversation.kind != ConversationKind.group;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Kullanıcıyı engelle'),
+        content: Text(
+          '$label artık sana mesaj gönderemez, sen de ona gönderemezsin.'
+          '${isDirect ? ' Bu sohbet gelen kutundan kaldırılır.' : ' Ortak gruplardaki mesajlarını görmeye devam edebilirsin.'}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Vazgeç'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+            child: const Text('Engelle'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await widget.moderationRepository.blockUser(userId);
+      if (!mounted) return;
+      if (isDirect) {
+        // Leaving the thread open after a block would keep showing messages
+        // from someone the user just said they do not want to hear from.
+        Navigator.pop(context);
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$label engellendi.')),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
+    }
   }
 
   Widget _buildMessageBubble(DirectMessage message, bool isDarkMode) {
@@ -207,6 +320,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onTap: failed ? () => _showRetrySheet(message) : null,
+        // Reporting your own message would only ever report yourself, so the
+        // long-press action is offered on other people's bubbles.
+        onLongPress: mine ? null : () => _showMessageActions(message),
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           constraints: BoxConstraints(
@@ -321,6 +437,44 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 _controller.discard(message.id);
               },
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMessageActions(DirectMessage message) async {
+    // In a group the counterparty is per-message; in a direct thread the sender
+    // is the person the thread is with either way.
+    final targetId = widget.conversation.kind == ConversationKind.group
+        ? message.senderId
+        : widget.conversation.participantId;
+    final targetLabel = message.senderName ?? widget.conversation.title;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.flag_outlined),
+              title: const Text('Mesajı şikâyet et'),
+              subtitle: const Text('Moderasyon ekibi 24 saat içinde inceler'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _report(message: message);
+              },
+            ),
+            if (targetId != null && targetId != _controller.viewerId)
+              ListTile(
+                leading: const Icon(Icons.block_rounded),
+                title: const Text('Kullanıcıyı engelle'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _confirmBlock(targetId, targetLabel);
+                },
+              ),
           ],
         ),
       ),

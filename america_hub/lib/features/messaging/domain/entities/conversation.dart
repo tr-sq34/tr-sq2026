@@ -4,14 +4,18 @@ enum GroupPrivacy { public, private }
 enum GroupMembershipStatus { none, requested, joined }
 
 class Conversation {
-  const Conversation({required this.id, required this.title, required this.preview, required this.updatedAt, required this.kind, this.unreadCount = 0, this.contextLabel, this.requestDecision = RequestDecision.pending});
+  const Conversation({required this.id, required this.title, required this.preview, required this.updatedAt, required this.kind, this.unreadCount = 0, this.contextLabel, this.requestDecision = RequestDecision.pending, this.participantId});
   final String id, title, preview;
   final DateTime updatedAt;
   final ConversationKind kind;
   final int unreadCount;
   final String? contextLabel;
   final RequestDecision requestDecision;
-  Conversation copyWith({int? unreadCount, RequestDecision? requestDecision, ConversationKind? kind}) => Conversation(id: id, title: title, preview: preview, updatedAt: updatedAt, kind: kind ?? this.kind, unreadCount: unreadCount ?? this.unreadCount, contextLabel: contextLabel, requestDecision: requestDecision ?? this.requestDecision);
+  /// The other side of a direct thread. Null for a group, where there is no
+  /// single counterparty — which is why blocking is offered per message there
+  /// rather than for the whole thread.
+  final String? participantId;
+  Conversation copyWith({int? unreadCount, RequestDecision? requestDecision, ConversationKind? kind}) => Conversation(id: id, title: title, preview: preview, updatedAt: updatedAt, kind: kind ?? this.kind, unreadCount: unreadCount ?? this.unreadCount, contextLabel: contextLabel, requestDecision: requestDecision ?? this.requestDecision, participantId: participantId);
 }
 
 class CommunityGroup {

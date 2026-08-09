@@ -78,6 +78,11 @@ variable "messaging_gateway_image_tag" {
   default = "latest"
 }
 
+variable "gatework_console_image_tag" {
+  type    = string
+  default = "latest"
+}
+
 variable "matrix_synapse_image_tag" {
   type    = string
   default = "latest"
@@ -95,6 +100,12 @@ variable "jwt_secret_initial" {
   type        = string
   sensitive   = true
   default     = "CHANGE-ME-JWT-SECRET-PLACEHOLDER"
+}
+
+variable "key_vault_admin_object_ids" {
+  description = "Object IDs of every principal that applies this stack. Set in terraform.tfvars rather than an environment variable on purpose: a run that did not happen to have the variable set would fall back to the caller alone and revoke everyone else."
+  type        = list(string)
+  default     = []
 }
 
 variable "deployer_object_id" {

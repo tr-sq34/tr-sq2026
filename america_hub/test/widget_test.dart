@@ -22,6 +22,7 @@ import 'package:america_hub/features/marketplace/application/marketplace_control
 import 'package:america_hub/features/marketplace/data/repositories/mock_marketplace_repository.dart';
 import 'package:america_hub/features/messaging/application/messaging_controller.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_direct_message_repository.dart';
+import 'package:america_hub/features/messaging/data/repositories/mock_message_moderation_repository.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_messaging_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
@@ -57,6 +58,7 @@ void main() {
         profileController: ProfileController(repository: MockProfileRepository()),
         messagingController: MessagingController(repository: MockMessagingRepository()),
         directMessageRepository: MockDirectMessageRepository(),
+        messageModerationRepository: MockMessageModerationRepository(),
         communityHomeController: CommunityHomeController(
           CommunityHomeRepository(apiClient),
         ),

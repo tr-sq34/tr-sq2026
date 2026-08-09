@@ -5,6 +5,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../application/direct_conversation_controller.dart';
 import '../../application/messaging_controller.dart';
 import '../../domain/entities/conversation.dart';
+import '../../domain/repositories/message_moderation_repository.dart';
 import 'conversation_screen.dart';
 import '../widgets/create_group_sheet.dart';
 import '../widgets/join_requests_sheet.dart';
@@ -14,6 +15,7 @@ class InboxScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.createConversationController,
+    required this.moderationRepository,
   });
 
   final MessagingController controller;
@@ -21,6 +23,10 @@ class InboxScreen extends StatefulWidget {
   /// Passed straight through to the chat screen, which owns the thread it
   /// builds. The inbox never opens a thread itself.
   final DirectConversationControllerFactory createConversationController;
+
+  /// Also passed straight through: reporting and blocking belong to an open
+  /// thread, not to the list of them.
+  final MessageModerationRepository moderationRepository;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -394,6 +400,7 @@ class _InboxScreenState extends State<InboxScreen> {
                   builder: (_) => ConversationScreen(
                         conversation: chat,
                         createController: widget.createConversationController,
+                        moderationRepository: widget.moderationRepository,
                       )));
             },
             borderRadius: BorderRadius.circular(20),
@@ -811,6 +818,7 @@ class _InboxScreenState extends State<InboxScreen> {
           contextLabel: '${group.city} • ${group.members} üye',
         ),
         createController: widget.createConversationController,
+        moderationRepository: widget.moderationRepository,
       ),
     ));
   }
@@ -996,6 +1004,8 @@ class _InboxScreenState extends State<InboxScreen> {
                                   conversation: conversation,
                                   createController:
                                       widget.createConversationController,
+                                  moderationRepository:
+                                      widget.moderationRepository,
                                 )));
                       },
                       style: ElevatedButton.styleFrom(
