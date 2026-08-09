@@ -69,6 +69,12 @@ variable "azure_postgres_root_cert_url" {
   default = "https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem"
 }
 
+variable "key_vault_admin_object_ids" {
+  description = "Object IDs of every principal that runs Terraform against this stack - the CI service principal and any human operator. All of them get an access policy regardless of which one is applying. Empty means the current caller only, which bootstraps a new vault but leaves the others locked out."
+  type        = list(string)
+  default     = []
+}
+
 variable "key_vault_secrets" {
   description = "Map of secret names to secret values stored in the shared Azure Key Vault."
   type        = map(string)

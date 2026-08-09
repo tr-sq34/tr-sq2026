@@ -16,6 +16,8 @@ module "shared" {
   postgres_admin_username = var.postgres_admin_username
   postgres_admin_password = var.postgres_admin_password
 
+  key_vault_admin_object_ids = var.key_vault_admin_object_ids
+
   key_vault_secrets = {
     "JWT-ISSUER"                    = "https://api.turksquare.com"
     "JWT-AUDIENCE"                  = "https://api.turksquare.com"

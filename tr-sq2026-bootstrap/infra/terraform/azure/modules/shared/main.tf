@@ -113,15 +113,35 @@ resource "azurerm_key_vault" "main" {
   tags = local.base_tags
 }
 
+locals {
+  # Every principal that runs Terraform against this vault, not just the one
+  # running right now. This used to be pinned to the caller alone, which meant a
+  # human applying from a laptop replaced the CI principal's policy with their
+  # own; the next CI plan then got 403 on every secret read and could not even
+  # refresh state to repair itself. Falls back to the caller so a first-time
+  # bootstrap still works before the IDs are known.
+  key_vault_admin_object_ids = length(var.key_vault_admin_object_ids) > 0 ? toset(var.key_vault_admin_object_ids) : toset([data.azurerm_client_config.current.object_id])
+}
+
 resource "azurerm_key_vault_access_policy" "deployer" {
+  for_each = local.key_vault_admin_object_ids
+
   key_vault_id = azurerm_key_vault.main.id
   tenant_id    = var.tenant_id
-  object_id    = data.azurerm_client_config.current.object_id
+  object_id    = each.value
 
   secret_permissions = ["Get", "List", "Set", "Delete", "Purge", "Recover"]
   key_permissions    = ["Get", "List", "Create", "Delete", "Purge", "Recover", "Sign", "Verify", "GetRotationPolicy"]
 
   depends_on = [azurerm_key_vault.main]
+}
+
+# The un-keyed policy this replaced was last applied by the human owner, so that
+# is the identity it holds. The vault rejects a second policy for a principal
+# that already has one, so without this the create would collide with itself.
+moved {
+  from = azurerm_key_vault_access_policy.deployer
+  to   = azurerm_key_vault_access_policy.deployer["5c8d6271-40f5-47fe-a3a8-c5adcafc8e29"]
 }
 
 resource "azurerm_key_vault_secret" "app" {

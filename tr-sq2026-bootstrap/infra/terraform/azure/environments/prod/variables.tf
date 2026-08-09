@@ -102,6 +102,12 @@ variable "jwt_secret_initial" {
   default     = "CHANGE-ME-JWT-SECRET-PLACEHOLDER"
 }
 
+variable "key_vault_admin_object_ids" {
+  description = "Object IDs of every principal that applies this stack. Set in terraform.tfvars rather than an environment variable on purpose: a run that did not happen to have the variable set would fall back to the caller alone and revoke everyone else."
+  type        = list(string)
+  default     = []
+}
+
 variable "deployer_object_id" {
   description = "Azure AD object ID of the user, group or service principal that deploys function zip packages to the storage accounts. If empty, the Terraform caller is used."
   type        = string
