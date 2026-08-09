@@ -100,7 +100,7 @@ resource "azurerm_linux_function_app" "main" {
     }
 
     dynamic "cors" {
-      for_each = length(var.cors_allowed_origins) > 0 ? toset(["enabled"]) : toset([])
+      for_each = length(var.cors_allowed_origins) > 0 ? [1] : []
       content {
         allowed_origins = var.cors_allowed_origins
       }

@@ -100,11 +100,14 @@ resource "azurerm_container_app" "main" {
   # Workers (enable_ingress = false) have no listener. Declaring ingress for them
   # would leave the revision permanently unhealthy.
   #
-  # Every conditional dynamic block below switches on toset(["enabled"]) rather
-  # than the usual [1]: Terraform 1.8, which CI pins, rejects a tuple of numbers
-  # in a dynamic for_each. Newer releases accept it, so this only fails in CI.
+  # The conditional dynamic blocks further down wrap their condition in
+  # nonsensitive(). Comparing a sensitive variable yields a sensitive bool, and
+  # Terraform 1.8 - the version CI pins - refuses to iterate a marked value in a
+  # dynamic for_each. Only whether the URI is empty is unmasked; the URI itself
+  # stays sensitive. Newer Terraform tolerates the mark, which is why this
+  # passed locally and failed in CI.
   dynamic "ingress" {
-    for_each = var.enable_ingress ? toset(["enabled"]) : toset([])
+    for_each = var.enable_ingress ? [1] : []
     content {
       external_enabled = var.expose_externally
       target_port      = var.container_port
@@ -164,7 +167,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.servicebus_connection_string_secret_uri != "" ? toset(["enabled"]) : toset([])
+        for_each = nonsensitive(var.servicebus_connection_string_secret_uri != "") ? [1] : []
         content {
           name        = "AZURE_SERVICE_BUS_CONNECTION_STRING"
           secret_name = "azure-service-bus-connection-string"
@@ -172,7 +175,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.servicebus_connection_string_secret_uri == "" ? toset(["enabled"]) : toset([])
+        for_each = nonsensitive(var.servicebus_connection_string_secret_uri == "") ? [1] : []
         content {
           name  = "AZURE_SERVICE_BUS_CONNECTION_STRING"
           value = var.servicebus_connection_string
@@ -197,7 +200,7 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.storage_account_key_secret_uri != "" ? toset(["enabled"]) : toset([])
+        for_each = nonsensitive(var.storage_account_key_secret_uri != "") ? [1] : []
         content {
           name        = "AZURE_STORAGE_ACCOUNT_KEY"
           secret_name = "storage-account-key"
@@ -208,7 +211,7 @@ resource "azurerm_container_app" "main" {
   }
 
   dynamic "secret" {
-    for_each = var.servicebus_connection_string_secret_uri != "" ? toset(["enabled"]) : toset([])
+    for_each = nonsensitive(var.servicebus_connection_string_secret_uri != "") ? [1] : []
     content {
       name                = "azure-service-bus-connection-string"
       identity            = azurerm_user_assigned_identity.app.id
@@ -217,7 +220,7 @@ resource "azurerm_container_app" "main" {
   }
 
   dynamic "secret" {
-    for_each = var.storage_account_key_secret_uri != "" ? toset(["enabled"]) : toset([])
+    for_each = nonsensitive(var.storage_account_key_secret_uri != "") ? [1] : []
     content {
       name                = "storage-account-key"
       identity            = azurerm_user_assigned_identity.app.id
