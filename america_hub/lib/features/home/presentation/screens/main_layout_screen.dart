@@ -10,6 +10,7 @@ import '../../../community/application/community_special_request_controller.dart
 import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../profile/application/profile_controller.dart';
+import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
@@ -28,6 +29,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.profilePostsController,
     required this.mediaUploadController,
     required this.specialRequestController,
+    required this.contentModerationRepository,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
@@ -42,6 +44,7 @@ class MainLayoutScreen extends StatefulWidget {
   final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+  final ContentModerationRepository contentModerationRepository;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
@@ -75,6 +78,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       commentsController: widget.commentsController,
       mediaUploadController: widget.mediaUploadController,
       specialRequestController: widget.specialRequestController,
+      moderationRepository: widget.contentModerationRepository,
     ),
     MarketplaceScreen(
       controller: widget.marketplaceController,

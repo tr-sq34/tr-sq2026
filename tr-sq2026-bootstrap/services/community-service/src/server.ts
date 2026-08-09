@@ -377,7 +377,12 @@ app.post('/v1/community/posts/:id/shares', async (request, reply) => {
 });
 app.delete('/v1/community/posts/:id',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);await db.query('UPDATE community_posts SET deleted_at=now() WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.post('/v1/community/posts', async (request, reply) => {
-  try { const userId = await viewer(request.headers); const input = postBody.parse(request.body); const client = await db.connect(); try { await client.query('BEGIN');
+  try { const userId = await viewer(request.headers);
+    // A restriction that only writes a row is theatre. This is the check that
+    // makes "eject the abusive user" real: a moderator's decision has to stop
+    // the next post, not just record an opinion about the last one.
+    const restricted = await activeRestriction(userId); if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const input = postBody.parse(request.body); const client = await db.connect(); try { await client.query('BEGIN');
     if (input.marketplaceListingId) { const listing = await client.query('SELECT 1 FROM marketplace_listing_projection WHERE listing_id=$1 AND owner_id=$2 AND status=\'active\'', [input.marketplaceListingId,userId]); if (!listing.rows[0]) return reply.code(403).send({error:{code:'LISTING_NOT_AVAILABLE',message:'Aktif ilan bulunamadı.'}}); }
     const kind = input.poll ? 'poll' : input.marketplaceListingId ? 'marketplace_listing' : 'standard'; const result = await client.query<{id:string}>('INSERT INTO community_posts(author_id,kind,visibility,body,location_label,region_code,marketplace_listing_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',[userId,kind,input.visibility,input.body,input.locationLabel??null,input.locationRegionCode?.toUpperCase()??null,input.marketplaceListingId??null]); const id=result.rows[0]!.id;
     if(input.poll){const poll=await client.query<{post_id:string}>('INSERT INTO post_polls(post_id,selection_mode,closes_at) VALUES($1,$2,$3) RETURNING post_id',[id,input.poll.selectionMode,input.poll.closesAt??null]); for(const [ordinal,label] of input.poll.options.entries()) await client.query('INSERT INTO post_poll_options(post_id,ordinal,label) VALUES($1,$2,$3)',[poll.rows[0]!.post_id,ordinal,label]);}
@@ -451,7 +456,7 @@ app.get('/v1/community/me/story-audience-contacts', async (request, reply) => {
     return reply.code(400).send({ error: { code: 'STORY_AUDIENCE_CONTACTS_UNAVAILABLE', message: 'Story gizlilik kişileri yüklenemedi.' } });
   }
 });
-app.post('/v1/community/stories',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const input=storyBody.parse(request.body);await client.query('BEGIN');const media=await client.query('SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status=\'ready\' FOR KEY SHARE',[input.mediaId,userId]);if(!media.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'MEDIA_NOT_READY',message:'Medya hazır değil.'}});}const r=await client.query<{id:string}>('INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) SELECT $1,$2,$3,p.region_code,now()+($4::text||\' hours\')::interval FROM community_profile_projection p WHERE p.user_id=$1 RETURNING id',[userId,input.mediaId,input.visibility,input.ttlHours]);if(!r.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'PROFILE_REQUIRED',message:'Story paylaşmadan önce profil konumunu tamamlayın.'}});}if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[r.rows[0].id,input.excludedUserIds]);await client.query('COMMIT');return reply.code(201).send({data:r.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_CREATE_FAILED',message:'Story oluşturulamadı.'}});}finally{client.release();}});
+app.post('/v1/community/stories',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const input=storyBody.parse(request.body);await client.query('BEGIN');const media=await client.query('SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status=\'ready\' FOR KEY SHARE',[input.mediaId,userId]);if(!media.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'MEDIA_NOT_READY',message:'Medya hazır değil.'}});}const r=await client.query<{id:string}>('INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) SELECT $1,$2,$3,p.region_code,now()+($4::text||\' hours\')::interval FROM community_profile_projection p WHERE p.user_id=$1 RETURNING id',[userId,input.mediaId,input.visibility,input.ttlHours]);if(!r.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'PROFILE_REQUIRED',message:'Story paylaşmadan önce profil konumunu tamamlayın.'}});}if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[r.rows[0].id,input.excludedUserIds]);await client.query('COMMIT');return reply.code(201).send({data:r.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_CREATE_FAILED',message:'Story oluşturulamadı.'}});}finally{client.release();}});
 // Audience exclusions are an author-controlled deny list. They are checked by
 // every Story read/view/like authorization path, never only by the client UI.
 app.put('/v1/community/stories/:id/audience/exclusions',{config:{rateLimit:{max:12,timeWindow:'1 minute'}}},async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const storyId=z.string().uuid().parse((request.params as {id:string}).id);const input=storyAudienceExclusionsBody.parse(request.body);await client.query('BEGIN');const story=await client.query('SELECT 1 FROM stories WHERE id=$1 AND author_id=$2 AND expires_at>now() FOR UPDATE',[storyId,userId]);if(!story.rows[0]){await client.query('ROLLBACK');return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});}await client.query('DELETE FROM story_audience_exclusions WHERE story_id=$1',[storyId]);if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[storyId,input.excludedUserIds]);await client.query('COMMIT');return reply.code(204).send();}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_AUDIENCE_UPDATE_FAILED',message:'Story görünürlüğü güncellenemedi.'}});}finally{client.release();}});
@@ -461,7 +466,7 @@ app.get('/v1/community/me/story-highlights',async(request,reply)=>{try{const use
 app.post('/v1/community/stories/:id/views',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});await db.query('INSERT INTO story_views(story_id,viewer_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.put('/v1/community/stories/:id/likes',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=interactionBody.parse(request.body);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});if(input.enabled)await db.query('INSERT INTO story_likes(story_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);else await db.query('DELETE FROM story_likes WHERE story_id=$1 AND actor_id=$2',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.get('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {id:string}).id);const rows=await db.query('SELECT id,author_id,parent_id,body,created_at FROM community_comments WHERE post_id=$1 AND deleted_at IS NULL AND moderation_state=\'active\' ORDER BY created_at DESC LIMIT 50',[postId]);return{data:rows.rows};}catch{return reply.code(401).send({error:{code:'COMMENTS_FAILED',message:'Yorumlar yüklenemedi.'}});}});
-app.post('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {id:string}).id);const input=commentBody.parse(request.body);const post=await db.query('SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL AND comments_enabled',[postId]);if(!post.rows[0])return reply.code(403).send({error:{code:'COMMENTS_DISABLED',message:'Yorumlar kapalı.'}});const result=await db.query('INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',[postId,userId,input.parentId??null,input.body]);return reply.code(201).send({data:result.rows[0]});}catch{return reply.code(400).send({error:{code:'COMMENT_CREATE_FAILED',message:'Yorum gönderilemedi.'}});}});
+app.post('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const postId=z.string().uuid().parse((request.params as {id:string}).id);const input=commentBody.parse(request.body);const post=await db.query('SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL AND comments_enabled',[postId]);if(!post.rows[0])return reply.code(403).send({error:{code:'COMMENTS_DISABLED',message:'Yorumlar kapalı.'}});const result=await db.query('INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',[postId,userId,input.parentId??null,input.body]);return reply.code(201).send({data:result.rows[0]});}catch{return reply.code(400).send({error:{code:'COMMENT_CREATE_FAILED',message:'Yorum gönderilemedi.'}});}});
 app.delete('/v1/community/comments/:id',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);await db.query('UPDATE community_comments SET deleted_at=now(),moderation_state=\'removed\' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
@@ -548,6 +553,413 @@ app.get('/v1/community/blocks', async (request, reply) => {
     return { data: rows.rows.map((row) => ({ userId: row.blocked_id, displayName: row.display_name, createdAt: row.created_at.toISOString() })) };
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BLOCKS_UNAVAILABLE', message: 'Engellenen kullanıcılar yüklenemedi.' } });
+  }
+});
+
+// --- Content moderation -------------------------------------------------
+// Reporting for feed content. The app had a "Raporla" menu item that only
+// showed a snackbar, so a report reached nobody. Categories, priorities and the
+// SLA clock match messaging-gateway's exactly: the console shows both queues on
+// one screen and a moderator should not have to hold two vocabularies.
+const REPORT_CATEGORIES = ['child_safety', 'self_harm', 'violence_threat', 'hate_speech', 'harassment', 'sexual_content', 'scam_fraud', 'illegal_goods', 'spam', 'other'] as const;
+const URGENT_CATEGORIES = new Set<string>(['child_safety', 'self_harm', 'violence_threat']);
+const STANDARD_SLA_HOURS = 24;
+const URGENT_SLA_HOURS = 2;
+const CONTENT_REVIEW_ROLES: GateworkRole[] = ['owner', 'security_admin', 'moderator', 'auditor'];
+const CONTENT_ACT_ROLES: GateworkRole[] = ['owner', 'security_admin', 'moderator'];
+
+const contentReportBody = z.object({
+  targetType: z.enum(['post', 'comment', 'story']),
+  targetId: z.string().uuid(),
+  category: z.enum(REPORT_CATEGORIES),
+  note: z.string().trim().max(500).optional(),
+});
+const contentReportQuery = z.object({
+  status: z.enum(['unresolved', 'open', 'in_review', 'actioned', 'dismissed']).default('unresolved'),
+  category: z.enum(REPORT_CATEGORIES).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+const contentDecisionBody = z.object({
+  action: z.enum(['dismiss', 'remove_content', 'restrict_author']),
+  reason: z.string().trim().min(5).max(500),
+  // Only read for restrict_author. A restriction that also leaves the reported
+  // content up is a real decision - the account is the problem, the one post was
+  // not - so removal stays a separate flag rather than being implied.
+  removeContent: z.boolean().default(false),
+  restriction: z.enum(['muted', 'suspended']).optional(),
+  durationHours: z.coerce.number().int().min(1).max(8760).optional(),
+  idempotencyKey: z.string().uuid(),
+});
+const contentReasonBody = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
+
+// The reported object, frozen. Selected inside the same transaction that writes
+// the report so a delete racing the report cannot empty the case file.
+async function captureContentEvidence(client: pg.PoolClient, targetType: 'post' | 'comment' | 'story', targetId: string) {
+  if (targetType === 'post') {
+    const row = await client.query<{ author_id: string; body: string; created_at: Date; media_ids: string[] | null }>(
+      `SELECT p.author_id,p.body,p.created_at,
+              (SELECT array_agg(m.media_id ORDER BY m.ordinal) FROM post_media_refs m WHERE m.post_id=p.id) media_ids
+         FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL`,
+      [targetId],
+    );
+    if (!row.rows[0]) return null;
+    const post = row.rows[0];
+    return { authorId: post.author_id, evidence: { targetType, body: post.body, createdAt: post.created_at.toISOString(), mediaIds: post.media_ids ?? [] } };
+  }
+  if (targetType === 'comment') {
+    const row = await client.query<{ author_id: string; body: string; created_at: Date; post_id: string }>(
+      "SELECT author_id,body,created_at,post_id FROM community_comments WHERE id=$1 AND deleted_at IS NULL",
+      [targetId],
+    );
+    if (!row.rows[0]) return null;
+    const comment = row.rows[0];
+    return { authorId: comment.author_id, evidence: { targetType, body: comment.body, createdAt: comment.created_at.toISOString(), postId: comment.post_id } };
+  }
+  const row = await client.query<{ author_id: string; created_at: Date; media_id: string; safe_url: string | null }>(
+    'SELECT s.author_id,s.created_at,s.media_id,m.safe_url FROM stories s JOIN media_assets m ON m.id=s.media_id WHERE s.id=$1',
+    [targetId],
+  );
+  if (!row.rows[0]) return null;
+  const story = row.rows[0];
+  // Stories expire in at most 24 hours, which is the whole SLA window - the
+  // media key is kept so a reviewer still has something to look at after the
+  // story itself is gone.
+  return { authorId: story.author_id, evidence: { targetType, createdAt: story.created_at.toISOString(), mediaId: story.media_id, mediaKey: story.safe_url } };
+}
+
+app.post('/v1/community/reports', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const reporterId = await viewer(request.headers);
+    const input = contentReportBody.parse(request.body);
+    await client.query('BEGIN');
+
+    const captured = await captureContentEvidence(client, input.targetType, input.targetId);
+    if (!captured) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'CONTENT_NOT_FOUND', message: 'Bu içerik artık mevcut değil.' } }); }
+    if (captured.authorId === reporterId) { await client.query('ROLLBACK'); return reply.code(400).send({ error: { code: 'SELF_REPORT_NOT_ALLOWED', message: 'Kendi içeriğinizi şikâyet edemezsiniz.' } }); }
+
+    // Returning the report already on file instead of erroring: tapping report
+    // twice is not a failure a user should have to understand.
+    const existing = await client.query<{ id: string; status: string; created_at: Date }>(
+      "SELECT id,status,created_at FROM content_reports WHERE reporter_id=$1 AND target_type=$2 AND target_id=$3 AND status IN ('open','in_review')",
+      [reporterId, input.targetType, input.targetId],
+    );
+    if (existing.rows[0]) {
+      await client.query('COMMIT');
+      const row = existing.rows[0];
+      return reply.code(200).send({ data: { id: row.id, status: row.status, createdAt: row.created_at.toISOString(), duplicate: true } });
+    }
+
+    const priority = URGENT_CATEGORIES.has(input.category) ? 'urgent' : 'standard';
+    const slaHours = priority === 'urgent' ? URGENT_SLA_HOURS : STANDARD_SLA_HOURS;
+    const inserted = await client.query<{ id: string; created_at: Date; due_at: Date }>(
+      `INSERT INTO content_reports(reporter_id,reported_user_id,target_type,target_id,category,note,evidence,priority,due_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,now()+($9::text||' hours')::interval)
+       RETURNING id,created_at,due_at`,
+      [reporterId, captured.authorId, input.targetType, input.targetId, input.category, input.note ?? null, JSON.stringify(captured.evidence), priority, String(slaHours)],
+    );
+    await client.query('COMMIT');
+    const report = inserted.rows[0]!;
+    return reply.code(201).send({ data: { id: report.id, status: 'open', createdAt: report.created_at.toISOString(), dueAt: report.due_at.toISOString(), duplicate: false } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'REPORT_FAILED', message: 'Şikâyet gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+// What the app asks before letting someone post: a suspended account may not
+// write at all, a muted one may not create new content. Exported as a route so
+// the client can explain the state instead of failing a write with no reason.
+// Named, not generic. "Paylaşım oluşturulamadı" would send a restricted user to
+// support thinking the app is broken; the point of a restriction is that the
+// person knows they are restricted.
+const restrictionError = (restriction: { kind: string; expires_at: Date | null }) => ({
+  error: {
+    code: 'ACCOUNT_RESTRICTED',
+    message: restriction.kind === 'suspended'
+      ? 'Hesabınız askıya alındı. Yeni içerik paylaşamazsınız.'
+      : restriction.expires_at
+        ? `Hesabınız ${restriction.expires_at.toLocaleDateString('tr-TR')} tarihine kadar kısıtlı. Yeni içerik paylaşamazsınız.`
+        : 'Hesabınız kısıtlı. Yeni içerik paylaşamazsınız.',
+  },
+});
+
+async function activeRestriction(userId: string) {
+  const row = await db.query<{ kind: string; reason: string; expires_at: Date | null }>(
+    'SELECT kind,reason,expires_at FROM content_author_restrictions WHERE user_id=$1 AND (expires_at IS NULL OR expires_at>now())',
+    [userId],
+  );
+  return row.rows[0] ?? null;
+}
+
+app.get('/v1/community/restrictions/me', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restriction = await activeRestriction(userId);
+    return { data: restriction ? { kind: restriction.kind, reason: restriction.reason, expiresAt: restriction.expires_at?.toISOString() ?? null } : null };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'RESTRICTION_UNAVAILABLE', message: 'Hesap durumu okunamadı.' } });
+  }
+});
+
+const CONTENT_REPORT_SELECT = `
+  SELECT r.*,
+         COALESCE(rp.display_name,'TurkSquare üyesi') reporter_name,
+         COALESCE(tp.display_name,'TurkSquare üyesi') reported_name,
+         (SELECT kind FROM content_author_restrictions cr WHERE cr.user_id=r.reported_user_id AND (cr.expires_at IS NULL OR cr.expires_at>now())) active_restriction
+    FROM content_reports r
+    LEFT JOIN community_profile_projection rp ON rp.user_id=r.reporter_id
+    LEFT JOIN community_profile_projection tp ON tp.user_id=r.reported_user_id`;
+
+type ContentReportRow = {
+  id: string; reporter_id: string; reporter_name: string; reported_user_id: string; reported_name: string;
+  target_type: 'post' | 'comment' | 'story'; target_id: string; category: string; note: string | null;
+  evidence: Record<string, unknown>; priority: 'urgent' | 'standard'; status: string; due_at: Date;
+  assigned_to: string | null; resolution: string | null; resolved_by: string | null; resolved_at: Date | null;
+  created_at: Date; active_restriction: string | null;
+};
+
+const toContentReportDto = (row: ContentReportRow) => ({
+  id: row.id,
+  source: 'content' as const,
+  targetType: row.target_type,
+  targetId: row.target_id,
+  category: row.category,
+  note: row.note,
+  evidence: row.evidence,
+  priority: row.priority,
+  status: row.status,
+  dueAt: row.due_at.toISOString(),
+  overdue: row.due_at.getTime() < Date.now() && (row.status === 'open' || row.status === 'in_review'),
+  createdAt: row.created_at.toISOString(),
+  reporterId: row.reporter_id,
+  reporterName: row.reporter_name,
+  reportedUserId: row.reported_user_id,
+  reportedUserName: row.reported_name,
+  activeRestriction: row.active_restriction,
+  assignedTo: row.assigned_to,
+  resolution: row.resolution,
+  resolvedBy: row.resolved_by,
+  resolvedAt: row.resolved_at?.toISOString() ?? null,
+});
+
+app.get('/v1/internal/gatework/community/reports', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_REVIEW_ROLES);
+    const { status, category, limit, offset } = contentReportQuery.parse(request.query);
+    const unresolved = status === 'unresolved';
+    const rows = await db.query<ContentReportRow>(
+      `${CONTENT_REPORT_SELECT}
+        WHERE ($1::boolean OR r.status=$2)
+          AND (NOT $1::boolean OR r.status IN ('open','in_review'))
+          AND ($3::text IS NULL OR r.category=$3)
+        ORDER BY (r.status IN ('open','in_review')) DESC, r.due_at ASC, r.id ASC
+        LIMIT $4 OFFSET $5`,
+      [unresolved, unresolved ? 'open' : status, category ?? null, limit, offset],
+    );
+    return { data: rows.rows.map(toContentReportDto), nextOffset: rows.rows.length === limit ? offset + limit : null };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'CONTENT_REPORTS_UNAVAILABLE', message: 'Şikâyet kuyruğu okunamadı.' } });
+  }
+});
+
+app.get('/v1/internal/gatework/community/reports/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_REVIEW_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const result = await db.query<ContentReportRow>(`${CONTENT_REPORT_SELECT} WHERE r.id=$1`, [id]);
+    if (!result.rows[0]) return reply.code(404).send({ error: { code: 'REPORT_NOT_FOUND', message: 'Şikâyet bulunamadı.' } });
+    const row = result.rows[0];
+    // Whether the reported content is still standing decides which action makes
+    // sense, and a reviewer should not have to guess it from the evidence date.
+    const [history, actions, live] = await Promise.all([
+      db.query<{ id: string; category: string; status: string; created_at: Date }>(
+        'SELECT id,category,status,created_at FROM content_reports WHERE reported_user_id=$1 AND id<>$2 ORDER BY created_at DESC LIMIT 10',
+        [row.reported_user_id, row.id],
+      ),
+      db.query<{ action: string; reason: string; actor_id: string; created_at: Date }>(
+        'SELECT action,reason,actor_id,created_at FROM content_moderation_actions WHERE report_id=$1 ORDER BY created_at ASC',
+        [row.id],
+      ),
+      row.target_type === 'post'
+        ? db.query<{ state: string }>("SELECT CASE WHEN deleted_at IS NOT NULL THEN 'deleted' ELSE moderation_state END state FROM community_posts WHERE id=$1", [row.target_id])
+        : row.target_type === 'comment'
+          ? db.query<{ state: string }>("SELECT CASE WHEN deleted_at IS NOT NULL THEN 'deleted' ELSE moderation_state END state FROM community_comments WHERE id=$1", [row.target_id])
+          : db.query<{ state: string }>("SELECT CASE WHEN expires_at<=now() THEN 'expired' ELSE 'active' END state FROM stories WHERE id=$1", [row.target_id]),
+    ]);
+    return {
+      data: {
+        ...toContentReportDto(row),
+        targetState: live.rows[0]?.state ?? 'deleted',
+        authorHistory: history.rows.map((h) => ({ id: h.id, category: h.category, status: h.status, createdAt: h.created_at.toISOString() })),
+        actions: actions.rows.map((a) => ({ action: a.action, reason: a.reason, actorId: a.actor_id, createdAt: a.created_at.toISOString() })),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'REPORT_UNAVAILABLE', message: 'Şikâyet okunamadı.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/community/reports/:id/claim', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    // Only an open report can be claimed, and only by one person: the WHERE is
+    // the lock, so two moderators opening the queue together cannot both believe
+    // the case is theirs.
+    const claimed = await db.query<{ id: string }>(
+      "UPDATE content_reports SET status='in_review',assigned_to=$2 WHERE id=$1 AND status='open' RETURNING id",
+      [id, actor.actorId],
+    );
+    if (!claimed.rows[0]) return reply.code(409).send({ error: { code: 'REPORT_ALREADY_CLAIMED', message: 'Bu şikâyet başka bir moderatörde.' } });
+    await db.query(
+      "INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,$3,'claim','report',$4,'Incelemeye alindi')",
+      [id, actor.actorId, actor.roles, id],
+    );
+    return { data: { id, status: 'in_review', assignedTo: actor.actorId } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'CLAIM_FAILED', message: 'Şikâyet üstlenilemedi.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/community/reports/:id/decision', async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = contentDecisionBody.parse(request.body);
+    await client.query('BEGIN');
+
+    // Same dedup table the other Gatework commands use: a double-submitted form
+    // resolves the report once.
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='content_report.decide' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]) { await client.query('COMMIT'); return { data: { id: prior.rows[0].result_id, duplicate: true } }; }
+
+    const report = await client.query<{ id: string; status: string; target_type: 'post' | 'comment' | 'story'; target_id: string; reported_user_id: string }>(
+      'SELECT id,status,target_type,target_id,reported_user_id FROM content_reports WHERE id=$1 FOR UPDATE',
+      [id],
+    );
+    if (!report.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'REPORT_NOT_FOUND', message: 'Şikâyet bulunamadı.' } }); }
+    const row = report.rows[0];
+    if (row.status === 'actioned' || row.status === 'dismissed') { await client.query('ROLLBACK'); return reply.code(409).send({ error: { code: 'REPORT_ALREADY_RESOLVED', message: 'Bu şikâyet zaten sonuçlandırılmış.' } }); }
+
+    const removing = input.action === 'remove_content' || (input.action === 'restrict_author' && input.removeContent);
+    if (removing) {
+      // Soft removal, not a delete: the row has to survive for the audit, and a
+      // wrongly removed post has to be restorable.
+      if (row.target_type === 'post') await client.query("UPDATE community_posts SET moderation_state='removed' WHERE id=$1", [row.target_id]);
+      else if (row.target_type === 'comment') await client.query("UPDATE community_comments SET moderation_state='removed' WHERE id=$1", [row.target_id]);
+      else await client.query('UPDATE stories SET expires_at=now() WHERE id=$1 AND expires_at>now()', [row.target_id]);
+      await client.query(
+        'INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [id, actor.actorId, actor.roles, 'remove_content', row.target_type, row.target_id, input.reason],
+      );
+    }
+
+    if (input.action === 'restrict_author') {
+      const kind = input.restriction ?? 'muted';
+      await client.query(
+        `INSERT INTO content_author_restrictions(user_id,kind,reason,expires_at,created_by)
+         VALUES($1,$2,$3,CASE WHEN $4::text IS NULL THEN NULL ELSE now()+($4::text||' hours')::interval END,$5)
+         ON CONFLICT (user_id) DO UPDATE SET kind=EXCLUDED.kind,reason=EXCLUDED.reason,expires_at=EXCLUDED.expires_at,created_by=EXCLUDED.created_by,created_at=now()`,
+        [row.reported_user_id, kind, input.reason, input.durationHours ? String(input.durationHours) : null, actor.actorId],
+      );
+      await client.query(
+        'INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [id, actor.actorId, actor.roles, 'restrict_author', 'user', row.reported_user_id, input.reason],
+      );
+    }
+
+    if (input.action === 'dismiss') {
+      await client.query(
+        'INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [id, actor.actorId, actor.roles, 'dismiss', 'report', id, input.reason],
+      );
+    }
+
+    await client.query(
+      'UPDATE content_reports SET status=$2,resolution=$3,resolved_by=$4,resolved_at=now() WHERE id=$1',
+      [id, input.action === 'dismiss' ? 'dismissed' : 'actioned', input.reason, actor.actorId],
+    );
+    await client.query(
+      "INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'content_report.decide',$3)",
+      [actor.actorId, input.idempotencyKey, id],
+    );
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: `content_report.${input.action}`,
+      targetType: row.target_type, targetId: row.target_id, reason: input.reason,
+      requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return { data: { id, status: input.action === 'dismiss' ? 'dismissed' : 'actioned', duplicate: false } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'DECISION_FAILED', message: 'Karar kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/v1/internal/gatework/community/overview', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_REVIEW_ROLES);
+    const summary = await db.query<{ open_reports: string; urgent_reports: string; overdue_reports: string; filed_last_7_days: string; resolved_last_7_days: string; median_minutes: string | null; active_restrictions: string }>(
+      `SELECT
+         count(*) FILTER (WHERE status IN ('open','in_review')) open_reports,
+         count(*) FILTER (WHERE status IN ('open','in_review') AND priority='urgent') urgent_reports,
+         count(*) FILTER (WHERE status IN ('open','in_review') AND due_at<now()) overdue_reports,
+         count(*) FILTER (WHERE created_at>now()-interval '7 days') filed_last_7_days,
+         count(*) FILTER (WHERE resolved_at>now()-interval '7 days') resolved_last_7_days,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (resolved_at-created_at))/60)
+           FILTER (WHERE resolved_at>now()-interval '30 days') median_minutes,
+         (SELECT count(*) FROM content_author_restrictions WHERE expires_at IS NULL OR expires_at>now()) active_restrictions
+       FROM content_reports`,
+    );
+    const row = summary.rows[0]!;
+    return {
+      data: {
+        openReports: Number(row.open_reports),
+        urgentReports: Number(row.urgent_reports),
+        overdueReports: Number(row.overdue_reports),
+        filedLast7Days: Number(row.filed_last_7_days),
+        resolvedLast7Days: Number(row.resolved_last_7_days),
+        medianResolutionMinutes: row.median_minutes === null ? null : Math.round(Number(row.median_minutes)),
+        activeRestrictions: Number(row.active_restrictions),
+        slaHours: { urgent: URGENT_SLA_HOURS, standard: STANDARD_SLA_HOURS },
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'OVERVIEW_UNAVAILABLE', message: 'Özet okunamadı.' } });
+  }
+});
+
+app.delete('/v1/internal/gatework/community/restrictions/:userId', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_ACT_ROLES);
+    const userId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const input = contentReasonBody.parse(request.body);
+    const removed = await db.query('DELETE FROM content_author_restrictions WHERE user_id=$1', [userId]);
+    if (!removed.rowCount) return reply.code(404).send({ error: { code: 'RESTRICTION_NOT_FOUND', message: 'Etkin kısıtlama yok.' } });
+    await db.query(
+      "INSERT INTO content_moderation_actions(actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,'lift_restriction','user',$3,$4)",
+      [actor.actorId, actor.roles, userId, input.reason],
+    );
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'content_restriction.lift', targetType: 'user', targetId: userId, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'LIFT_FAILED', message: 'Kısıtlama kaldırılamadı.' } });
   }
 });
 

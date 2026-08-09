@@ -46,6 +46,11 @@ abstract final class ApiEndpoints {
   // the event it emits.
   static const communityBlocks = '/community/blocks';
   static String communityBlock(String userId) => '/community/blocks/$userId';
+  // Posts, comments and stories are all reported here: the community service
+  // owns them, so it is the only place that can copy the reported content into
+  // the report before the author can delete it.
+  static const communityReports = '/community/reports';
+  static const communityMyRestriction = '/community/restrictions/me';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

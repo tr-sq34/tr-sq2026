@@ -14,6 +14,7 @@ import 'package:america_hub/features/community/data/repositories/mock_community_
 import 'package:america_hub/features/community/data/repositories/mock_community_comments_repository.dart';
 import 'package:america_hub/features/community/data/repositories/mock_media_upload_repository.dart';
 import 'package:america_hub/features/community/data/repositories/mock_community_special_request_repository.dart';
+import 'package:america_hub/features/community/data/repositories/mock_content_moderation_repository.dart';
 import 'package:america_hub/features/events/application/events_controller.dart';
 import 'package:america_hub/features/home/application/community_home_controller.dart';
 import 'package:america_hub/features/home/data/community_home_repository.dart';
@@ -59,6 +60,7 @@ void main() {
         messagingController: MessagingController(repository: MockMessagingRepository()),
         directMessageRepository: MockDirectMessageRepository(),
         messageModerationRepository: MockMessageModerationRepository(),
+        contentModerationRepository: MockContentModerationRepository(),
         communityHomeController: CommunityHomeController(
           CommunityHomeRepository(apiClient),
         ),

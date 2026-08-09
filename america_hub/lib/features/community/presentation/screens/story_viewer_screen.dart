@@ -5,6 +5,9 @@ import '../../../../core/widgets/app_remote_image.dart';
 import '../../application/story_controller.dart';
 import '../../domain/entities/feed_extensions.dart';
 import '../../domain/entities/community_post.dart';
+import '../../domain/entities/content_report.dart';
+import '../../domain/repositories/content_moderation_repository.dart';
+import '../widgets/content_report_sheet.dart';
 
 /// Full-screen, API-backed story viewer. It deliberately contains no fake
 /// messaging transport: replies will be enabled after the Matrix DM gateway
@@ -14,10 +17,16 @@ class StoryViewerScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.initialStoryId,
+    required this.moderationRepository,
   });
 
   final StoryController controller;
   final String initialStoryId;
+
+  /// A story disappears in 24 hours, which is exactly the window a report has
+  /// to be filed in. The service copies the media reference into the report so
+  /// expiry does not take the evidence with it.
+  final ContentModerationRepository moderationRepository;
 
   @override
   State<StoryViewerScreen> createState() => _StoryViewerScreenState();
@@ -99,6 +108,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                   activeIndex: safeIndex,
                   current: current,
                   onClose: () => Navigator.of(context).pop(),
+                  onReport: () => showContentReportSheet(
+                    context,
+                    repository: widget.moderationRepository,
+                    targetType: ContentReportTarget.story,
+                    targetId: current.id,
+                    subjectLabel: current.authorName,
+                  ),
                 ),
               ),
               Positioned(
@@ -164,11 +180,13 @@ class _StoryHeader extends StatelessWidget {
     required this.activeIndex,
     required this.current,
     required this.onClose,
+    required this.onReport,
   });
   final List<StoryItem> stories;
   final int activeIndex;
   final StoryItem current;
   final VoidCallback onClose;
+  final VoidCallback onReport;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -215,6 +233,14 @@ class _StoryHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
             ),
+          ),
+          // Reporting sits next to close, on the story itself: a story is
+          // gone in 24 hours, so a reporting path that needs the user to leave
+          // the viewer and find it elsewhere is a path they will not finish.
+          IconButton(
+            onPressed: onReport,
+            tooltip: 'Şikâyet et',
+            icon: const Icon(Icons.flag_outlined, color: Colors.white),
           ),
           IconButton(
             onPressed: onClose,
