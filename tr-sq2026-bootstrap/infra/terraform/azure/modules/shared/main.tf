@@ -607,10 +607,19 @@ resource "azurerm_postgresql_flexible_server" "main" {
   }
 }
 
+# Azure refuses CREATE EXTENSION for anything not named here, with
+# `extension "..." is not allow-listed for users in Azure Database for
+# PostgreSQL`. The migration that needs it fails, so this list has to cover
+# every extension any service's migrations create - grep the migrations for
+# CREATE EXTENSION before shortening it.
+#
+# citext:   case-insensitive e-mail and handle columns
+# pgcrypto: gen_random_uuid() and digest() in the identity schema
+# postgis:  geography columns for community location search
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.main.id
-  value     = "POSTGIS"
+  value     = "CITEXT,PGCRYPTO,POSTGIS"
 }
 
 # A flexible server is created with only `postgres` and the template databases.
