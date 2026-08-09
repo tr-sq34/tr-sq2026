@@ -459,12 +459,45 @@ jobs:
           az account set --subscription "${{ env.AZURE_SUBSCRIPTION_ID }}"
           RG=rg-turksquare-prod-centralus
 
+          # RunningAtMaxScale is healthy, not a warning: it is what a revision
+          # pinned to one replica reports once that replica is up, which is every
+          # worker here and Synapse. Treating it as a failure marked a perfectly
+          # good Synapse as broken.
+          #
+          # The wait is because this step runs seconds after Terraform swapped in
+          # a new revision. Activating is the normal state for the first minute
+          # or two of a container's life; failing on the first reading turns a
+          # slow cold start into a red deploy. Only the terminal-bad states are
+          # reported immediately - there is nothing to wait for once a revision
+          # has already given up.
+          deadline=$((SECONDS + 420))
           failed=0
           for app in messaging-projection community-profile-worker community-media matrix-synapse; do
-            state=$(az containerapp revision list --name "ca-${app}-prod" -g "$RG" \
-              --query "[?properties.active].properties.runningState | [0]" -o tsv)
-            echo "${app}: ${state}"
-            [ "$state" = "Running" ] || { echo "::error::${app} revision is ${state}"; failed=1; }
+            while true; do
+              state=$(az containerapp revision list --name "ca-${app}-prod" -g "$RG" \
+                --query "[?properties.active].properties.runningState | [0]" -o tsv)
+
+              case "$state" in
+                Running|RunningAtMaxScale)
+                  echo "ok   ${app}: ${state}"
+                  break
+                  ;;
+                ActivationFailed|Failed|Degraded|Stopped)
+                  echo "::error::${app} revision is ${state}"
+                  failed=1
+                  break
+                  ;;
+                *)
+                  if [ "$SECONDS" -ge "$deadline" ]; then
+                    echo "::error::${app} revision is still ${state} after waiting"
+                    failed=1
+                    break
+                  fi
+                  echo "     ${app}: ${state}, bekleniyor..."
+                  sleep 20
+                  ;;
+              esac
+            done
           done
           exit $failed
 
