@@ -932,13 +932,13 @@ app.post('/v1/auth/password-reset/confirm', { config: { rateLimit: { max: 8, tim
 
 app.post('/v1/auth/login', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request, reply) => {
   const input = loginSchema.parse(request.body);
-  const result = await db.query<{ id: string; email: string; password_hash: string; email_verified_at: Date | null }>('SELECT id,email,password_hash,email_verified_at FROM users WHERE email=$1', [input.email.toLowerCase()]);
+  const result = await db.query<{ id: string; email: string; display_name: string; password_hash: string; email_verified_at: Date | null }>('SELECT id,email,display_name,password_hash,email_verified_at FROM users WHERE email=$1', [input.email.toLowerCase()]);
   const user = result.rows[0];
   const valid = await verifyPassword(input.password, user?.password_hash);
   if (!valid) return reply.code(401).send({ error: { code: 'INVALID_CREDENTIALS', message: 'E-posta veya şifre hatalı.' } });
   if (!user.email_verified_at) return reply.code(403).send({ error: { code: 'EMAIL_VERIFICATION_REQUIRED', message: 'E-posta doğrulaması gerekli.' } });
   const session = await issueSession(user);
-  return { data: { user: { id: user.id, email: user.email }, ...session } };
+  return { data: { user: { id: user.id, email: user.email, displayName: user.display_name }, ...session } };
 });
 
 app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -946,7 +946,7 @@ app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 m
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const token = await client.query<{ id: string; family_id: string; user_id: string; email: string; consumed_at: Date | null; expires_at: Date; revoked_at: Date | null }>('SELECT t.id,t.family_id,u.id AS user_id,u.email,t.consumed_at,t.expires_at,f.revoked_at FROM refresh_tokens t JOIN refresh_token_families f ON f.id=t.family_id JOIN users u ON u.id=f.user_id WHERE t.token_hash=$1 FOR UPDATE', [hashOpaque(input.refreshToken)]);
+    const token = await client.query<{ id: string; family_id: string; user_id: string; email: string; display_name: string; consumed_at: Date | null; expires_at: Date; revoked_at: Date | null }>('SELECT t.id,t.family_id,u.id AS user_id,u.email,u.display_name,t.consumed_at,t.expires_at,f.revoked_at FROM refresh_tokens t JOIN refresh_token_families f ON f.id=t.family_id JOIN users u ON u.id=f.user_id WHERE t.token_hash=$1 FOR UPDATE', [hashOpaque(input.refreshToken)]);
     const row = token.rows[0];
     if (!row || row.consumed_at || row.revoked_at || row.expires_at <= new Date()) {
       if (row) await client.query('UPDATE refresh_token_families SET revoked_at=now() WHERE id=$1', [row.family_id]);
@@ -957,7 +957,7 @@ app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 m
     const replacement = opaqueToken();
     await client.query('INSERT INTO refresh_tokens(family_id, token_hash, expires_at) VALUES($1,$2,now() + interval \'30 days\')', [row.family_id, hashOpaque(replacement)]);
     await client.query('COMMIT');
-    return { data: { user: { id: row.user_id, email: row.email }, accessToken: await signAccessToken({ id: row.user_id }), refreshToken: replacement } };
+    return { data: { user: { id: row.user_id, email: row.email, displayName: row.display_name }, accessToken: await signAccessToken({ id: row.user_id }), refreshToken: replacement } };
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 });
 
@@ -974,6 +974,29 @@ app.post('/v1/auth/logout', async (request, reply) => {
     [hashOpaque(input.refreshToken)],
   );
   return reply.code(204).send();
+});
+
+// The member's own account, for a client restoring a stored session. Login and
+// refresh already carry the same fields, so this exists for the one case they
+// cannot cover: an app that starts up holding only tokens.
+app.get('/v1/auth/me', async (request, reply) => {
+  try {
+    const user = await requireUser(request);
+    const row = await db.query<{ created_at: Date }>('SELECT created_at FROM users WHERE id=$1', [user.id]);
+    return {
+      data: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        // requireUser already rejects an unverified account, so reaching here
+        // means the address is verified.
+        emailVerified: true,
+        createdAt: row.rows[0]?.created_at.toISOString() ?? null,
+      },
+    };
+  } catch {
+    return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
+  }
 });
 
 // Gatework only receives a minimal operator profile. Password hashes, refresh
@@ -1097,7 +1120,7 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
   try {
     const input = webauthnSchema.parse(request.body);
     const response = input.credential as unknown as AuthenticationResponseJSON;
-    const dbCredential = await db.query<{ user_id: string; email: string; credential_id: string; public_key: Buffer; counter: number; transports: string[] }>('SELECT c.user_id,u.email,c.credential_id,c.public_key,c.counter,c.transports FROM webauthn_credentials c JOIN users u ON u.id=c.user_id WHERE c.credential_id=$1 AND u.email_verified_at IS NOT NULL', [response.id]);
+    const dbCredential = await db.query<{ user_id: string; email: string; display_name: string; credential_id: string; public_key: Buffer; counter: number; transports: string[] }>('SELECT c.user_id,u.email,u.display_name,c.credential_id,c.public_key,c.counter,c.transports FROM webauthn_credentials c JOIN users u ON u.id=c.user_id WHERE c.credential_id=$1 AND u.email_verified_at IS NOT NULL', [response.id]);
     const credential = dbCredential.rows[0];
     if (!credential) return reply.code(401).send({ error: { code: 'PASSKEY_FAILED', message: 'Passkey doğrulanamadı.' } });
     const challenges = await db.query<{ challenge: string }>('SELECT challenge FROM webauthn_challenges WHERE purpose=\'authentication\' AND consumed_at IS NULL AND expires_at > now()');
@@ -1108,7 +1131,7 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
         if (!await consumeWebAuthnChallenge(item.challenge, 'authentication')) break;
         await db.query('UPDATE webauthn_credentials SET counter=$1,last_used_at=now() WHERE credential_id=$2 AND counter <= $1', [verified.authenticationInfo.newCounter, credential.credential_id]);
         const session = await issueSession({ id: credential.user_id, email: credential.email });
-        return { data: { user: { id: credential.user_id, email: credential.email }, ...session } };
+        return { data: { user: { id: credential.user_id, email: credential.email, displayName: credential.display_name }, ...session } };
       } catch { /* challenge mismatch or invalid signature */ }
     }
     return reply.code(401).send({ error: { code: 'PASSKEY_FAILED', message: 'Passkey doğrulanamadı.' } });

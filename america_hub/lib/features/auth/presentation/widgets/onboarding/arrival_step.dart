@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../domain/entities/country_option.dart';
 import 'aurora_surfaces.dart';
+import 'month_year_wheel.dart';
 import 'onboarding_step_scaffold.dart';
 
 /// When and where from a member arrived in the United States.
@@ -39,11 +40,6 @@ class ArrivalAnswer {
     originCity: clearOrigin ? null : (originCity ?? this.originCity),
   );
 }
-
-const _monthNames = [
-  'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
-  'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık',
-];
 
 class ArrivalStep extends StatefulWidget {
   const ArrivalStep({
@@ -89,7 +85,6 @@ class _ArrivalStepState extends State<ArrivalStep> {
   @override
   Widget build(BuildContext context) {
     final answer = widget.answer;
-    final years = [for (var year = widget.currentYear; year >= 1950; year--) year];
     final origin = countryByCode(answer.originCountry) ?? kCountryOptions.first;
 
     return OnboardingStepScaffold(
@@ -140,44 +135,22 @@ class _ArrivalStepState extends State<ArrivalStep> {
         ),
         if (!answer.bornInUs) ...[
           const SizedBox(height: 24),
-          Text('HANGİ AY GELDİN?', style: AuroraText.sectionLabel()),
+          Text('NE ZAMAN GELDİN?', style: AuroraText.sectionLabel()),
           const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 3,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 2.5,
-            children: [
-              for (var month = 1; month <= 12; month++)
-                _ChoiceChipTile(
-                  label: _monthNames[month - 1],
-                  selected: answer.month == month,
-                  onTap: () => _emit(answer.copyWith(month: month)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Text('HANGİ YIL?', style: AuroraText.sectionLabel()),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 46,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: years.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final year = years[index];
-                return SizedBox(
-                  width: 84,
-                  child: _ChoiceChipTile(
-                    label: '$year',
-                    selected: answer.year == year,
-                    onTap: () => _emit(answer.copyWith(year: year)),
-                  ),
-                );
-              },
+          MonthYearWheel(
+            month: answer.month,
+            year: answer.year,
+            currentYear: widget.currentYear,
+            accent: const Color(0xFFE8A33A),
+            // Built rather than copied: the wheels can go back to "unchosen",
+            // which copyWith cannot express.
+            onChanged: (month, year) => _emit(
+              ArrivalAnswer(
+                month: month,
+                year: year,
+                originCountry: answer.originCountry,
+                originCity: answer.originCity,
+              ),
             ),
           ),
           const SizedBox(height: 26),
@@ -226,33 +199,6 @@ class _ArrivalStepState extends State<ArrivalStep> {
     if (selected == null || !mounted) return;
     _emit(widget.answer.copyWith(originCountry: selected.code), confirmed: false);
   }
-}
-
-class _ChoiceChipTile extends StatelessWidget {
-  const _ChoiceChipTile({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => AuroraCard(
-    onTap: onTap,
-    selected: selected,
-    accent: const Color(0xFFE8A33A),
-    borderRadius: 14,
-    padding: EdgeInsets.zero,
-    child: Center(
-      child: Text(
-        label,
-        style: AuroraText.body(size: 13.5, weight: selected ? FontWeight.w800 : FontWeight.w600),
-      ),
-    ),
-  );
 }
 
 class _OriginSheet extends StatelessWidget {

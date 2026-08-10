@@ -16,6 +16,12 @@ class CommunityHomeController extends ChangeNotifier {
     if (_loading) return;
     _loading = true;
     _error = null;
+    // Screens start this from `initState`, i.e. while the tree is still being
+    // built, and a listener that is already on screen — the shell's top bar
+    // reads the locality from here — cannot be marked dirty during a build.
+    // The flag above is set synchronously so the in-flight guard still holds;
+    // only the notification waits for the current frame to finish.
+    await Future<void>.microtask(() {});
     notifyListeners();
     try {
       _summary = await _repository.fetch();

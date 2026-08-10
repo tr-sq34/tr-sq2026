@@ -1,0 +1,138 @@
+import 'package:flutter/material.dart';
+
+import '../../../../core/constants/app_colors.dart';
+import '../../application/notifications_controller.dart';
+import '../../domain/entities/app_notification.dart';
+
+/// The bell's destination.
+///
+/// Until friend requests, comments and badges publish events, the honest thing
+/// to show is that there is nothing here — not a demo item dressed up as news.
+class NotificationsScreen extends StatefulWidget {
+  const NotificationsScreen({super.key, required this.controller});
+
+  final NotificationsController controller;
+
+  @override
+  State<NotificationsScreen> createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.load();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AppColors.background,
+    appBar: AppBar(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      elevation: 0,
+      title: const Text(
+        'Bildirimler',
+        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+      ),
+    ),
+    body: AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final controller = widget.controller;
+        if (controller.isLoading && controller.items.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (controller.items.isEmpty) return const _EmptyState();
+        return RefreshIndicator(
+          onRefresh: controller.load,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: controller.items.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) => _NotificationTile(
+              notification: controller.items[index],
+              onTap: () => controller.open(controller.items[index]),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: .08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.notifications_none_rounded,
+              size: 34,
+              color: AppColors.primary.withValues(alpha: .7),
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'Henüz bildirim yok',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Arkadaşlık istekleri, gönderilerine gelen yorumlar ve kazandığın '
+            'rozetler burada görünecek.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFF64748B), height: 1.4),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _NotificationTile extends StatelessWidget {
+  const _NotificationTile({required this.notification, required this.onTap});
+
+  final AppNotification notification;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    onTap: onTap,
+    tileColor: notification.isRead
+        ? null
+        : AppColors.primary.withValues(alpha: .05),
+    leading: CircleAvatar(
+      backgroundColor: AppColors.primary.withValues(alpha: .12),
+      child: Icon(_iconFor(notification.type), size: 20, color: AppColors.primary),
+    ),
+    title: Text(
+      notification.title,
+      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+    ),
+    subtitle: Text(
+      notification.body,
+      style: const TextStyle(fontSize: 12.5, color: Color(0xFF64748B)),
+    ),
+  );
+
+  static IconData _iconFor(AppNotificationType type) => switch (type) {
+    AppNotificationType.specialRequest => Icons.volunteer_activism_rounded,
+    AppNotificationType.postComment => Icons.mode_comment_outlined,
+    AppNotificationType.postLike => Icons.favorite_border_rounded,
+    AppNotificationType.eventReminder => Icons.event_outlined,
+    AppNotificationType.system => Icons.info_outline_rounded,
+  };
+}

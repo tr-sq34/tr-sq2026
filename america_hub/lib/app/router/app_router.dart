@@ -17,6 +17,7 @@ import '../../features/community/domain/repositories/content_moderation_reposito
 import '../../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
 import '../../features/home/application/community_home_controller.dart';
+import '../../features/notifications/application/notifications_controller.dart';
 import '../../features/verification/application/member_capabilities_controller.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/register_screen.dart';
@@ -46,6 +47,7 @@ class AppRouter {
     required this.contentModerationRepository,
     required this.communityHomeController,
     required this.memberCapabilitiesController,
+    required this.notificationsController,
   });
 
   final AuthController authController;
@@ -64,6 +66,7 @@ class AppRouter {
   final ContentModerationRepository contentModerationRepository;
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
+  final NotificationsController notificationsController;
 
   /// Where a member lands right after signing in.
   ///
@@ -98,6 +101,7 @@ class AppRouter {
             homeController: communityHomeController,
             memberCapabilitiesController: memberCapabilitiesController,
             authController: authController,
+            notificationsController: notificationsController,
             onSignOut: () async {
               await authController.signOut();
               if (context.mounted) {

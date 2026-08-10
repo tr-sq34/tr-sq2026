@@ -89,6 +89,7 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
       user: AppUser(
         id: user['id'] as String? ?? '',
         email: user['email'] as String? ?? '',
+        displayName: user['displayName'] as String?,
       ),
       accessToken: accessToken,
       refreshToken: body['refreshToken'] as String?,

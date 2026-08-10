@@ -13,7 +13,13 @@ class NotificationsController extends ChangeNotifier {
   int get unreadCount => items.where((item) => !item.isRead).length;
 
   Future<void> load() async {
-    isLoading = true; notifyListeners();
+    isLoading = true;
+    // The shell's bell and the notifications screen both start this from
+    // `initState`, so a listener can be mid-build when it runs; notifying then
+    // is a framework error. Only the notification waits — the flag above is set
+    // straight away.
+    await Future<void>.microtask(() {});
+    notifyListeners();
     try { items = await _repository.getNotifications(); } finally { isLoading = false; notifyListeners(); }
   }
 
