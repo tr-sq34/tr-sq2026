@@ -50,6 +50,8 @@ import 'features/messaging/domain/repositories/direct_message_repository.dart';
 import 'features/messaging/domain/repositories/message_moderation_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
+import 'features/notifications/application/notifications_controller.dart';
+import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
 
 Future<void> main() async {
@@ -211,6 +213,12 @@ Future<void> main() async {
       ? MockContentModerationRepository()
       : ApiContentModerationRepository(client: communityApiClient);
 
+  // Deliberately empty on both sides of the mock flag: no service publishes
+  // member notifications yet, so the bell stays at zero until one does.
+  final notificationsController = NotificationsController(
+    repository: const EmptyNotificationRepository(),
+  );
+
   runApp(
     AmericaHubApp(
       authController: authController,
@@ -229,6 +237,7 @@ Future<void> main() async {
       contentModerationRepository: contentModerationRepository,
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
+      notificationsController: notificationsController,
     ),
   );
 }

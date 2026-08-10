@@ -12,9 +12,13 @@ import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
+import '../../../community/presentation/screens/create_post_flow_screen.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
+import '../../../notifications/application/notifications_controller.dart';
+import '../../../notifications/presentation/screens/notifications_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
+import '../widgets/app_top_bar.dart';
 import '../../application/community_home_controller.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 import '../../../../app/router/app_routes.dart';
@@ -37,6 +41,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.homeController,
     required this.memberCapabilitiesController,
     required this.authController,
+    required this.notificationsController,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
@@ -52,6 +57,7 @@ class MainLayoutScreen extends StatefulWidget {
   final CommunityHomeController homeController;
   final MemberCapabilitiesController memberCapabilitiesController;
   final AuthController authController;
+  final NotificationsController notificationsController;
 
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
@@ -67,11 +73,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   late List<Widget> _pages;
 
   List<Widget> _buildPages() => [
-    DiscoverScreen(
-      onOpenMenu: _openMenu,
-      onOpenMessages: _openMessages,
-      controller: widget.homeController,
-    ),
+    DiscoverScreen(controller: widget.homeController),
     CommunityScreen(
       controller: widget.communityController,
       storyController: widget.storyController,
@@ -105,6 +107,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       curve: Curves.easeInOut,
     );
     _pages = _buildPages();
+    // The bell carries a count, so it has to know the answer before anyone
+    // opens the notification list.
+    widget.notificationsController.load();
   }
 
   @override
@@ -131,6 +136,37 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
   void _openMessages() => Navigator.of(context).pushNamed(AppRoutes.inbox);
 
+  void _openNotifications() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) =>
+          NotificationsScreen(controller: widget.notificationsController),
+    ),
+  );
+
+  /// The compose sheet, reachable from the ➕ in the middle of the nav bar.
+  ///
+  /// Until now the only way in was a box buried in the feed, which meant the
+  /// primary action of a social app was three taps deep on three of four tabs.
+  void _openComposer() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => CreatePostFlowScreen(
+        feedController: widget.communityController,
+        mediaUploadController: widget.mediaUploadController,
+      ),
+    ),
+  );
+
+  /// The location line under the greeting, or null while the summary is still
+  /// loading. A member with no locality yet gets no line rather than a blank one.
+  String? get _localityLabel {
+    final summary = widget.homeController.summary;
+    final city = summary?.city?.trim();
+    if (city == null || city.isEmpty) return null;
+    final region = summary?.regionCode?.trim();
+    return region == null || region.isEmpty ? city : '$city, $region';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -142,7 +178,39 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.only(bottom: 84),
-              child: IndexedStack(index: _currentIndex, children: _pages),
+              child: Column(
+                children: [
+                  // Above the stack, not inside a page: the menu and the bell
+                  // belong to the shell, so they survive a tab change.
+                  AnimatedBuilder(
+                    animation: Listenable.merge([
+                      widget.authController,
+                      widget.homeController,
+                      widget.notificationsController,
+                    ]),
+                    builder: (_, _) {
+                      final user = widget.authController.user;
+                      return AppTopBar(
+                        title: _titleFor(_currentIndex, user?.displayName),
+                        greetingName: _currentIndex == 0
+                            ? user?.shortName
+                            : null,
+                        subtitle: _currentIndex == 0 ? _localityLabel : null,
+                        onOpenMenu: _openMenu,
+                        onOpenNotifications: _openNotifications,
+                        unreadNotifications:
+                            widget.notificationsController.unreadCount,
+                      );
+                    },
+                  ),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentIndex,
+                      children: _pages,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           Positioned(
@@ -150,19 +218,27 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
             right: 18,
             bottom: 16,
             child: _FloatingNav(
-              index: _currentIndex,
-              onSelected: (index) {
-                debugPrint(
-                  'DEBUG [Navigation]: Tab değiştirildi -> Index: $index',
-                );
-                setState(() => _currentIndex = index);
-              },
+              pageIndex: _currentIndex,
+              onSelectPage: (index) =>
+                  setState(() => _currentIndex = index),
+              onCompose: _openComposer,
             ),
           ),
         ],
       ),
     );
   }
+
+  /// What the bar says when it is not greeting anyone. The profile tab shows
+  /// the member's own name, which is the one place a name is the title.
+  static String _titleFor(int index, String? displayName) => switch (index) {
+    1 => 'Akış',
+    2 => 'Çarşı',
+    3 => (displayName?.trim().isNotEmpty ?? false)
+        ? displayName!.trim()
+        : 'Profil',
+    _ => 'TurkSquare',
+  };
 
   Widget _buildModernSideDrawer(BuildContext context, Color primaryIndigo) {
     const drawerDarkBg = Color(0xFF0F172A); // Slate 900
@@ -259,21 +335,25 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                       children: [
                         Stack(
                           children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.network(
-                                'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80',
-                                width: 38,
-                                height: 38,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(
-                                  width: 38,
-                                  height: 38,
-                                  color: cardOverlayBg,
-                                  child: const Icon(
-                                    Icons.person,
-                                    color: Colors.white24,
-                                  ),
+                            // Initials, not a stock photo of someone else. The
+                            // real avatar lands here once profiles carry one.
+                            Container(
+                              width: 38,
+                              height: 38,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: primaryIndigo.withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.12),
+                                ),
+                              ),
+                              child: Text(
+                                user?.initials ?? '?',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
                                 ),
                               ),
                             ),
@@ -302,46 +382,44 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                             children: [
                               Row(
                                 children: [
-                                  Text(
-                                    user?.email.split('@').first ??
-                                        'Ahmet Yılmaz',
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w800,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 5,
-                                      vertical: 1,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(
-                                        0xFFF59E0B,
-                                      ).withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(
-                                        color: const Color(
-                                          0xFFFBBF24,
-                                        ).withValues(alpha: 0.3),
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'PRO',
-                                      style: TextStyle(
-                                        fontSize: 8.5,
-                                        fontWeight: FontWeight.w900,
-                                        color: Color(0xFFFBBF24),
+                                  Flexible(
+                                    child: Text(
+                                      // The signed-up name, falling back to the
+                                      // address rather than to a stand-in person.
+                                      user?.displayName?.trim().isNotEmpty ==
+                                              true
+                                          ? user!.displayName!.trim()
+                                          : user?.email.split('@').first ??
+                                                'Üye',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
                                       ),
                                     ),
                                   ),
+                                  // "Onaylı" is earned, unlike the PRO chip that
+                                  // used to sit here for everyone.
+                                  if (widget
+                                      .memberCapabilitiesController
+                                      .value
+                                      .identityVerified) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(
+                                      Icons.verified_rounded,
+                                      size: 14,
+                                      color: Color(0xFF38BDF8),
+                                    ),
+                                  ],
                                 ],
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                user?.email ?? 'ahmet@turksquare.com',
+                                user?.email ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                   fontSize: 10.5,
                                   color: Color(0xFF94A3B8),
@@ -373,21 +451,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     icon: Icons.send_rounded,
                     iconBg: primaryIndigo.withValues(alpha: 0.15),
                     iconColor: const Color(0xFF818CF8),
-                    badgeWidget: Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: primaryIndigo,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Text(
-                        '3',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
+                    // No badge: the count used to be a hardcoded `3`, which was
+                    // wrong for everyone. It comes back when the inbox publishes
+                    // a real unread total.
                     isActive: false,
                     onTap: () {
                       Navigator.pop(context);
@@ -404,6 +470,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     icon: Icons.chat_bubble_outline_rounded,
                     iconBg: Colors.white.withValues(alpha: 0.05),
                     iconColor: const Color(0xFF94A3B8),
+                    comingSoon: true,
                     onTap: () {},
                   ),
 
@@ -433,7 +500,8 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      onTap: () {},
+                      // Sesli oda henüz yok; canlı görünen bir satır bırakmıyoruz.
+                      enabled: false,
                       leading: Stack(
                         clipBehavior: Clip.none,
                         children: [
@@ -452,21 +520,8 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                               color: Color(0xFFFB7185),
                             ),
                           ),
-                          Positioned(
-                            top: -2,
-                            right: -2,
-                            child: FadeTransition(
-                              opacity: _pulseAnimation,
-                              child: Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF34D399),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ),
-                          ),
+                          // The pulsing "live now" dot is gone with it: nothing
+                          // is broadcasting.
                         ],
                       ),
                       title: Row(
@@ -514,17 +569,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                           color: Color(0xFF94A3B8),
                         ),
                       ),
-                      trailing: FadeTransition(
-                        opacity: _pulseAnimation,
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFF43F5E),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
+                      trailing: const _ComingSoonChip(),
                     ),
                   ),
 
@@ -558,6 +603,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     icon: Icons.notifications_none_rounded,
                     iconBg: Colors.white.withValues(alpha: 0.05),
                     iconColor: const Color(0xFF94A3B8),
+                    comingSoon: true,
                     onTap: () {},
                   ),
 
@@ -570,6 +616,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     icon: Icons.help_outline_rounded,
                     iconBg: Colors.white.withValues(alpha: 0.05),
                     iconColor: const Color(0xFF94A3B8),
+                    comingSoon: true,
                     onTap: () {},
                   ),
                 ],
@@ -645,6 +692,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     required Color iconColor,
     Widget? badgeWidget,
     bool isActive = false,
+    bool comingSoon = false,
     required VoidCallback onTap,
   }) {
     return Container(
@@ -657,8 +705,13 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
             ? Border.all(color: const Color(0xFF6C5CE7).withValues(alpha: 0.3))
             : null,
       ),
-      child: ListTile(
-        onTap: onTap,
+      // Dimmed and inert rather than tappable-but-silent: a row that swallows
+      // the tap without doing anything reads as a bug.
+      child: Opacity(
+        opacity: comingSoon ? 0.55 : 1,
+        child: ListTile(
+        onTap: comingSoon ? null : onTap,
+        enabled: !comingSoon,
         dense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -683,28 +736,66 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
           subtitle,
           style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
         ),
-        trailing:
-            badgeWidget ??
-            const Icon(
-              Icons.chevron_right_rounded,
-              size: 16,
-              color: Color(0xFF475569),
-            ),
+        trailing: comingSoon
+            ? const _ComingSoonChip()
+            : badgeWidget ??
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 16,
+                    color: Color(0xFF475569),
+                  ),
+        ),
       ),
     );
   }
 }
 
+class _ComingSoonChip extends StatelessWidget {
+  const _ComingSoonChip();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: const Text(
+      'Yakında',
+      style: TextStyle(
+        fontSize: 9,
+        fontWeight: FontWeight.w800,
+        color: Color(0xFF94A3B8),
+      ),
+    ),
+  );
+}
+
+/// The bottom bar: four tabs with a compose button wedged in the middle.
+///
+/// The ➕ is not a tab — it opens the composer and leaves the current tab where
+/// it was — so slot indices and page indices are deliberately different things.
 class _FloatingNav extends StatelessWidget {
-  const _FloatingNav({required this.index, required this.onSelected});
-  final int index;
-  final ValueChanged<int> onSelected;
+  const _FloatingNav({
+    required this.pageIndex,
+    required this.onSelectPage,
+    required this.onCompose,
+  });
+
+  /// Which of the four pages is showing, not which of the five slots.
+  final int pageIndex;
+  final ValueChanged<int> onSelectPage;
+  final VoidCallback onCompose;
+
+  /// Slot → page. The centre slot has no page, hence the null.
+  static const _pageForSlot = <int?>[0, 1, null, 2, 3];
 
   @override
   Widget build(BuildContext context) {
     const items = [
       (Icons.home_outlined, Icons.home_rounded, 'Ana Sayfa'),
       (Icons.groups_outlined, Icons.groups_rounded, 'Akış'),
+      (Icons.add_rounded, Icons.add_rounded, 'Paylaş'),
       (Icons.storefront_outlined, Icons.storefront_rounded, 'Çarşı'),
       (Icons.person_outline_rounded, Icons.person_rounded, 'Profil'),
     ];
@@ -724,38 +815,99 @@ class _FloatingNav extends StatelessWidget {
       ),
       child: Row(
         children: [
-          for (var i = 0; i < items.length; i++)
+          for (var slot = 0; slot < items.length; slot++)
             Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(24),
-                onTap: () => onSelected(i),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      index == i ? items[i].$2 : items[i].$1,
-                      color: index == i
-                          ? AppColors.primary
-                          : AppColors.textMuted,
-                      size: 22,
+              child: _pageForSlot[slot] == null
+                  ? _ComposeButton(onTap: onCompose, label: items[slot].$3)
+                  : _NavItem(
+                      icon: items[slot].$1,
+                      activeIcon: items[slot].$2,
+                      label: items[slot].$3,
+                      selected: pageIndex == _pageForSlot[slot],
+                      onTap: () => onSelectPage(_pageForSlot[slot]!),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      items[i].$3,
-                      style: TextStyle(
-                        color: index == i
-                            ? AppColors.primary
-                            : AppColors.textMuted,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
         ],
       ),
     );
   }
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppColors.primary : AppColors.textMuted;
+    return InkWell(
+      borderRadius: BorderRadius.circular(24),
+      onTap: onTap,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(selected ? activeIcon : icon, color: color, size: 22),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComposeButton extends StatelessWidget {
+  const _ComposeButton({required this.onTap, required this.label});
+
+  final VoidCallback onTap;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Semantics(
+      button: true,
+      label: label,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF6355D8), Color(0xFF8B5CF6)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primary.withValues(alpha: .35),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.add_rounded, color: Colors.white, size: 26),
+        ),
+      ),
+    ),
+  );
 }

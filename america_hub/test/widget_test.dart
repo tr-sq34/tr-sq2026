@@ -21,6 +21,8 @@ import 'package:america_hub/features/home/data/community_home_repository.dart';
 import 'package:america_hub/features/events/data/repositories/mock_events_repository.dart';
 import 'package:america_hub/features/marketplace/application/marketplace_controller.dart';
 import 'package:america_hub/features/marketplace/data/repositories/mock_marketplace_repository.dart';
+import 'package:america_hub/features/notifications/application/notifications_controller.dart';
+import 'package:america_hub/features/notifications/data/repositories/empty_notification_repository.dart';
 import 'package:america_hub/features/messaging/application/messaging_controller.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_direct_message_repository.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_message_moderation_repository.dart';
@@ -67,6 +69,9 @@ void main() {
         memberCapabilitiesController: MemberCapabilitiesController(
           apiClient,
           apiClient,
+        ),
+        notificationsController: NotificationsController(
+          repository: const EmptyNotificationRepository(),
         ),
       ),
     );

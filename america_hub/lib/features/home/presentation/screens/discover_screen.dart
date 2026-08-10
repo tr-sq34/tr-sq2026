@@ -4,15 +4,8 @@ import 'package:flutter/material.dart';
 import '../../application/community_home_controller.dart';
 
 class DiscoverScreen extends StatefulWidget {
-  const DiscoverScreen({
-    super.key,
-    required this.onOpenMenu,
-    required this.onOpenMessages,
-    required this.controller,
-  });
+  const DiscoverScreen({super.key, required this.controller});
 
-  final VoidCallback onOpenMenu;
-  final VoidCallback onOpenMessages;
   final CommunityHomeController controller;
 
   @override
@@ -36,12 +29,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            _HomeHeader(
-              onOpenMenu: widget.onOpenMenu,
-              onOpenMessages: widget.onOpenMessages,
-              city: summary?.city,
-              regionCode: summary?.regionCode,
-            ),
+            // The greeting, location and the menu/bell buttons moved to the
+            // shell's AppTopBar: they belong to every tab, not just this one.
             if (summary?.isNewMember == true)
               _NewMemberWelcome(city: summary?.city),
             _StoriesSection(),
@@ -101,140 +90,6 @@ class _HomeScrollBehavior extends MaterialScrollBehavior {
     PointerDeviceKind.stylus,
     PointerDeviceKind.trackpad,
   };
-}
-
-// 1. Header & Location
-class _HomeHeader extends StatelessWidget {
-  const _HomeHeader({
-    required this.onOpenMenu,
-    required this.onOpenMessages,
-    this.city,
-    this.regionCode,
-  });
-
-  final VoidCallback onOpenMenu;
-  final VoidCallback onOpenMessages;
-  final String? city;
-  final String? regionCode;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    color: Colors.white,
-    padding: const EdgeInsets.fromLTRB(20, 56, 20, 12),
-    child: Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              RichText(
-                text: const TextSpan(
-                  children: [
-                    TextSpan(
-                      text: 'Merhaba, Ahmet! ',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF0F172A),
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    TextSpan(text: '👋', style: TextStyle(fontSize: 22)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 4),
-              InkWell(
-                onTap: () {},
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.location_on_rounded,
-                      size: 14,
-                      color: Color(0xFFF43F5E),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      city == null
-                          ? 'Konumun ayarlanıyor'
-                          : '$city, ${regionCode ?? ''}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF64748B),
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    const Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      size: 16,
-                      color: Color(0xFF94A3B8),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _HeaderCircleBtn(
-              icon: Icons.chat_bubble_outline_rounded,
-              bgColor: const Color(0xFFF1F5F9),
-              iconColor: const Color(0xFF5B4ACD),
-              onTap: onOpenMessages,
-              semanticLabel: 'Mesajlar',
-            ),
-            const SizedBox(width: 10),
-            _HeaderCircleBtn(
-              icon: Icons.menu_rounded,
-              bgColor: const Color(0xFFF1F5F9),
-              iconColor: const Color(0xFF1E293B),
-              onTap: onOpenMenu,
-              semanticLabel: 'Menü',
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
-}
-
-class _HeaderCircleBtn extends StatelessWidget {
-  const _HeaderCircleBtn({
-    required this.icon,
-    required this.bgColor,
-    required this.iconColor,
-    required this.onTap,
-    this.semanticLabel,
-  });
-  final IconData icon;
-  final Color bgColor;
-  final Color iconColor;
-  final VoidCallback onTap;
-  final String? semanticLabel;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: bgColor,
-    shape: const CircleBorder(),
-    child: Semantics(
-      button: true,
-      label: semanticLabel,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          width: 42,
-          height: 42,
-          alignment: Alignment.center,
-          child: Icon(icon, color: iconColor, size: 20),
-        ),
-      ),
-    ),
-  );
 }
 
 // 2. Stories Section
@@ -755,34 +610,48 @@ class _HighlightCard extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.2),
+                    // Both sides give way rather than overflow: the card is a
+                    // fixed width, and a long badge at a large system text
+                    // scale would otherwise run off its own edge.
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
                         ),
-                      ),
-                      child: Text(
-                        badge,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
+                        ),
+                        child: Text(
+                          badge,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
                     if (progress != null)
-                      Text(
-                        progress!,
-                        style: const TextStyle(
-                          color: Color(0xFFFBBF24),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
+                      Flexible(
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Text(
+                            progress!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFFBBF24),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
                         ),
                       ),
                   ],

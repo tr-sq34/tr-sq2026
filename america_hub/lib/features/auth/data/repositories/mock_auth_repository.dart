@@ -7,6 +7,12 @@ import '../../domain/services/password_policy.dart';
 
 /// Temporary implementation until the backend API is connected.
 class MockAuthRepository implements AuthRepository {
+  /// The name given to [signUp], remembered so the rest of the mock session
+  /// greets the member by it. Null until someone registers, which is the honest
+  /// answer for a signed-in-from-cold mock: the UI then falls back to the
+  /// address instead of a made-up name.
+  String? _displayName;
+
   @override
   Future<bool> checkEmailStatus({required String email}) async {
     if (!email.contains('@')) {
@@ -24,7 +30,11 @@ class MockAuthRepository implements AuthRepository {
       throw const AuthException('Email and password are required.');
     }
     return AuthSession(
-      user: AppUser(id: 'local-user', email: email.trim()),
+      user: AppUser(
+        id: 'local-user',
+        email: email.trim(),
+        displayName: _displayName,
+      ),
       accessToken: 'development-access-token',
       refreshToken: 'development-refresh-token',
     );
@@ -43,6 +53,7 @@ class MockAuthRepository implements AuthRepository {
         case final error?) {
       throw AuthException(error);
     }
+    _displayName = name.trim();
   }
 
   @override
@@ -111,8 +122,12 @@ class MockAuthRepository implements AuthRepository {
     if (code != '123456') {
       throw const AuthException('The verification code is incorrect.');
     }
-    return const AuthSession(
-      user: AppUser(id: 'local-phone-user', email: 'phone-user@turksquare.app'),
+    return AuthSession(
+      user: AppUser(
+        id: 'local-phone-user',
+        email: 'phone-user@turksquare.app',
+        displayName: _displayName,
+      ),
       accessToken: 'development-access-token',
       refreshToken: 'development-refresh-token',
     );
@@ -121,8 +136,12 @@ class MockAuthRepository implements AuthRepository {
   @override
   Future<AuthSession> refreshSession({required String refreshToken}) async {
     if (refreshToken.isEmpty) throw const AuthException('Oturum yenilenemedi.');
-    return const AuthSession(
-      user: AppUser(id: 'local-user', email: 'member@turksquare.app'),
+    return AuthSession(
+      user: AppUser(
+        id: 'local-user',
+        email: 'member@turksquare.app',
+        displayName: _displayName,
+      ),
       accessToken: 'development-access-token',
       refreshToken: 'development-refresh-token',
     );

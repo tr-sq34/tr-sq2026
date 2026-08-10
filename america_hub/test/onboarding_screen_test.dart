@@ -1,8 +1,9 @@
 import 'package:america_hub/features/auth/data/datasources/device_location_source.dart';
 import 'package:america_hub/features/auth/data/datasources/us_places_local_datasource.dart';
 import 'package:america_hub/features/auth/domain/entities/onboarding_draft.dart';
+import 'package:america_hub/features/auth/domain/entities/onboarding_persona.dart';
 import 'package:america_hub/features/auth/presentation/screens/onboarding_screen.dart';
-import 'package:america_hub/features/auth/presentation/widgets/onboarding/arrival_step.dart';
+import 'package:america_hub/features/auth/presentation/widgets/onboarding/month_year_wheel.dart';
 import 'package:america_hub/features/auth/presentation/widgets/onboarding/persona_step.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,8 +86,8 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// Scrolls the persona list until the card is built, then taps it. The list
-  /// is lazy, so a card further down does not exist until it is scrolled to.
+  /// Scrolls the persona list until the chip is built, then taps it. The list
+  /// is lazy, so a chip further down does not exist until it is scrolled to.
   Future<void> pickPersona(WidgetTester tester, String label) async {
     final target = find.text(label);
     if (target.evaluate().isEmpty) {
@@ -107,40 +108,42 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// The year strip scrolls sideways from the current year backwards.
-  Future<void> pickYear(WidgetTester tester, String year) async {
-    // The strip sits below the month grid, so it is not even built until the
-    // page is scrolled down to it — and a widget off screen cannot be dragged.
-    final heading = find.text('HANGİ YIL?');
-    if (heading.evaluate().isEmpty) {
-      await tester.scrollUntilVisible(
-        heading,
-        220,
-        scrollable: find
-            .descendant(
-              of: find.byType(ArrivalStep),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
+  /// Spins one arrival wheel to [label], roughly [steps] rows down.
+  ///
+  /// Only the handful of rows around the centre are built, so a row eight
+  /// places away cannot simply be tapped — it has to be scrolled near first.
+  /// The gesture is stepped by hand rather than handed to [WidgetTester.drag],
+  /// which sends a single move event that the wheel spends resolving the
+  /// gesture arena and never applies. The drag lands a fraction of a row short
+  /// because the touch slop is swallowed, so the tap that follows is what
+  /// settles the wheel on an exact row — and it fails loudly if the drag did
+  /// not get close enough to build the target.
+  Future<void> spinWheel(
+    WidgetTester tester,
+    Key wheel,
+    int steps,
+    String label,
+  ) async {
+    await tester.ensureVisible(find.byKey(wheel));
+    await tester.pumpAndSettle();
+
+    final start = tester.getCenter(find.byKey(wheel));
+    final distance = kWheelItemExtent * steps;
+    final gesture = await tester.startGesture(start);
+    for (var moved = 8.0; moved < distance; moved += 8) {
+      await gesture.moveTo(start + Offset(0, -moved));
+      await tester.pump(const Duration(milliseconds: 16));
     }
-    await tester.ensureVisible(heading);
+    await gesture.moveTo(start + Offset(0, -distance));
+    // Long enough that the velocity tracker has nothing recent to fling with.
+    await tester.pump(const Duration(milliseconds: 200));
+    await gesture.up();
     await tester.pumpAndSettle();
-    await tester.dragUntilVisible(
-      find.text(year),
-      find
-          .descendant(
-            of: find.byWidgetPredicate(
-              (widget) =>
-                  widget is ListView && widget.scrollDirection == Axis.horizontal,
-            ),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-      const Offset(-160, 0),
-    );
+
+    final row = find.descendant(of: find.byKey(wheel), matching: find.text(label));
+    expect(row, findsOneWidget, reason: '"$label" was not scrolled into reach');
+    await tester.tap(row);
     await tester.pumpAndSettle();
-    await tester.tap(find.text(year));
   }
 
   testWidgets('picking a city from the list moves on by itself', (tester) async {
@@ -202,10 +205,10 @@ void main() {
     await tester.tap(find.text('Jersey City, NJ'));
     await settleAdvance(tester);
 
-    // March 2019.
-    await tester.tap(find.text('Mart'));
-    await tester.pumpAndSettle();
-    await pickYear(tester, '2019');
+    // March 2019. Row 0 on each wheel is the blank "not answered yet" row, so
+    // March is 3 rows down and 2019 is (2026 - 2019) + 1 rows down.
+    await spinWheel(tester, monthWheelKey, 3, 'Mart');
+    await spinWheel(tester, yearWheelKey, 8, '2019');
     await settleAdvance(tester);
 
     await pickPersona(tester, 'İş arıyorum');
@@ -223,6 +226,36 @@ void main() {
     expect(draft.arrivedYear, 2019);
     expect(draft.interests, ['job_seeking', 'student']);
     expect(draft.primaryIntent, 'job_seeking');
+  });
+
+  testWidgets('every persona in the catalogue is reachable on a phone', (
+    tester,
+  ) async {
+    await pumpScreen(tester);
+    await searchCity(tester, 'jers');
+    await tester.tap(find.text('Jersey City, NJ'));
+    await settleAdvance(tester);
+    await tester.tap(find.byType(Switch));
+    await settleAdvance(tester);
+
+    // The chip layout replaced a two-column grid that ran far past the fold;
+    // the point of it is that nothing in the catalogue is stranded off screen.
+    for (final persona in kOnboardingPersonasById.values) {
+      final chip = find.text(persona.label);
+      if (chip.evaluate().isEmpty) {
+        await tester.scrollUntilVisible(
+          chip,
+          260,
+          scrollable: find
+              .descendant(
+                of: find.byType(PersonaStep),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+      }
+      expect(chip, findsOneWidget, reason: '${persona.label} is unreachable');
+    }
   });
 
   testWidgets('someone outside the US never sees the arrival question', (
