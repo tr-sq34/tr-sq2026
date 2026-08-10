@@ -17,9 +17,12 @@ import '../../application/community_comments_controller.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
 import '../widgets/special_post_request_sheet.dart';
+import '../../domain/repositories/content_moderation_repository.dart';
+import '../widgets/content_report_sheet.dart';
 import '../widgets/story_composer_sheet.dart';
 import 'story_viewer_screen.dart';
 import '../../domain/entities/community_post.dart';
+import '../../domain/entities/content_report.dart';
 import '../../domain/entities/create_post_draft.dart';
 import '../../domain/entities/post_media_upload.dart';
 import '../../domain/services/post_access_policy.dart';
@@ -32,12 +35,19 @@ class CommunityScreen extends StatefulWidget {
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
+    required this.moderationRepository,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+
+  /// Every post, comment and story below this point needs a way to be reported,
+  /// so the repository is handed down rather than looked up: the widgets that
+  /// need it are built inside list builders with no other access to the app's
+  /// dependencies.
+  final ContentModerationRepository moderationRepository;
 
   @override
   State<CommunityScreen> createState() => _CommunityScreenState();
@@ -220,6 +230,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         commentsController: widget.commentsController,
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
+        moderationRepository: widget.moderationRepository,
       );
     },
   );
@@ -232,12 +243,14 @@ class _Feed extends StatefulWidget {
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
+    required this.moderationRepository,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+  final ContentModerationRepository moderationRepository;
 
   @override
   State<_Feed> createState() => _FeedState();
@@ -313,6 +326,7 @@ class _FeedState extends State<_Feed> {
               _StoryRail(
                 controller: widget.storyController,
                 mediaUploadController: widget.mediaUploadController,
+                moderationRepository: widget.moderationRepository,
               ),
               const SizedBox(height: 10),
               Padding(
@@ -327,6 +341,7 @@ class _FeedState extends State<_Feed> {
                     post: post,
                     onToggleLike: widget.controller.toggleLike,
                     specialRequestController: widget.specialRequestController,
+                    moderationRepository: widget.moderationRepository,
                     onDelete: post.ownerId == 'local-user'
                         ? () => _deletePost(post)
                         : null,
@@ -335,6 +350,7 @@ class _FeedState extends State<_Feed> {
                       child: _CommentsSheet(
                         post: post,
                         controller: widget.commentsController,
+                        moderationRepository: widget.moderationRepository,
                       ),
                     ),
                   ),
@@ -512,9 +528,11 @@ class _StoryRail extends StatelessWidget {
   const _StoryRail({
     required this.controller,
     required this.mediaUploadController,
+    required this.moderationRepository,
   });
   final StoryController controller;
   final MediaUploadController mediaUploadController;
+  final ContentModerationRepository moderationRepository;
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
@@ -580,6 +598,7 @@ class _StoryRail extends StatelessWidget {
                 builder: (_) => StoryViewerScreen(
                   controller: controller,
                   initialStoryId: item.id,
+                  moderationRepository: moderationRepository,
                 ),
               ),
             ),
@@ -2165,12 +2184,14 @@ class _PostCard extends StatelessWidget {
     required this.onToggleLike,
     required this.onOpenComments,
     required this.specialRequestController,
+    required this.moderationRepository,
     this.onDelete,
   });
   final CommunityPost post;
   final ValueChanged<String> onToggleLike;
   final VoidCallback onOpenComments;
   final CommunitySpecialRequestController specialRequestController;
+  final ContentModerationRepository moderationRepository;
   final VoidCallback? onDelete;
 
   @override
@@ -2233,13 +2254,16 @@ class _PostCard extends StatelessWidget {
               ),
               onSelected: (value) {
                 if (value == 'delete') onDelete?.call();
+                // Was a snackbar that promised a review nobody was doing. It
+                // now files a real report against the post id, which is what
+                // the moderation queue and the 24-hour deadline hang off.
                 if (value == 'report')
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Rapor alındı. İnceleme ekibimiz değerlendirecek.',
-                      ),
-                    ),
+                  showContentReportSheet(
+                    context,
+                    repository: moderationRepository,
+                    targetType: ContentReportTarget.post,
+                    targetId: post.id,
+                    subjectLabel: post.authorName,
                   );
               },
               itemBuilder: (_) => [
@@ -2248,7 +2272,13 @@ class _PostCard extends StatelessWidget {
                     value: 'delete',
                     child: Text('Paylaşımı sil'),
                   ),
-                const PopupMenuItem(value: 'report', child: Text('Raporla')),
+                // Only offered on someone else's post: the service rejects a
+                // self-report, so showing it there would be a dead end.
+                if (onDelete == null)
+                  const PopupMenuItem(
+                    value: 'report',
+                    child: Text('Şikâyet et'),
+                  ),
               ],
             ),
           ],
@@ -2607,9 +2637,14 @@ class _PostMediaStrip extends StatelessWidget {
 }
 
 class _CommentsSheet extends StatefulWidget {
-  const _CommentsSheet({required this.post, required this.controller});
+  const _CommentsSheet({
+    required this.post,
+    required this.controller,
+    required this.moderationRepository,
+  });
   final CommunityPost post;
   final CommunityCommentsController controller;
+  final ContentModerationRepository moderationRepository;
 
   @override
   State<_CommentsSheet> createState() => _CommentsSheetState();
@@ -2744,6 +2779,13 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                       post: widget.post,
                       viewerId: 'local-user',
                     ),
+                    onReport: (item) => showContentReportSheet(
+                      context,
+                      repository: widget.moderationRepository,
+                      targetType: ContentReportTarget.comment,
+                      targetId: item.id,
+                      subjectLabel: item.authorName,
+                    ),
                   );
                 },
               );
@@ -2824,6 +2866,7 @@ class _CommentThread extends StatelessWidget {
     required this.onLike,
     required this.onDelete,
     required this.canDelete,
+    required this.onReport,
   });
   final CommunityComment comment;
   final List<CommunityComment> replies;
@@ -2833,6 +2876,7 @@ class _CommentThread extends StatelessWidget {
   final ValueChanged<String> onLike;
   final ValueChanged<CommunityComment> onDelete;
   final bool Function(CommunityComment) canDelete;
+  final ValueChanged<CommunityComment> onReport;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -2961,6 +3005,20 @@ class _CommentThread extends StatelessWidget {
               '${item.likes}',
               style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
             ),
+            if (!canDelete(item))
+              // Reporting is offered on other people's comments only, and as a
+              // visible control rather than a long-press: an affordance nobody
+              // can find is the same as no affordance at all.
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Şikâyet et',
+                onPressed: () => onReport(item),
+                icon: const Icon(
+                  Icons.flag_outlined,
+                  size: 16,
+                  color: AppColors.textMuted,
+                ),
+              ),
           ],
         ),
       ],

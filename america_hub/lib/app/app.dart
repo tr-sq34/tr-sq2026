@@ -12,6 +12,7 @@ import '../features/marketplace/application/marketplace_controller.dart';
 import '../features/profile/application/profile_controller.dart';
 import '../features/messaging/application/messaging_controller.dart';
 import '../features/messaging/domain/repositories/direct_message_repository.dart';
+import '../features/community/domain/repositories/content_moderation_repository.dart';
 import '../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../features/home/application/community_home_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
@@ -35,6 +36,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.messagingController,
     required this.directMessageRepository,
     required this.messageModerationRepository,
+    required this.contentModerationRepository,
     required this.communityHomeController,
     required this.memberCapabilitiesController,
   });
@@ -58,6 +60,11 @@ class AmericaHubApp extends StatelessWidget {
   /// Reporting and blocking, held here for the same reason: the thread that
   /// uses them does not exist until it is opened.
   final MessageModerationRepository messageModerationRepository;
+
+  /// Reporting for feed content — posts, comments and stories. Held next to the
+  /// messaging one because the widgets that use it are built per post, per
+  /// comment and per story, far below this point.
+  final ContentModerationRepository contentModerationRepository;
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
 
@@ -82,6 +89,7 @@ class AmericaHubApp extends StatelessWidget {
         messagingController: messagingController,
         directMessageRepository: directMessageRepository,
         messageModerationRepository: messageModerationRepository,
+        contentModerationRepository: contentModerationRepository,
         communityHomeController: communityHomeController,
         memberCapabilitiesController: memberCapabilitiesController,
       ).onGenerateRoute,

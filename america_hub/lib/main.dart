@@ -38,6 +38,9 @@ import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer
 import 'features/profile/application/profile_controller.dart';
 import 'features/profile/data/repositories/mock_profile_repository.dart';
 import 'features/messaging/application/messaging_controller.dart';
+import 'features/community/data/repositories/api_content_moderation_repository.dart';
+import 'features/community/data/repositories/mock_content_moderation_repository.dart';
+import 'features/community/domain/repositories/content_moderation_repository.dart';
 import 'features/messaging/data/repositories/api_message_moderation_repository.dart';
 import 'features/messaging/data/repositories/api_messaging_repository.dart';
 import 'features/messaging/data/repositories/mock_direct_message_repository.dart';
@@ -203,6 +206,10 @@ Future<void> main() async {
           messagingClient: messagingApiClient,
           communityClient: communityApiClient,
         );
+  final ContentModerationRepository contentModerationRepository =
+      useMockServices
+      ? MockContentModerationRepository()
+      : ApiContentModerationRepository(client: communityApiClient);
 
   runApp(
     AmericaHubApp(
@@ -219,6 +226,7 @@ Future<void> main() async {
       messagingController: messagingController,
       directMessageRepository: directMessageRepository,
       messageModerationRepository: messageModerationRepository,
+      contentModerationRepository: contentModerationRepository,
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
     ),
