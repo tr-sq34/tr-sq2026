@@ -1,5 +1,6 @@
 import '../../domain/entities/app_user.dart';
 import '../../domain/entities/auth_session.dart';
+import '../../domain/entities/onboarding_draft.dart';
 import '../../domain/entities/onboarding_profile.dart';
 import '../../domain/repositories/auth_repository.dart';
 import '../../domain/services/password_policy.dart';
@@ -135,12 +136,7 @@ class MockAuthRepository implements AuthRepository {
       const OnboardingProfile(completed: false);
 
   @override
-  Future<void> saveOnboarding({
-    required String city,
-    required String regionCode,
-    required List<String> interests,
-    required String primaryIntent,
-  }) async {}
+  Future<void> saveOnboarding(OnboardingDraft draft) async {}
 }
 
 class AuthException implements Exception {

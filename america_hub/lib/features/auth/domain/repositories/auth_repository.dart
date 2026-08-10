@@ -1,4 +1,5 @@
 import '../entities/auth_session.dart';
+import '../entities/onboarding_draft.dart';
 import '../entities/onboarding_profile.dart';
 
 abstract interface class AuthRepository {
@@ -47,10 +48,5 @@ abstract interface class AuthRepository {
   /// Best-effort server revocation of the current refresh-token family.
   Future<void> signOut({String? refreshToken});
   Future<OnboardingProfile> getOnboarding();
-  Future<void> saveOnboarding({
-    required String city,
-    required String regionCode,
-    required List<String> interests,
-    required String primaryIntent,
-  });
+  Future<void> saveOnboarding(OnboardingDraft draft);
 }

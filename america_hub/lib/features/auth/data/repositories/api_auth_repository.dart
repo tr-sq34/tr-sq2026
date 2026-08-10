@@ -2,6 +2,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/network/api_endpoints.dart';
 import '../../domain/entities/app_user.dart';
 import '../../domain/entities/auth_session.dart';
+import '../../domain/entities/onboarding_draft.dart';
 import '../../domain/entities/onboarding_profile.dart';
 import '../../domain/repositories/auth_repository.dart';
 import '../../domain/repositories/passkey_repository.dart';
@@ -187,27 +188,37 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
     return OnboardingProfile(
       completed: data['completed'] == true,
       city: data['city'] as String?,
+      countryCode: data['countryCode'] as String?,
       regionCode: data['regionCode'] as String?,
       interests: (data['interests'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toList(growable: false),
       primaryIntent: data['primaryIntent'] as String?,
+      bornInUs: data['bornInUs'] == true,
+      arrivedMonth: (data['arrivedMonth'] as num?)?.toInt(),
+      arrivedYear: (data['arrivedYear'] as num?)?.toInt(),
+      originCountry: data['originCountry'] as String?,
+      originCity: data['originCity'] as String?,
     );
   }
 
   @override
-  Future<void> saveOnboarding({
-    required String city,
-    required String regionCode,
-    required List<String> interests,
-    required String primaryIntent,
-  }) => _client.put<void>(
+  Future<void> saveOnboarding(OnboardingDraft draft) => _client.put<void>(
     ApiEndpoints.authOnboarding,
+    // Optional fields are omitted rather than sent as null: the server schema
+    // treats them as `.optional()`, and an explicit null fails validation.
     data: {
-      'city': city.trim(),
-      'regionCode': regionCode,
-      'interests': interests,
-      'primaryIntent': primaryIntent,
+      'city': draft.city.trim(),
+      'countryCode': draft.countryCode,
+      if (draft.regionCode != null) 'regionCode': draft.regionCode,
+      'interests': draft.interests,
+      'primaryIntent': draft.primaryIntent,
+      'bornInUs': draft.bornInUs,
+      if (draft.arrivedMonth != null) 'arrivedMonth': draft.arrivedMonth,
+      if (draft.arrivedYear != null) 'arrivedYear': draft.arrivedYear,
+      if (draft.originCountry != null) 'originCountry': draft.originCountry,
+      if (draft.originCity != null && draft.originCity!.trim().length >= 2)
+        'originCity': draft.originCity!.trim(),
     },
   );
 }

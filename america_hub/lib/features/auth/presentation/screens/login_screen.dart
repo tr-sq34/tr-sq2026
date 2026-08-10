@@ -2,6 +2,8 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../core/network/api_exception.dart';
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
@@ -12,6 +14,7 @@ class LoginScreen extends StatefulWidget {
     this.onForgotPassword,
     this.onCreateAccount,
     this.onRegisterWithEmail,
+    this.onVerificationRequired,
     this.onPhoneLogin,
     this.onPasskeyLogin,
     this.onTermsOfService,
@@ -27,6 +30,11 @@ class LoginScreen extends StatefulWidget {
   final void Function(String email)? onForgotPassword;
   final VoidCallback? onCreateAccount;
   final Future<void> Function(String email)? onRegisterWithEmail;
+
+  /// Reached when the server refuses the password because the address was
+  /// never verified. Without it the person is stuck on a screen whose only
+  /// action can never succeed.
+  final void Function(String email)? onVerificationRequired;
   final VoidCallback? onPhoneLogin;
   final Future<void> Function({String? email})? onPasskeyLogin;
   final VoidCallback? onTermsOfService;
@@ -250,7 +258,15 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       widget.onAuthenticated?.call();
     } catch (error) {
-      if (mounted) _showMessage(_messageFor(error));
+      if (!mounted) return;
+      final resume = widget.onVerificationRequired;
+      if (resume != null &&
+          error is ApiException &&
+          error.code == 'EMAIL_VERIFICATION_REQUIRED') {
+        resume(_emailController.text.trim());
+        return;
+      }
+      _showMessage(_messageFor(error));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

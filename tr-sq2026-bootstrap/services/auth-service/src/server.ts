@@ -58,10 +58,22 @@ const passwordResetConfirmSchema = z.object({ ticket: z.string().min(32).max(512
 const webauthnSchema = z.object({ credential: z.record(z.unknown()) });
 const onboardingSchema = z.object({
   city: z.string().trim().min(2).max(100),
-  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/),
+  countryCode: z.string().trim().length(2).toUpperCase().default('US'),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
   interests: z.array(z.string().trim().min(2).max(40)).min(1).max(12).transform((values) => [...new Set(values.map((value) => value.toLocaleLowerCase('tr-TR')))]),
-  primaryIntent: z.enum(['community', 'marketplace', 'networking', 'events']),
-});
+  primaryIntent: z.enum([
+    'community', 'marketplace', 'networking', 'events',
+    'business', 'hiring', 'job_seeking', 'professional_services',
+    'newcomer', 'legal_support', 'advisory', 'education',
+  ]),
+  bornInUs: z.boolean().default(false),
+  arrivedMonth: z.coerce.number().int().min(1).max(12).optional(),
+  arrivedYear: z.coerce.number().int().min(1950).max(2100).optional(),
+  originCountry: z.string().trim().length(2).toUpperCase().optional(),
+  originCity: z.string().trim().min(2).max(100).optional(),
+  // region_code is a US state code everywhere it is consumed downstream, so it
+  // is required exactly when the member says they live in the US.
+}).refine((value) => value.countryCode !== 'US' || !!value.regionCode, { path: ['regionCode'], message: 'regionCode is required when countryCode is US' });
 const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
 const gateworkRevokeSchema = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const gateworkRoleSchema = z.object({ userId: z.string().uuid(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
@@ -652,12 +664,29 @@ app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => 
 app.get('/v1/auth/onboarding', async (request, reply) => {
   try {
     const user = await requireUser(request);
-    const result = await db.query<{ city: string; region_code: string; interests: string[]; primary_intent: string; completed_at: Date }>(
-      'SELECT city,region_code,interests,primary_intent,completed_at FROM user_onboarding WHERE user_id=$1',
+    const result = await db.query<{ city: string; country_code: string; region_code: string | null; interests: string[]; primary_intent: string; born_in_us: boolean; arrived_month: number | null; arrived_year: number | null; origin_country: string | null; origin_city: string | null; completed_at: Date }>(
+      'SELECT city,country_code,region_code,interests,primary_intent,born_in_us,arrived_month,arrived_year,origin_country,origin_city,completed_at FROM user_onboarding WHERE user_id=$1',
       [user.id],
     );
     const value = result.rows[0];
-    return { data: value ? { completed: true, city: value.city, regionCode: value.region_code, interests: value.interests, primaryIntent: value.primary_intent, completedAt: value.completed_at.toISOString() } : { completed: false } };
+    return {
+      data: value
+        ? {
+            completed: true,
+            city: value.city,
+            countryCode: value.country_code,
+            regionCode: value.region_code,
+            interests: value.interests,
+            primaryIntent: value.primary_intent,
+            bornInUs: value.born_in_us,
+            arrivedMonth: value.arrived_month,
+            arrivedYear: value.arrived_year,
+            originCountry: value.origin_country,
+            originCity: value.origin_city,
+            completedAt: value.completed_at.toISOString(),
+          }
+        : { completed: false },
+    };
   } catch {
     return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
   }
@@ -667,20 +696,26 @@ app.put('/v1/auth/onboarding', { config: { rateLimit: { max: 10, timeWindow: '1 
   try {
     const user = await requireUser(request);
     const input = onboardingSchema.parse(request.body);
-    const regionCode = input.regionCode.toUpperCase();
+    const regionCode = input.regionCode ? input.regionCode.toUpperCase() : null;
+    // Someone born in the US has no arrival date and no country of origin; drop
+    // whatever a stale client sends rather than storing a contradiction.
+    const arrivedMonth = input.bornInUs ? null : input.arrivedMonth ?? null;
+    const arrivedYear = input.bornInUs ? null : input.arrivedYear ?? null;
+    const originCountry = input.bornInUs ? null : input.originCountry ?? null;
+    const originCity = input.bornInUs ? null : input.originCity ?? null;
     const client = await db.connect();
     try {
       await client.query('BEGIN');
       await client.query(
-        `INSERT INTO user_onboarding(user_id,city,region_code,interests,primary_intent)
-         VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(user_id) DO UPDATE SET city=EXCLUDED.city,region_code=EXCLUDED.region_code,interests=EXCLUDED.interests,primary_intent=EXCLUDED.primary_intent,updated_at=now()`,
-        [user.id, input.city, regionCode, input.interests, input.primaryIntent],
+        `INSERT INTO user_onboarding(user_id,city,country_code,region_code,interests,primary_intent,born_in_us,arrived_month,arrived_year,origin_country,origin_city)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT(user_id) DO UPDATE SET city=EXCLUDED.city,country_code=EXCLUDED.country_code,region_code=EXCLUDED.region_code,interests=EXCLUDED.interests,primary_intent=EXCLUDED.primary_intent,born_in_us=EXCLUDED.born_in_us,arrived_month=EXCLUDED.arrived_month,arrived_year=EXCLUDED.arrived_year,origin_country=EXCLUDED.origin_country,origin_city=EXCLUDED.origin_city,updated_at=now()`,
+        [user.id, input.city, input.countryCode, regionCode, input.interests, input.primaryIntent, input.bornInUs, arrivedMonth, arrivedYear, originCountry, originCity],
       );
       await client.query(
         `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
          VALUES('user_onboarding',$1,'community.profile_upserted',$2::jsonb)`,
-        [user.id, JSON.stringify({ userId: user.id, displayName: user.display_name, city: input.city, regionCode, interests: input.interests })],
+        [user.id, JSON.stringify({ userId: user.id, displayName: user.display_name, city: input.city, countryCode: input.countryCode, regionCode, interests: input.interests })],
       );
       await client.query('COMMIT');
     } catch (error) {
@@ -702,8 +737,12 @@ app.put('/v1/auth/onboarding', { config: { rateLimit: { max: 10, timeWindow: '1 
 // decision to branch on account existence carries an enumeration risk.
 app.post('/v1/auth/email/status', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request) => {
   const input = emailSchema.parse(request.body);
+  // An unverified row is a registration in progress, not an account. Reporting
+  // it as existing sends the person to the password step, where sign-in can
+  // only ever fail with EMAIL_VERIFICATION_REQUIRED — a dead end. Treated as
+  // absent, they are routed back through registration, which resumes it.
   const result = await db.query<{ exists: boolean }>(
-    'SELECT EXISTS(SELECT 1 FROM users WHERE email=$1) AS exists',
+    'SELECT EXISTS(SELECT 1 FROM users WHERE email=$1 AND email_verified_at IS NOT NULL) AS exists',
     [input.email.toLowerCase()],
   );
   const exists = result.rows[0]?.exists === true;
@@ -716,15 +755,23 @@ app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 ho
   const passwordValidation = await validateNewPassword(input.password, { email: input.email, name: input.name });
   if (passwordValidation) return reply.code(passwordValidation.code === 'PASSWORD_CHECK_UNAVAILABLE' ? 503 : 400).send({ error: passwordValidation });
   const passwordHash = await hashPassword(input.password);
-  try {
-    const result = await db.query<{ id: string; email: string }>('INSERT INTO users(email, display_name, password_hash) VALUES($1,$2,$3) RETURNING id,email', [input.email.toLowerCase(), input.name, passwordHash]);
-    await issueEmailVerificationCode(result.rows[0]!);
-    // Delivery is intentionally asynchronous and the code is never returned.
-    return reply.code(202).send({ data: { user: result.rows[0], verificationRequired: true } });
-  } catch (error: unknown) {
-    if ((error as { code?: string }).code === '23505') return reply.code(202).send({ data: { verificationRequired: true } });
-    throw error;
-  }
+  // A row that was never verified belongs to nobody yet, so registering over it
+  // resumes that attempt with a fresh name, password and code. The conflict
+  // clause makes the update impossible once the address is verified, so a real
+  // account can never be taken over this way. Both outcomes return the same
+  // body — the response must not reveal which one happened.
+  const result = await db.query<{ id: string; email: string }>(
+    `INSERT INTO users(email, display_name, password_hash) VALUES($1,$2,$3)
+       ON CONFLICT (email) DO UPDATE
+         SET display_name=EXCLUDED.display_name, password_hash=EXCLUDED.password_hash, updated_at=now()
+         WHERE users.email_verified_at IS NULL
+     RETURNING id,email`,
+    [input.email.toLowerCase(), input.name, passwordHash],
+  );
+  const pending = result.rows[0];
+  // Delivery is intentionally asynchronous and the code is never returned.
+  if (pending) await issueEmailVerificationCode(pending);
+  return reply.code(202).send({ data: { verificationRequired: true } });
 });
 
 app.post('/v1/auth/email/verify', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {

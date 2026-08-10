@@ -4,6 +4,7 @@ import '../../../core/storage/session_store.dart';
 import '../../../core/storage/token_store.dart';
 import '../domain/entities/auth_session.dart';
 import '../domain/entities/app_user.dart';
+import '../domain/entities/onboarding_draft.dart';
 import '../domain/entities/onboarding_profile.dart';
 import '../domain/repositories/auth_repository.dart';
 import '../domain/services/passkey_service.dart';
@@ -53,27 +54,28 @@ class AuthController extends ChangeNotifier {
     return profile;
   }
 
-  Future<void> saveOnboarding({
-    required String city,
-    required String regionCode,
-    required List<String> interests,
-    required String primaryIntent,
-  }) async {
-    await _repository.saveOnboarding(
-      city: city,
-      regionCode: regionCode,
-      interests: interests,
-      primaryIntent: primaryIntent,
-    );
+  Future<void> saveOnboarding(OnboardingDraft draft) async {
+    await _repository.saveOnboarding(draft);
     _onboarding = OnboardingProfile(
       completed: true,
-      city: city,
-      regionCode: regionCode,
-      interests: interests,
-      primaryIntent: primaryIntent,
+      city: draft.city,
+      countryCode: draft.countryCode,
+      regionCode: draft.regionCode,
+      interests: draft.interests,
+      primaryIntent: draft.primaryIntent,
+      bornInUs: draft.bornInUs,
+      arrivedMonth: draft.arrivedMonth,
+      arrivedYear: draft.arrivedYear,
+      originCountry: draft.originCountry,
+      originCity: draft.originCity,
     );
     notifyListeners();
   }
+
+  /// Where a freshly authenticated member should land: onboarding only while it
+  /// has not been completed. `_authenticate` already fetched the profile, so
+  /// this needs no extra round trip.
+  bool get needsOnboarding => !(_onboarding?.completed ?? false);
 
   Future<void> restoreSession() async {
     _status = AuthStatus.initializing;

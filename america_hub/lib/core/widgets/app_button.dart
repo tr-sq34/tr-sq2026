@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../design/app_radius.dart';
 
-enum AppButtonVariant { primary, secondary, text }
+/// `onDark` is the call to action used on the dark onboarding backdrop, where a
+/// purple gradient on deep indigo has almost no contrast.
+enum AppButtonVariant { primary, secondary, text, onDark }
 
 class AppButton extends StatelessWidget {
   const AppButton({
@@ -23,8 +25,9 @@ class AppButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final spinnerColor = variant == AppButtonVariant.onDark ? AppColors.textPrimary : Colors.white;
     final child = isLoading
-        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+        ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: spinnerColor, strokeWidth: 2))
         : icon == null
             ? Text(label)
             : Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 19), const SizedBox(width: 8), Text(label)]);
@@ -54,6 +57,19 @@ class AppButton extends StatelessWidget {
         ),
       AppButtonVariant.text => TextButton(
           onPressed: isLoading ? null : onPressed,
+          child: child,
+        ),
+      AppButtonVariant.onDark => ElevatedButton(
+          onPressed: isLoading ? null : onPressed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: AppColors.textPrimary,
+            disabledBackgroundColor: Colors.white.withValues(alpha: .18),
+            disabledForegroundColor: Colors.white.withValues(alpha: .45),
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(AppRadius.button)),
+          ),
           child: child,
         ),
     };
