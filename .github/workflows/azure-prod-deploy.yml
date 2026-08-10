@@ -427,6 +427,54 @@ jobs:
           az functionapp function list --name func-email-relay-prod-cu -g rg-turksquare-prod-centralus -o table
           az functionapp function list --name func-password-breach-check-prod-cu -g rg-turksquare-prod-centralus -o table
 
+      # A Function App's root answers 200 with an HTML "up and running" page, so
+      # an endpoint secret that lost its /api/... route keeps every caller's
+      # response.ok check green while nothing is ever delivered. That exact
+      # mistake has taken this project's mail down three times, and a manual
+      # Key Vault repair does not survive the next terraform apply. These are
+      # plain URLs, not credentials.
+      - name: Endpoint secrets carry their function route
+        run: |
+          set -euo pipefail
+          KV=$(az keyvault list -g rg-turksquare-prod-centralus --query "[0].name" -o tsv)
+
+          check() {
+            value=$(az keyvault secret show --vault-name "$KV" --name "$1" --query value -o tsv)
+            case "$value" in
+              *"$2") echo "ok   $1 -> $value" ;;
+              *) echo "::error::$1 is \"$value\", which does not end in $2. Callers POST to this value verbatim."; return 1 ;;
+            esac
+          }
+
+          failed=0
+          check EMAIL-RELAY-FUNCTION-NAME /api/emailRelay || failed=1
+          check EMAIL-DELIVERY-WEBHOOK /api/emailRelay || failed=1
+          check PASSWORD-SAFETY-FUNCTION-NAME /api/passwordBreachCheck || failed=1
+          check PWNED-PASSWORDS-RANGE-URL /api/passwordBreachCheck || failed=1
+
+          exit $failed
+
+      # Proves the configured sender domain is actually verified with Resend.
+      # An unverified sender is refused by the provider and surfaces only as a
+      # 502 from the relay, minutes or days after a green deploy. The recipient
+      # is Resend's own sink address, so this mails nobody.
+      - name: Email relay accepts the configured sender
+        run: |
+          set -euo pipefail
+          KV=$(az keyvault list -g rg-turksquare-prod-centralus --query "[0].name" -o tsv)
+          relay=$(az keyvault secret show --vault-name "$KV" --name EMAIL-RELAY-FUNCTION-NAME --query value -o tsv)
+          from=$(az keyvault secret show --vault-name "$KV" --name EMAIL-FROM --query value -o tsv)
+
+          body=$(curl -s -o body.json -w '%{http_code}' -X POST "$relay" \
+            -H 'Content-Type: application/json' \
+            -d "{\"from\":\"${from}\",\"recipient\":\"delivered@resend.dev\",\"subject\":\"Deploy smoke test\",\"text\":\"Sender verification probe for ${GITHUB_SHA}.\",\"category\":\"deploy_smoke\",\"idempotencyKey\":\"deploy-${GITHUB_SHA}\"}")
+
+          if [ "$body" != "200" ] || ! jq -e '.data.id' body.json >/dev/null; then
+            echo "::error::Relay would not send as ${from}: HTTP ${body}, body $(cat body.json)"
+            exit 1
+          fi
+          echo "ok   relay accepted ${from}"
+
       - name: Container App health checks
         run: |
           set -euo pipefail

@@ -18,16 +18,25 @@ module "shared" {
   key_vault_admin_object_ids = var.key_vault_admin_object_ids
 
   key_vault_secrets = {
-    "JWT-ISSUER"                    = "https://api.turksquare.com"
-    "JWT-AUDIENCE"                  = "https://api.turksquare.com"
-    "JWT-KEY-ID"                    = "turksquare-identity-jwt-signing"
-    "WEBAUTHN-RP-ID"                = "turksquare.com"
-    "WEBAUTHN-ORIGIN"               = "https://turksquare.com"
-    "EMAIL-FROM"                    = "noreply@turksquare.com"
-    "AUTH-ACTION-BASE-URL"          = "https://api.turksquare.com/v1/auth/action"
-    "EMAIL-RELAY-FUNCTION-NAME"     = "https://func-email-relay-prod-cu.azurewebsites.net"
+    "JWT-ISSUER"      = "https://api.turksquare.com"
+    "JWT-AUDIENCE"    = "https://api.turksquare.com"
+    "JWT-KEY-ID"      = "turksquare-identity-jwt-signing"
+    "WEBAUTHN-RP-ID"  = "turksquare.com"
+    "WEBAUTHN-ORIGIN" = "https://turksquare.com"
+    # Resend verifies notify.turksquare.com, not the root domain. Sending as
+    # noreply@turksquare.com gets a 403 from Resend, which the relay surfaces as
+    # a 502 — no mail, and nothing wrong-looking in the identity service.
+    "EMAIL-FROM"           = "noreply@notify.turksquare.com"
+    "AUTH-ACTION-BASE-URL" = "https://api.turksquare.com/v1/auth/action"
+    # These two are consumed as complete endpoints, not as base URLs: the
+    # services POST to them verbatim. A Function App's root answers 200 with an
+    # HTML "up and running" page, so leaving the route off does not fail — it
+    # silently succeeds against the wrong thing. That has cost this project
+    # three production outages; hence the routes live here, next to the
+    # webhook/range entries that always carried them.
+    "EMAIL-RELAY-FUNCTION-NAME"     = "https://func-email-relay-prod-cu.azurewebsites.net/api/emailRelay"
     "EMAIL-DELIVERY-WEBHOOK"        = "https://func-email-relay-prod-cu.azurewebsites.net/api/emailRelay"
-    "PASSWORD-SAFETY-FUNCTION-NAME" = "https://func-password-breach-check-prod-cu.azurewebsites.net"
+    "PASSWORD-SAFETY-FUNCTION-NAME" = "https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck"
     "PWNED-PASSWORDS-RANGE-URL"     = "https://func-password-breach-check-prod-cu.azurewebsites.net/api/passwordBreachCheck"
     "GATEWORK-COMMUNITY-AUDIENCE"   = "https://community-api.turksquare.com"
     "VERIFICATION-RETURN-URL"       = "https://turksquare.com/verification/callback"
