@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../auth/domain/entities/app_user.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/widgets/app_button.dart';
 import '../../application/community_feed_controller.dart';
@@ -14,9 +15,13 @@ import '../widgets/traveler_details_sheet.dart';
 import '../widgets/post_purpose_grid.dart';
 
 class CreatePostFlowScreen extends StatefulWidget {
-  const CreatePostFlowScreen({super.key, required this.feedController, required this.mediaUploadController});
+  const CreatePostFlowScreen({super.key, required this.feedController, required this.mediaUploadController, this.viewer});
   final CommunityFeedController feedController;
   final MediaUploadController mediaUploadController;
+
+  /// The signed-in member, so the review card previews the post under the name
+  /// it will actually carry. Null only where there is no session to read.
+  final AppUser? viewer;
 
   @override
   State<CreatePostFlowScreen> createState() => _CreatePostFlowScreenState();
@@ -33,6 +38,10 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
   String? _location;
   int _step = 0;
   bool _publishing = false;
+
+  /// Whose post the review card is previewing. 'Sen' rather than a stand-in
+  /// person when there is no session to name.
+  String get _authorName => widget.viewer?.fullName ?? 'Sen';
 
   @override
   void dispose() { _text.dispose(); super.dispose(); }
@@ -275,7 +284,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Row(children: [const CircleAvatar(radius: 22, backgroundColor: Color(0xFFEEF2FF), child: Text('A', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w800))), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_location == null ? 'Ahmet Yılmaz paylaşım yapıyor' : 'Ahmet Yılmaz ${_location!} konumunda', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)), const Text('Şimdi', style: TextStyle(color: AppColors.textMuted, fontSize: 12))]))]),
+              child: Row(children: [CircleAvatar(radius: 22, backgroundColor: const Color(0xFFEEF2FF), child: Text(widget.viewer?.initials ?? '?', style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w800))), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_location == null ? '$_authorName paylaşım yapıyor' : '$_authorName ${_location!} konumunda', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)), const Text('Şimdi', style: TextStyle(color: AppColors.textMuted, fontSize: 12))]))]),
             ),
             if (_text.text.trim().isNotEmpty) Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 14), child: _ReviewTextPreview(message: _text.text)),
             if (_media.isNotEmpty) SizedBox(height: 128, width: double.infinity, child: Image.memory(_media.first.bytes, fit: BoxFit.cover)),

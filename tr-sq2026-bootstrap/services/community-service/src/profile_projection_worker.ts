@@ -1,5 +1,6 @@
 ﻿import { ServiceBusClient, ServiceBusReceiver } from '@azure/service-bus';
 import { createDatabasePool } from './database.js';
+import { awardBadge } from './journey.js';
 
 const connectionString = process.env.AZURE_SERVICE_BUS_CONNECTION_STRING;
 const queueName = process.env.AZURE_COMMUNITY_PROFILE_QUEUE_NAME;
@@ -9,7 +10,22 @@ const db = createDatabasePool();
 const sbClient = new ServiceBusClient(connectionString);
 const receiver = sbClient.createReceiver(queueName, { receiveMode: 'peekLock' });
 
-type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; identityVerified?: boolean; auctionSellerEligible?: boolean } };
+type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; primaryIntent?: string | null; bornInUs?: boolean; arrivedMonth?: number | null; arrivedYear?: number | null; originCountry?: string | null; originCity?: string | null; identityVerified?: boolean; auctionSellerEligible?: boolean } };
+
+/// Identity already range-checks these, but a projection that trusts its
+/// producer stores whatever a replayed bad payload contains. Out-of-range values
+/// become NULL instead of failing the event: an implausible arrival year is not
+/// worth wedging the queue over, and the profile simply shows no arrival date.
+const monthOrNull = (value: number | null | undefined) =>
+  typeof value === 'number' && value >= 1 && value <= 12 ? value : null;
+const yearOrNull = (value: number | null | undefined) =>
+  typeof value === 'number' && value >= 1950 && value <= 2100 ? value : null;
+const countryOrNull = (value: string | null | undefined) =>
+  typeof value === 'string' && /^[A-Za-z]{2}$/.test(value) ? value.toUpperCase() : null;
+const originCityOrNull = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length >= 2 && trimmed.length <= 100 ? trimmed : null;
+};
 
 async function processEvent(event: Event) {
   if (!['community.profile_upserted','community.member_capabilities_upserted'].includes(event.eventType)) return;
@@ -23,15 +39,49 @@ async function processEvent(event: Event) {
       // A member living outside the US has no state code. Locality ranking
       // simply skips them; rejecting the event would wedge the queue instead.
       const regionCode = input.regionCode ? input.regionCode.toUpperCase() : null;
+      // Someone born in the US has no arrival date and no country of origin.
+      // Dropping them here as well as in identity means a stale producer cannot
+      // leave the profile claiming both.
+      const bornInUs = input.bornInUs === true;
       await client.query(
-        `INSERT INTO community_profile_projection(user_id,display_name,city,region_code,interests)
-         VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(user_id) DO UPDATE SET display_name=EXCLUDED.display_name,city=EXCLUDED.city,region_code=EXCLUDED.region_code,interests=EXCLUDED.interests,updated_at=now()`,
-        [input.userId, input.displayName, input.city, regionCode, input.interests],
+        `INSERT INTO community_profile_projection(user_id,display_name,city,region_code,interests,born_in_us,arrived_month,arrived_year,origin_country,origin_city,primary_intent)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT(user_id) DO UPDATE SET display_name=EXCLUDED.display_name,city=EXCLUDED.city,region_code=EXCLUDED.region_code,interests=EXCLUDED.interests,born_in_us=EXCLUDED.born_in_us,arrived_month=EXCLUDED.arrived_month,arrived_year=EXCLUDED.arrived_year,origin_country=EXCLUDED.origin_country,origin_city=EXCLUDED.origin_city,primary_intent=EXCLUDED.primary_intent,updated_at=now()`,
+        [
+          input.userId,
+          input.displayName,
+          input.city,
+          regionCode,
+          input.interests,
+          bornInUs,
+          bornInUs ? null : monthOrNull(input.arrivedMonth),
+          bornInUs ? null : yearOrNull(input.arrivedYear),
+          bornInUs ? null : countryOrNull(input.originCountry),
+          bornInUs ? null : originCityOrNull(input.originCity),
+          input.primaryIntent ?? null,
+        ],
       );
+      // The leaderboard reads locality straight off member_scores so that
+      // "this week in Paterson" is an index scan rather than a join over every
+      // member in the state. It is a cache of the line above, refreshed in the
+      // same transaction so the two can never disagree.
+      await client.query(
+        `INSERT INTO member_scores(user_id,city,region_code)
+         VALUES($1,$2,$3)
+         ON CONFLICT(user_id) DO UPDATE SET city=EXCLUDED.city,region_code=EXCLUDED.region_code,updated_at=now()`,
+        [input.userId, input.city, regionCode],
+      );
+      // Finishing onboarding is the first task on the journey map, and it is
+      // the one moment we know the member picked a city.
+      await awardBadge(client, input.userId, 'jfk_welcomed');
     }
     if (inserted.rowCount && event.eventType === 'community.member_capabilities_upserted') {
       await client.query(`INSERT INTO member_capabilities(user_id,identity_verified,auction_seller_eligible) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET identity_verified=EXCLUDED.identity_verified,auction_seller_eligible=EXCLUDED.auction_seller_eligible,updated_at=now()`, [event.payload.userId, event.payload.identityVerified === true, event.payload.auctionSellerEligible === true]);
+      // I-94 Temiz is exactly "the identity checks passed", so it is awarded
+      // where that becomes true rather than being inferred later by a poll.
+      if (event.payload.identityVerified === true) {
+        await awardBadge(client, event.payload.userId, 'i94_clean');
+      }
     }
     await client.query('COMMIT');
   } catch (error) {

@@ -4,12 +4,13 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../community/application/community_feed_controller.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/application/community_comments_controller.dart';
-import '../../../community/application/profile_posts_controller.dart';
 import '../../../community/application/media_upload_controller.dart';
+import '../../../community/domain/repositories/community_repository.dart';
 import '../../../community/application/community_special_request_controller.dart';
 import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../profile/application/profile_controller.dart';
+import '../../../journey/application/journey_controller.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
 import '../../../community/presentation/screens/create_post_flow_screen.dart';
@@ -30,13 +31,14 @@ class MainLayoutScreen extends StatefulWidget {
     required this.communityController,
     required this.storyController,
     required this.commentsController,
-    required this.profilePostsController,
     required this.mediaUploadController,
+    required this.postCommands,
     required this.specialRequestController,
     required this.contentModerationRepository,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.journeyController,
     required this.onSignOut,
     required this.homeController,
     required this.memberCapabilitiesController,
@@ -46,13 +48,14 @@ class MainLayoutScreen extends StatefulWidget {
   final CommunityFeedController communityController;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
-  final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
+  final CommunityPostCommands postCommands;
   final CommunitySpecialRequestController specialRequestController;
   final ContentModerationRepository contentModerationRepository;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final JourneyController journeyController;
   final Future<void> Function() onSignOut;
   final CommunityHomeController homeController;
   final MemberCapabilitiesController memberCapabilitiesController;
@@ -74,13 +77,20 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
   List<Widget> _buildPages() => [
     DiscoverScreen(controller: widget.homeController),
-    CommunityScreen(
-      controller: widget.communityController,
-      storyController: widget.storyController,
-      commentsController: widget.commentsController,
-      mediaUploadController: widget.mediaUploadController,
-      specialRequestController: widget.specialRequestController,
-      moderationRepository: widget.contentModerationRepository,
+    // The pages are built once, but the composer inside the feed names the
+    // member, and that name can still arrive on a token refresh. Listening
+    // here keeps it current without rebuilding the whole stack.
+    AnimatedBuilder(
+      animation: widget.authController,
+      builder: (_, _) => CommunityScreen(
+        controller: widget.communityController,
+        storyController: widget.storyController,
+        commentsController: widget.commentsController,
+        mediaUploadController: widget.mediaUploadController,
+        specialRequestController: widget.specialRequestController,
+        moderationRepository: widget.contentModerationRepository,
+        viewer: widget.authController.user,
+      ),
     ),
     MarketplaceScreen(
       controller: widget.marketplaceController,
@@ -88,10 +98,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
     ProfileScreen(
       controller: widget.profileController,
-      postsController: widget.profilePostsController,
+      journeyController: widget.journeyController,
       onSignOut: widget.onSignOut,
       memberCapabilitiesController: widget.memberCapabilitiesController,
       storyController: widget.storyController,
+      mediaUploadController: widget.mediaUploadController,
+      postCommands: widget.postCommands,
     ),
   ];
 
@@ -153,6 +165,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       builder: (_) => CreatePostFlowScreen(
         feedController: widget.communityController,
         mediaUploadController: widget.mediaUploadController,
+        viewer: widget.authController.user,
       ),
     ),
   );
