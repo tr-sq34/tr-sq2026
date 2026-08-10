@@ -54,6 +54,21 @@ abstract final class ApiEndpoints {
   // the report before the author can delete it.
   static const communityReports = '/community/reports';
   static const communityMyRestriction = '/community/restrictions/me';
+  // The member's identity inside the app: name and locality come from the
+  // onboarding projection, bio and avatar from what they typed in Community.
+  // Both are served by the community service, which is why they resolve against
+  // ApiConfig.communityBaseUrl rather than the identity URL.
+  static const communityProfileMe = '/community/profiles/me';
+  static String communityProfile(String userId) => '/community/profiles/$userId';
+  static String communityProfilePosts(String userId) =>
+      '/community/profiles/$userId/posts';
+  static String communityPostArchive(String postId) =>
+      '/community/posts/$postId/archive';
+  static const communityJourney = '/community/me/journey';
+  static const communityBadges = '/community/badges';
+  static String communityUserBadges(String userId) =>
+      '/community/users/$userId/badges';
+  static const communityLeaderboard = '/community/leaderboard';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

@@ -4,12 +4,13 @@ import '../../features/auth/application/auth_controller.dart';
 import '../../features/community/application/community_feed_controller.dart';
 import '../../features/community/application/story_controller.dart';
 import '../../features/community/application/community_comments_controller.dart';
-import '../../features/community/application/profile_posts_controller.dart';
 import '../../features/community/application/media_upload_controller.dart';
+import '../../features/community/domain/repositories/community_repository.dart';
 import '../../features/community/application/community_special_request_controller.dart';
 import '../../features/events/application/events_controller.dart';
 import '../../features/marketplace/application/marketplace_controller.dart';
 import '../../features/profile/application/profile_controller.dart';
+import '../../features/journey/application/journey_controller.dart';
 import '../../features/messaging/application/direct_conversation_controller.dart';
 import '../../features/messaging/application/messaging_controller.dart';
 import '../../features/messaging/domain/repositories/direct_message_repository.dart';
@@ -35,12 +36,13 @@ class AppRouter {
     required this.communityController,
     required this.storyController,
     required this.commentsController,
-    required this.profilePostsController,
     required this.mediaUploadController,
+    required this.postCommands,
     required this.specialRequestController,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.journeyController,
     required this.messagingController,
     required this.directMessageRepository,
     required this.messageModerationRepository,
@@ -54,12 +56,13 @@ class AppRouter {
   final CommunityFeedController communityController;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
-  final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
+  final CommunityPostCommands postCommands;
   final CommunitySpecialRequestController specialRequestController;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final JourneyController journeyController;
   final MessagingController messagingController;
   final DirectMessageRepository directMessageRepository;
   final MessageModerationRepository messageModerationRepository;
@@ -91,12 +94,13 @@ class AppRouter {
             communityController: communityController,
             storyController: storyController,
             commentsController: commentsController,
-            profilePostsController: profilePostsController,
             mediaUploadController: mediaUploadController,
+            postCommands: postCommands,
             specialRequestController: specialRequestController,
             eventsController: eventsController,
             marketplaceController: marketplaceController,
             profileController: profileController,
+            journeyController: journeyController,
             contentModerationRepository: contentModerationRepository,
             homeController: communityHomeController,
             memberCapabilitiesController: memberCapabilitiesController,

@@ -18,6 +18,14 @@ class AppUser {
     return local.isEmpty ? 'Hoş geldin' : local;
   }
 
+  /// The whole name, for bylines that name the author rather than greet them.
+  /// Falls back the same way [shortName] does: something that is at least the
+  /// member's own, never a stand-in person.
+  String get fullName {
+    final name = displayName?.trim() ?? '';
+    return name.isNotEmpty ? name : shortName;
+  }
+
   /// Up to two letters for an avatar placeholder, until a real photo exists.
   String get initials {
     final name = displayName?.trim() ?? '';
