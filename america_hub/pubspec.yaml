@@ -45,6 +45,10 @@ dependencies:
   intl: ^0.20.3
   image_picker: ^1.2.3
   geolocator: ^14.0.2
+  # Turns the coordinate geolocator returns into a real city and state. The
+  # onboarding location step used to discard the position and hardcode
+  # "Manhattan, New York" instead.
+  geocoding: ^4.0.0
   share_plus: ^12.0.1
   # Native Android Credential Manager / Apple AuthenticationServices bridge.
   # WebAuthn challenges and signatures stay verified by our backend.
@@ -72,6 +76,7 @@ flutter:
 
   assets:
     - assets/images/auth/
+    - assets/data/
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

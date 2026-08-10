@@ -1,3 +1,4 @@
+import 'package:america_hub/core/network/api_exception.dart';
 import 'package:america_hub/features/auth/presentation/screens/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,5 +47,42 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Kayıt: new@example.com'), findsOneWidget);
+  });
+
+  testWidgets('an unverified account is sent to verification, not a dead end', (
+    tester,
+  ) async {
+    String? resumed;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          onCheckEmailStatus: (_) async => true,
+          onSignIn: (_, _) async => throw const ApiException(
+            message: 'E-posta doğrulaması gerekli.',
+            statusCode: 403,
+            code: 'EMAIL_VERIFICATION_REQUIRED',
+          ),
+          onVerificationRequired: (email) => resumed = email,
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField).first, 'pending@example.com');
+    await tester.tap(find.text('Devam et'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, 'a-password');
+    // The password step pushes the button past the default 800x600 surface.
+    final signIn = find.widgetWithText(FilledButton, 'Giriş yap');
+    await tester.ensureVisible(signIn);
+    await tester.pumpAndSettle();
+    await tester.tap(signIn);
+    await tester.pumpAndSettle();
+
+    expect(resumed, 'pending@example.com');
+    // The failure must not also surface as a snack bar the person has to read
+    // and dismiss on a screen they have already been moved away from.
+    expect(find.text('E-posta doğrulaması gerekli.'), findsNothing);
   });
 }

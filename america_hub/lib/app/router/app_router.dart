@@ -65,6 +65,15 @@ class AppRouter {
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
 
+  /// Where a member lands right after signing in.
+  ///
+  /// Onboarding is a one-time setup, not a gate on every session: sending every
+  /// successful login there is what made the location screen reappear on each
+  /// app launch. `AuthController` already fetched the profile while
+  /// authenticating, so this reads a cached flag rather than hitting the API.
+  String _postAuthRoute() =>
+      authController.needsOnboarding ? AppRoutes.onboarding : AppRoutes.home;
+
   Route<void> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
       case AppRoutes.startup:
@@ -103,13 +112,8 @@ class AppRouter {
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (context) => OnboardingScreen(
-            onComplete: (city, regionCode, interests, intent) async {
-              await authController.saveOnboarding(
-                city: city,
-                regionCode: regionCode,
-                interests: interests,
-                primaryIntent: intent,
-              );
+            onComplete: (draft) async {
+              await authController.saveOnboarding(draft);
               if (context.mounted) {
                 Navigator.of(
                   context,
@@ -200,7 +204,7 @@ class AppRouter {
             onVerifyCode: authController.signInWithPhone,
             onAuthenticated: () => Navigator.of(
               context,
-            ).pushNamedAndRemoveUntil(AppRoutes.onboarding, (_) => false),
+            ).pushNamedAndRemoveUntil(_postAuthRoute(), (_) => false),
           ),
         );
       case AppRoutes.login:
@@ -213,10 +217,12 @@ class AppRouter {
             onRegisterWithEmail: (email) => Navigator.of(
               context,
             ).pushNamed(AppRoutes.register, arguments: email),
-            onSignIn: authController.signIn,
-            onAuthenticated: () => Navigator.of(
+            onVerificationRequired: (email) => Navigator.of(
               context,
-            ).pushReplacementNamed(AppRoutes.onboarding),
+            ).pushNamed(AppRoutes.emailVerification, arguments: email),
+            onSignIn: authController.signIn,
+            onAuthenticated: () =>
+                Navigator.of(context).pushReplacementNamed(_postAuthRoute()),
             onForgotPassword: (email) => Navigator.of(
               context,
             ).pushNamed(AppRoutes.forgotPassword, arguments: email),
