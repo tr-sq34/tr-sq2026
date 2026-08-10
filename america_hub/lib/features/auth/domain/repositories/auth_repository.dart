@@ -17,7 +17,23 @@ abstract interface class AuthRepository {
     required String code,
   });
   Future<void> resendEmailVerification({required String email});
+  /// Asks for a six-digit reset code. Always succeeds for a well-formed
+  /// address: the server refuses to reveal whether an account exists.
   Future<void> requestPasswordReset({required String email});
+
+  /// Trades the emailed code for a single-use ticket. The code is spent by this
+  /// call either way, so a wrong entry means asking for a new one.
+  Future<String> verifyPasswordResetCode({
+    required String email,
+    required String code,
+  });
+
+  /// Sets the new password. The ticket is consumed here, and every existing
+  /// session on the account is revoked server-side.
+  Future<void> confirmPasswordReset({
+    required String ticket,
+    required String password,
+  });
   Future<void> requestPhoneCode({required String phoneNumber});
   Future<AuthSession> signInWithPhone({
     required String phoneNumber,

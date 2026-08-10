@@ -5,6 +5,9 @@ abstract final class ApiEndpoints {
   static const authEmailStatus = 'auth/email/status';
   static const authEmailVerificationConfirm = 'auth/email/verification/confirm';
   static const authEmailVerificationResend = 'auth/email/verification/resend';
+  static const authPasswordResetRequest = 'auth/password-reset/request';
+  static const authPasswordResetVerify = 'auth/password-reset/verify';
+  static const authPasswordResetConfirm = 'auth/password-reset/confirm';
   static const authRegister = 'auth/register';
   static const authRefresh = 'auth/refresh';
   static const authLogout = 'auth/logout';

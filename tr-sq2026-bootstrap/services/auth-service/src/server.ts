@@ -53,7 +53,8 @@ const logoutSchema = z.object({ refreshToken: z.string().min(32).max(512) });
 const actionSchema = z.object({ token: z.string().min(32).max(512) });
 const emailSchema = z.object({ email: z.string().trim().email().max(254) });
 const emailVerificationCodeSchema = emailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
-const resetSchema = actionSchema.extend({ password: z.string().min(12).max(128) });
+const passwordResetVerifySchema = emailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
+const passwordResetConfirmSchema = z.object({ ticket: z.string().min(32).max(512), password: z.string().min(12).max(128) });
 const webauthnSchema = z.object({ credential: z.record(z.unknown()) });
 const onboardingSchema = z.object({
   city: z.string().trim().min(2).max(100),
@@ -71,6 +72,11 @@ const hashOpaque = (token: string) => createHash('sha256').update(token).digest(
 const createEmailVerificationCode = () => randomInt(0, 1000000).toString().padStart(6, '0');
 const hashEmailVerificationCode = (userId: string, code: string) =>
   createHmac('sha256', emailCodeHmacKey).update(`${userId}:${code}`).digest('hex');
+// The purpose is part of the signed input, so a six-digit string that is valid
+// as a signup code hashes to something else entirely as a reset code. The two
+// flows cannot be crossed even if a future change lets them share a table.
+const hashPasswordResetCode = (userId: string, code: string) =>
+  createHmac('sha256', emailCodeHmacKey).update(`reset_password:${userId}:${code}`).digest('hex');
 let dummyPasswordHash: Promise<string> | undefined;
 
 function passwordError(password: string, identity: { email: string; name: string }) {
@@ -255,7 +261,7 @@ async function issueSession(user: { id: string; email: string }, existingFamilyI
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }
 
-async function createActionToken(userId: string, kind: 'verify_email' | 'reset_password', ttl: string) {
+async function createActionToken(userId: string, kind: 'verify_email', ttl: string) {
   const token = opaqueToken();
   await db.query('INSERT INTO account_action_tokens(user_id, kind, token_hash, expires_at) VALUES($1,$2,$3,now() + $4::interval)', [userId, kind, hashOpaque(token), ttl]);
   // Send through a queue-backed transactional email provider. Never log or
@@ -264,34 +270,54 @@ async function createActionToken(userId: string, kind: 'verify_email' | 'reset_p
   return token;
 }
 
-async function deliverActionLink(email: string, kind: 'verify_email' | 'reset_password', token: string) {
+/**
+ * A Function App answers its own root URL with an HTML landing page and HTTP
+ * 200. Trusting `response.ok` alone therefore reads a misrouted request as a
+ * successful send, which is exactly how a misconfigured route once swallowed
+ * every verification mail without producing a single error line. Delivery
+ * counts here only when the relay answers with the JSON envelope it documents,
+ * carrying a provider message id.
+ */
+async function postToEmailRelay(message: {
+  recipient: string;
+  from: string;
+  subject: string;
+  text: string;
+  category: string;
+  idempotencyKey: string;
+}) {
+  const response = await fetch(emailRelayEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+  if (!response.ok) throw new Error(`email relay responded with status ${response.status}`);
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`email relay responded with "${contentType || 'no content-type'}" instead of JSON`);
+  }
+  const payload = (await response.json().catch(() => null)) as { data?: { id?: string } } | null;
+  if (!payload?.data?.id) throw new Error('email relay response carried no provider message id');
+}
+
+async function deliverActionLink(email: string, kind: 'verify_email', token: string) {
   const url = new URL(authActionBaseUrl);
   url.searchParams.set('action', kind);
   url.searchParams.set('token', token);
-  const subject = kind === 'verify_email'
-    ? 'TurkSquare e-posta doğrulaması'
-    : 'TurkSquare parola sıfırlama';
-  const instruction = kind === 'verify_email'
-    ? 'E-posta adresinizi doğrulamak için bağlantıyı açın.'
-    : 'Parolanızı sıfırlamak için bağlantıyı açın.';
-    try {
-    const response = await fetch(emailRelayEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: email,
-        from: emailFrom,
-        subject,
-        text: `${instruction}\n\n${url.toString()}\n\nBu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
-        category: kind,
-        idempotencyKey: `${kind}:${hashOpaque(token)}`,
-      }),
+  // Password reset no longer travels as a link: `GET /v1/auth/action` only ever
+  // honoured `verify_email`, so a reset link was a dead end in the inbox. The
+  // narrow `kind` keeps it from being wired back in.
+  const subject = 'TurkSquare e-posta doğrulaması';
+  const instruction = 'E-posta adresinizi doğrulamak için bağlantıyı açın.';
+  try {
+    await postToEmailRelay({
+      recipient: email,
+      from: emailFrom,
+      subject,
+      text: `${instruction}\n\n${url.toString()}\n\nBu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
+      category: kind,
+      idempotencyKey: `${kind}:${hashOpaque(token)}`,
     });
-    if (!response.ok) {
-      // Tokens and recipient addresses must never be added to application logs.
-      app.log.error({ kind, statusCode: response.status }, 'Identity transactional email delivery failed');
-      throw new Error('Email delivery failed');
-    }
   } catch (error) {
     // Tokens and recipient addresses must never be added to application logs.
     app.log.error({ err: error, kind }, 'Identity transactional email delivery failed');
@@ -300,25 +326,36 @@ async function deliverActionLink(email: string, kind: 'verify_email' | 'reset_pa
 }
 
 async function deliverEmailVerificationCode(email: string, code: string) {
-    try {
-    const response = await fetch(emailRelayEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: email,
-        from: emailFrom,
-        subject: 'TurkSquare doğrulama kodunuz',
-        text: `TurkSquare doğrulama kodunuz: ${code}\n\nBu kod 59 saniye geçerlidir. Kodu kimseyle paylaşmayın. Bu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
-        category: 'verify_email_code',
-        idempotencyKey: `verify_email_code:${hashEmailVerificationCode(email, code)}`,
-      }),
+  try {
+    await postToEmailRelay({
+      recipient: email,
+      from: emailFrom,
+      subject: 'TurkSquare doğrulama kodunuz',
+      text: `TurkSquare doğrulama kodunuz: ${code}\n\nBu kod 59 saniye geçerlidir. Kodu kimseyle paylaşmayın. Bu isteği siz yapmadıysanız bu e-postayı yok sayın.`,
+      category: 'verify_email_code',
+      idempotencyKey: `verify_email_code:${hashEmailVerificationCode(email, code)}`,
     });
-    if (!response.ok) {
-      app.log.error({ category: 'verify_email_code', statusCode: response.status }, 'Identity verification code delivery failed');
-      throw new Error('Email delivery failed');
-    }
   } catch (error) {
     app.log.error({ err: error, category: 'verify_email_code' }, 'Identity verification code delivery failed');
+    throw new Error('Email delivery failed');
+  }
+}
+
+async function deliverPasswordResetCode(email: string, code: string) {
+  try {
+    await postToEmailRelay({
+      recipient: email,
+      from: emailFrom,
+      subject: 'TurkSquare parola sıfırlama kodunuz',
+      text: `TurkSquare parola sıfırlama kodunuz: ${code}\n\nBu kod 59 saniye geçerlidir. Kodu kimseyle paylaşmayın; TurkSquare çalışanları bu kodu asla istemez. Parola sıfırlama isteğini siz yapmadıysanız bu e-postayı yok sayın, parolanız değişmez.`,
+      category: 'reset_password_code',
+      // The email address is not part of the signed input anywhere else, but the
+      // relay needs an idempotency key that is stable per (recipient, code) and
+      // reveals neither. The user id is not in scope at the delivery boundary.
+      idempotencyKey: `reset_password_code:${createHmac('sha256', emailCodeHmacKey).update(`${email}:${code}`).digest('hex')}`,
+    });
+  } catch (error) {
+    app.log.error({ err: error, category: 'reset_password_code' }, 'Identity password reset code delivery failed');
     throw new Error('Email delivery failed');
   }
 }
@@ -344,6 +381,109 @@ async function issueEmailVerificationCode(user: { id: string; email: string }) {
     client.release();
   }
   await deliverEmailVerificationCode(user.email, code);
+}
+
+/**
+ * Issuing a fresh reset code retires everything that came before it: older
+ * codes and any ticket already minted from one. A person who asks for a second
+ * code because the first expired must not leave a usable first code behind, and
+ * an attacker who redeemed a code must lose that ticket the moment the real
+ * account holder starts the flow again.
+ */
+async function issuePasswordResetCode(user: { id: string; email: string }) {
+  const code = createEmailVerificationCode();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'UPDATE password_reset_codes SET consumed_at=COALESCE(consumed_at, now()), ticket_used_at=COALESCE(ticket_used_at, now()) WHERE user_id=$1 AND (consumed_at IS NULL OR (ticket_hash IS NOT NULL AND ticket_used_at IS NULL))',
+      [user.id],
+    );
+    await client.query(
+      "INSERT INTO password_reset_codes(user_id, code_hash, expires_at) VALUES($1,$2,now() + interval '59 seconds')",
+      [user.id, hashPasswordResetCode(user.id, code)],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  await deliverPasswordResetCode(user.email, code);
+}
+
+/**
+ * Redeems a reset code and, on success, returns the one-time ticket that
+ * authorises the password write. The caller gets no way to tell an expired code
+ * from a wrong one: distinguishing them would turn this endpoint into an oracle
+ * for whether an address has an account. The client already knows when its own
+ * 59-second timer ran out and can offer a resend without being told.
+ */
+async function redeemPasswordResetCode(userId: string, code: string): Promise<string | null> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query<{ id: string; code_hash: string; expires_at: Date; attempts: number }>(
+      'SELECT id,code_hash,expires_at,attempts FROM password_reset_codes WHERE user_id=$1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE',
+      [userId],
+    );
+    const record = result.rows[0];
+    if (!record || record.expires_at <= new Date()) {
+      if (record) await client.query('UPDATE password_reset_codes SET consumed_at=now() WHERE id=$1', [record.id]);
+      await client.query('COMMIT');
+      return null;
+    }
+    const valid = timingSafeEqual(
+      Buffer.from(record.code_hash, 'hex'),
+      Buffer.from(hashPasswordResetCode(userId, code), 'hex'),
+    );
+    if (!valid) {
+      // Five guesses burn the code outright. Six digits with a 59-second life
+      // is already a small target; an unbounded retry budget would shrink it to
+      // nothing.
+      const attempts = record.attempts + 1;
+      await client.query(
+        'UPDATE password_reset_codes SET attempts=$2, consumed_at=CASE WHEN $2 >= 5 THEN now() ELSE NULL END WHERE id=$1',
+        [record.id, attempts],
+      );
+      await client.query('COMMIT');
+      return null;
+    }
+    const ticket = opaqueToken();
+    await client.query(
+      "UPDATE password_reset_codes SET consumed_at=now(), ticket_hash=$2, ticket_expires_at=now() + interval '10 minutes' WHERE id=$1",
+      [record.id, hashOpaque(ticket)],
+    );
+    await client.query('COMMIT');
+    return ticket;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function consumePasswordResetTicket(ticket: string) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query<{ id: string; user_id: string }>(
+      'SELECT id,user_id FROM password_reset_codes WHERE ticket_hash=$1 AND ticket_used_at IS NULL AND ticket_expires_at > now() FOR UPDATE',
+      [hashOpaque(ticket)],
+    );
+    const row = result.rows[0];
+    if (!row) { await client.query('ROLLBACK'); return null; }
+    await client.query('UPDATE password_reset_codes SET ticket_used_at=now() WHERE id=$1', [row.id]);
+    await client.query('COMMIT');
+    return row.user_id;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 type EmailCodeVerificationResult = 'verified' | 'invalid' | 'expired';
@@ -396,7 +536,7 @@ async function verifyEmailVerificationCode(userId: string, code: string): Promis
   }
 }
 
-async function consumeActionToken(token: string, kind: 'verify_email' | 'reset_password') {
+async function consumeActionToken(token: string, kind: 'verify_email') {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -664,28 +804,82 @@ app.post('/v1/auth/action', { config: { rateLimit: { max: 10, timeWindow: '15 mi
   return reply.type('text/html').send('<!doctype html><title>TurkSquare</title><main><h1>Email verified</h1><p>You can return to TurkSquare and sign in.</p></main>');
 });
 
+// Step 1 of 3. Always answers the same way: an attacker must not learn from
+// this endpoint whether an address has an account. A delivery failure is logged
+// but not surfaced, because "we could not send it" is itself an existence
+// signal — the caller retries with the resend the client already offers.
 app.post('/v1/auth/password-reset/request', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = emailSchema.parse(request.body);
-  const result = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [input.email.toLowerCase()]);
-  if (result.rows[0]) {
-    const token = await createActionToken(result.rows[0].id, 'reset_password', '15 minutes');
-    await deliverActionLink(input.email.toLowerCase(), 'reset_password', token);
+  const result = await db.query<{ id: string; email: string }>('SELECT id,email FROM users WHERE email=$1', [input.email.toLowerCase()]);
+  const user = result.rows[0];
+  if (user) {
+    try {
+      await issuePasswordResetCode(user);
+    } catch (error) {
+      app.log.error({ err: error, category: 'reset_password_code' }, 'Identity password reset code could not be issued');
+    }
   }
-  // Generic response prevents account enumeration.
   return reply.code(202).send({ data: { accepted: true } });
 });
 
+// Step 2 of 3. Trades the six-digit code for a single-use ticket. The code dies
+// here whether or not it was right, so a ticket is the only thing that survives
+// into the password step.
+app.post('/v1/auth/password-reset/verify', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  const input = passwordResetVerifySchema.parse(request.body);
+  const result = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [input.email.toLowerCase()]);
+  const userId = result.rows[0]?.id;
+  const ticket = userId ? await redeemPasswordResetCode(userId, input.code) : null;
+  if (!ticket) {
+    return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_CODE', message: 'Kod geçersiz veya süresi dolmuş.' } });
+  }
+  return reply.code(200).send({ data: { ticket, expiresInSeconds: 600 } });
+});
+
+// Step 3 of 3. The ticket is consumed before the password is even inspected, so
+// a rejected password costs the ticket too — a caller who fails the policy check
+// starts over from the code rather than getting unlimited attempts against one
+// redeemed code.
 app.post('/v1/auth/password-reset/confirm', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request, reply) => {
-  const input = resetSchema.parse(request.body);
-  const userId = await consumeActionToken(input.token, 'reset_password');
-  if (!userId) return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_TOKEN', message: 'Sıfırlama bağlantısı geçersiz veya süresi dolmuş.' } });
-  const account = await db.query<{ email: string; display_name: string }>('SELECT email,display_name FROM users WHERE id=$1', [userId]);
+  const input = passwordResetConfirmSchema.parse(request.body);
+  const userId = await consumePasswordResetTicket(input.ticket);
+  if (!userId) return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_TICKET', message: 'Sıfırlama oturumu geçersiz veya süresi dolmuş. Lütfen yeni kod isteyin.' } });
+  const account = await db.query<{ email: string; display_name: string; password_hash: string; email_verified_at: Date | null }>(
+    'SELECT email,display_name,password_hash,email_verified_at FROM users WHERE id=$1',
+    [userId],
+  );
   const identity = account.rows[0];
-  const passwordValidation = identity && await validateNewPassword(input.password, { email: identity.email, name: identity.display_name });
+  if (!identity) return reply.code(400).send({ error: { code: 'INVALID_OR_EXPIRED_TICKET', message: 'Sıfırlama oturumu geçersiz veya süresi dolmuş. Lütfen yeni kod isteyin.' } });
+  const passwordValidation = await validateNewPassword(input.password, { email: identity.email, name: identity.display_name });
   if (passwordValidation) return reply.code(passwordValidation.code === 'PASSWORD_CHECK_UNAVAILABLE' ? 503 : 400).send({ error: passwordValidation });
+  // Reusing the current password would leave whoever prompted the reset exactly
+  // as able to sign in as before.
+  if (await argon2.verify(identity.password_hash, input.password).catch(() => false)) {
+    return reply.code(400).send({ error: { code: 'PASSWORD_UNCHANGED', message: 'Yeni parolanız eskisiyle aynı olamaz.' } });
+  }
   const passwordHash = await hashPassword(input.password);
   const client = await db.connect();
-  try { await client.query('BEGIN'); await client.query('UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2', [passwordHash, userId]); await client.query('UPDATE refresh_token_families SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [userId]); await client.query('COMMIT'); } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2', [passwordHash, userId]);
+    // Every existing session dies with the old password. A reset is what someone
+    // does after losing control of an account, so leaving live refresh tokens
+    // behind would defeat the point.
+    await client.query('UPDATE refresh_token_families SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [userId]);
+    // Reading a code out of the inbox proves the same thing signup verification
+    // proves. Leaving the account unverified after that would strand a person
+    // who reset before ever confirming their address.
+    if (identity.email_verified_at === null) {
+      const verified = await client.query<{ display_name: string }>(
+        'UPDATE users SET email_verified_at=now() WHERE id=$1 AND email_verified_at IS NULL RETURNING display_name',
+        [userId],
+      );
+      if (verified.rowCount) {
+        await queueMessagingUserUpsert(client, { id: userId, displayName: verified.rows[0]!.display_name, active: true });
+      }
+    }
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   return reply.code(204).send();
 });
 

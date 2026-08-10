@@ -14,8 +14,21 @@ location is trusted. The identity service is the authority for every decision.
   replacement. Reuse of a consumed token revokes the entire family.
 - `POST /auth/logout`: revoke the supplied refresh-token family. The endpoint
   is idempotent and returns no information about an unknown token.
-- `POST /auth/password-reset/request` and `/confirm`: use single-use,
-  short-lived reset tokens and revoke all sessions after a password change.
+- Password reset runs in three calls, because the emailed code has to be
+  short-lived while a person choosing a password does not:
+  - `POST /auth/password-reset/request` mails a six-digit code that lives 59
+    seconds, retires any earlier code and any ticket minted from one, and always
+    answers `202` so the endpoint cannot be used to test whether an address has
+    an account.
+  - `POST /auth/password-reset/verify` spends the code — right or wrong — and
+    returns a single-use ticket valid for ten minutes. Five wrong guesses burn
+    the code. Expired and incorrect codes share one response, so the client's
+    own countdown, not the server, decides when to offer a resend.
+  - `POST /auth/password-reset/confirm` consumes the ticket before it even looks
+    at the password, applies the same policy and breach screening as
+    registration, refuses a password identical to the current one, revokes every
+    refresh-token family on the account, and marks the address verified if it
+    was not already.
 
 ## Passkeys (WebAuthn)
 

@@ -166,6 +166,17 @@ class AuthController extends ChangeNotifier {
     return _repository.requestPasswordReset(email: email);
   }
 
+  Future<String> verifyPasswordResetCode(String email, String code) {
+    return _repository.verifyPasswordResetCode(email: email, code: code);
+  }
+
+  Future<void> confirmPasswordReset(String ticket, String password) {
+    return _repository.confirmPasswordReset(
+      ticket: ticket,
+      password: password,
+    );
+  }
+
   Future<void> requestPhoneCode(String phoneNumber) {
     return _repository.requestPhoneCode(phoneNumber: phoneNumber);
   }
