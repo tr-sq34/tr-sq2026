@@ -124,9 +124,37 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
   @override
   Future<void> requestPasswordReset({required String email}) async =>
       _client.post<void>(
-        '/auth/password-reset/request',
+        ApiEndpoints.authPasswordResetRequest,
         data: {'email': email.trim()},
       );
+
+  @override
+  Future<String> verifyPasswordResetCode({
+    required String email,
+    required String code,
+  }) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.authPasswordResetVerify,
+      data: {'email': email.trim(), 'code': code},
+    );
+    final ticket =
+        (response.data?['data'] as Map<String, dynamic>?)?['ticket'] as String?;
+    if (ticket == null || ticket.isEmpty) {
+      throw StateError('Kimlik doğrulama servisi geçersiz yanıt verdi.');
+    }
+    return ticket;
+  }
+
+  @override
+  Future<void> confirmPasswordReset({
+    required String ticket,
+    required String password,
+  }) async => _client.post<void>(
+    ApiEndpoints.authPasswordResetConfirm,
+    // The ticket is the credential here; the email is deliberately absent so a
+    // caller cannot aim a redeemed ticket at a different account.
+    data: {'ticket': ticket, 'password': password},
+  );
   @override
   Future<void> requestPhoneCode({required String phoneNumber}) async => _client
       .post<void>('/auth/phone/request', data: {'phoneNumber': phoneNumber});

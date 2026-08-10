@@ -64,7 +64,34 @@ class MockAuthRepository implements AuthRepository {
   @override
   Future<void> requestPasswordReset({required String email}) async {
     if (!email.contains('@')) {
-      throw const AuthException('Enter a valid email address.');
+      throw const AuthException('Geçerli bir e-posta adresi girin.');
+    }
+  }
+
+  @override
+  Future<String> verifyPasswordResetCode({
+    required String email,
+    required String code,
+  }) async {
+    if (!email.contains('@') || code != '123456') {
+      throw const AuthException('Kod geçersiz veya süresi dolmuş.');
+    }
+    return 'mock-password-reset-ticket';
+  }
+
+  @override
+  Future<void> confirmPasswordReset({
+    required String ticket,
+    required String password,
+  }) async {
+    if (ticket != 'mock-password-reset-ticket') {
+      throw const AuthException(
+        'Sıfırlama oturumu geçersiz veya süresi dolmuş. Lütfen yeni kod isteyin.',
+      );
+    }
+    // Mirrors the server: policy first, then the identical-password guard.
+    if (PasswordPolicy.validate(password) case final error?) {
+      throw AuthException(error);
     }
   }
 

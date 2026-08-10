@@ -168,8 +168,28 @@ class AppRouter {
       case AppRoutes.forgotPassword:
         return MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => ForgotPasswordScreen(
+          builder: (context) => ForgotPasswordScreen(
+            initialEmail: settings.arguments as String?,
             onRequestReset: authController.requestPasswordReset,
+            onVerifyCode: authController.verifyPasswordResetCode,
+            onConfirmReset: authController.confirmPasswordReset,
+            // Back to a clean login rather than the stale password field the
+            // person came from, with the address prefilled so the new password
+            // is the only thing left to type.
+            onCompleted: (email) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Parolanız güncellendi. Yeni parolanızla giriş yapın.',
+                  ),
+                ),
+              );
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                AppRoutes.login,
+                (_) => false,
+                arguments: email,
+              );
+            },
           ),
         );
       case AppRoutes.phoneLogin:
@@ -197,8 +217,9 @@ class AppRouter {
             onAuthenticated: () => Navigator.of(
               context,
             ).pushReplacementNamed(AppRoutes.onboarding),
-            onForgotPassword: () =>
-                Navigator.of(context).pushNamed(AppRoutes.forgotPassword),
+            onForgotPassword: (email) => Navigator.of(
+              context,
+            ).pushNamed(AppRoutes.forgotPassword, arguments: email),
             onCreateAccount: () =>
                 Navigator.of(context).pushNamed(AppRoutes.register),
             onPhoneLogin: () =>

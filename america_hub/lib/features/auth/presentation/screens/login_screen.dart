@@ -22,7 +22,9 @@ class LoginScreen extends StatefulWidget {
   final String? initialEmail;
   final Future<void> Function(String email, String password)? onSignIn;
   final VoidCallback? onAuthenticated;
-  final VoidCallback? onForgotPassword;
+  /// Receives the address already typed on the first step, so the reset
+  /// screen does not ask for something the person just entered.
+  final void Function(String email)? onForgotPassword;
   final VoidCallback? onCreateAccount;
   final Future<void> Function(String email)? onRegisterWithEmail;
   final VoidCallback? onPhoneLogin;
@@ -135,7 +137,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                 () => _obscurePassword = !_obscurePassword,
                               ),
                               onChangeEmail: _changeEmail,
-                              onForgotPassword: widget.onForgotPassword,
+                              onForgotPassword:
+                                  widget.onForgotPassword == null
+                                  ? null
+                                  : () => widget.onForgotPassword!(
+                                      _emailController.text.trim(),
+                                    ),
                             ),
                           )
                         : const SizedBox.shrink(),
