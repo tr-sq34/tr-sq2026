@@ -2,12 +2,18 @@ import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import '../../application/community_home_controller.dart';
+import '../../../news/application/news_controller.dart';
+import '../../../news/domain/entities/news_article.dart';
+import '../../../news/presentation/widgets/headline_strip.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
     super.key,
     required this.controller,
     required this.onOpenBadges,
+    required this.newsController,
+    required this.onOpenArticle,
+    required this.onOpenNewsCenter,
   });
 
   final CommunityHomeController controller;
@@ -15,6 +21,12 @@ class DiscoverScreen extends StatefulWidget {
   /// The badge card's destination is owned by the shell; this screen only
   /// calls it.
   final VoidCallback onOpenBadges;
+
+  /// The headline strip and the Haber Merkezi read this same controller, so a
+  /// headline can never say something the article behind it does not.
+  final NewsController newsController;
+  final ValueChanged<NewsArticle> onOpenArticle;
+  final VoidCallback onOpenNewsCenter;
 
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
@@ -25,6 +37,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   void initState() {
     super.initState();
     widget.controller.load();
+    widget.newsController.loadHeadlines();
   }
 
   @override
@@ -47,7 +60,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             _HighlightsSection(onOpenBadges: widget.onOpenBadges),
             _LiveBiddingSection(),
             _LocalContextSection(),
-            _NewsSection(),
+            HeadlineStrip(
+              controller: widget.newsController,
+              onOpenArticle: widget.onOpenArticle,
+              onOpenNewsCenter: widget.onOpenNewsCenter,
+            ),
             _ForumSection(),
             _RecentListingsSection(),
             SizedBox(height: 100),
@@ -1197,267 +1214,6 @@ class _EventCard extends StatelessWidget {
     ),
   );
 }
-
-class _NewsSection extends StatefulWidget {
-  const _NewsSection();
-  @override
-  State<_NewsSection> createState() => _NewsSectionState();
-}
-
-class _NewsSectionState extends State<_NewsSection> {
-  int _idx = 0;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
-    child: Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Row(
-              children: [
-                Icon(
-                  Icons.newspaper_rounded,
-                  size: 14,
-                  color: Color(0xFFF43F5E),
-                ),
-                SizedBox(width: 8),
-                Text(
-                  'AMERİKA\'DAN MANŞETLER',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF334155),
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ],
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5F3FF),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: const Color(0xFF6355D8).withValues(alpha: 0.1),
-                ),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.bolt_rounded, size: 10, color: Color(0xFFFBBF24)),
-                  SizedBox(width: 4),
-                  Text(
-                    'Canlı Haberler',
-                    style: TextStyle(
-                      color: Color(0xFF6355D8),
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          height: 230,
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: const Color(0xFF1E293B)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.15),
-                blurRadius: 15,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              Expanded(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.network(
-                      _news[_idx].img,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          Container(color: const Color(0xFF1E293B)),
-                    ),
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.black.withValues(alpha: 0.2),
-                            Colors.black.withValues(alpha: 0.8),
-                          ],
-                          stops: const [0.5, 0.7, 1.0],
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 3,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF43F5E),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  _news[_idx].cat,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                _news[_idx].time,
-                                style: const TextStyle(
-                                  color: Color(0xFFCBD5E1),
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _news[_idx].title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w900,
-                              height: 1.3,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                height: 54,
-                color: const Color(0xFF020617).withValues(alpha: 0.9),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Row(
-                  children: [
-                    for (int i = 0; i < 3; i++)
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: InkWell(
-                            onTap: () => setState(() => _idx = i),
-                            child: Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: _idx == i
-                                    ? const Color(0xFF1E293B)
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: _idx == i
-                                      ? const Color(0xFF6355D8)
-                                      : Colors.transparent,
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Image.network(
-                                      _news[i].img,
-                                      width: 22,
-                                      height: 22,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) => Container(
-                                        color: Colors.grey,
-                                        width: 22,
-                                        height: 22,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      _news[i].mini,
-                                      style: TextStyle(
-                                        color: _idx == i
-                                            ? Colors.white
-                                            : const Color(0xFF94A3B8),
-                                        fontSize: 8,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-const _news = [
-  (
-    cat: 'GÖÇMENLİK & VİZE',
-    time: '2 saat önce',
-    title:
-        'USCIS, çalışma izni uzatma sürelerini ve başvuru kriterlerini güncelledi',
-    img:
-        'https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=700&q=80',
-    mini: 'USCIS Güncelleme',
-  ),
-  (
-    cat: 'KÜLTÜR & SANAT',
-    time: '5 saat önce',
-    title:
-        'NYC Türkevi\'nde Türk el sanatları sergisi ziyaretçilerini bekliyor',
-    img:
-        'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=700&q=80',
-    mini: 'NYC Türkevi',
-  ),
-  (
-    cat: 'ULAŞIM',
-    time: '1 gün önce',
-    title: 'THY, New York ve Şikago hattında direkt sefer sayılarını artırıyor',
-    img:
-        'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=700&q=80',
-    mini: 'THY Uçuş',
-  ),
-];
 
 // 7. Forum Section
 class _ForumSection extends StatelessWidget {

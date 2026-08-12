@@ -69,6 +69,17 @@ abstract final class ApiEndpoints {
   static String communityUserBadges(String userId) =>
       '/community/users/$userId/badges';
   static const communityLeaderboard = '/community/leaderboard';
+  // Haber Merkezi ile ana sayfanın manşet şeridi aynı uçtan beslenir; manşet
+  // olan haber, listedeki haberin editör tarafından sıralanmış hâlidir.
+  static const communityNews = '/community/news';
+  static const communityNewsHeadlines = '/community/news/headlines';
+  static String communityNewsArticle(String id) => '/community/news/$id';
+  static String communityNewsReactions(String id) =>
+      '/community/news/$id/reactions';
+  static String communityNewsComments(String id) =>
+      '/community/news/$id/comments';
+  static String communityNewsComment(String commentId) =>
+      '/community/news/comments/$commentId';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

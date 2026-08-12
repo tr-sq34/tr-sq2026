@@ -1497,6 +1497,300 @@ app.get('/v1/community/leaderboard', async (request, reply) => {
   }
 });
 
+// --- Haber Merkezi ------------------------------------------------------
+// One table read from two places: the drawer's news centre and the home
+// screen's "Amerika'dan Mansetler" strip. The strip is not a second feed, it is
+// this list filtered by `headline_rank IS NOT NULL` - which is what makes the
+// two stay in step without anyone syncing them.
+//
+// Articles are written from Gatework (see the internal endpoint below). What a
+// member contributes is a reaction and a comment, and both reuse the shapes the
+// feed already has so that the app can reuse the feed's comment editor and the
+// moderation queue in 014 already knows what to do with a row.
+
+const newsCategories = ['gundem', 'gocmenlik', 'ekonomi', 'yasam', 'spor', 'kultur', 'topluluk'] as const;
+const newsQuery = z.object({ cursor: z.string().max(128).optional(), limit: z.coerce.number().int().min(1).max(50).default(20), category: z.enum(newsCategories).optional() });
+const newsHeadlineQuery = z.object({ limit: z.coerce.number().int().min(1).max(10).default(5) });
+// `null` is "take my reaction back". A tap on the icon that is already lit is a
+// removal, not a second vote, and the table's primary key says the same thing.
+const newsReactionBody = z.object({ value: z.enum(['like', 'dislike']).nullable() });
+const gateworkNewsBody = z.object({
+  title: z.string().trim().min(3).max(200),
+  summary: z.string().trim().min(3).max(500),
+  body: z.string().trim().min(1).max(20000),
+  category: z.enum(newsCategories),
+  authorId: z.string().uuid(),
+  heroMediaId: z.string().uuid().optional(),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  headlineRank: z.coerce.number().int().min(1).max(20).optional(),
+  publishedAt: z.string().datetime().optional(),
+  commentsEnabled: z.boolean().default(true),
+  reason: z.string().trim().min(5).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+
+type NewsRow = {
+  id: string; title: string; summary: string; body?: string; category: string; author_name: string;
+  region_code: string | null; published_at: Date; headline_rank: number | null; hero_url: string | null;
+  comments_enabled?: boolean; like_count: string; dislike_count: string; comment_count: string;
+  viewer_reaction: 'like' | 'dislike' | null;
+};
+
+// $1 is always the viewer: their own reaction travels with the row so the app
+// can draw the icons in the right state without a second round trip. [extra] is
+// what only the detail screen needs - the list must not carry 20kB of body text
+// per row.
+const newsSelect = (extra = '') => `
+  SELECT a.id,a.title,a.summary,${extra}a.category,a.author_name,a.region_code,a.published_at,a.headline_rank,
+         m.safe_url hero_url,
+         (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id AND r.value='like') like_count,
+         (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id AND r.value='dislike') dislike_count,
+         (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
+         (SELECT r.value FROM news_reactions r WHERE r.article_id=a.id AND r.user_id=$1) viewer_reaction
+    FROM news_articles a
+    LEFT JOIN media_assets m ON m.id=a.hero_media_id AND m.status='ready'`;
+
+// Published, not deleted, not scheduled for later. Every read path shares it;
+// a listing that forgets one of the three is how a draft reaches a reader.
+const NEWS_VISIBLE = "a.deleted_at IS NULL AND a.published_at IS NOT NULL AND a.published_at<=now()";
+
+const newsArticleJson = async (row: NewsRow) => ({
+  id: row.id,
+  title: row.title,
+  summary: row.summary,
+  ...(row.body === undefined ? {} : { body: row.body }),
+  category: row.category,
+  authorName: row.author_name,
+  regionCode: row.region_code,
+  publishedAt: row.published_at.toISOString(),
+  headlineRank: row.headline_rank,
+  // Signed on the way out, never stored: the same rule posts and stories follow.
+  imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
+  ...(row.comments_enabled === undefined ? {} : { commentsEnabled: row.comments_enabled }),
+  likeCount: Number(row.like_count),
+  dislikeCount: Number(row.dislike_count),
+  commentCount: Number(row.comment_count),
+  viewerReaction: row.viewer_reaction,
+});
+
+app.get('/v1/community/news', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = newsQuery.parse(request.query);
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [userId];
+    let where = NEWS_VISIBLE;
+    if (input.category) { params.push(input.category); where += ` AND a.category=$${params.length}`; }
+    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (a.published_at,a.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    params.push(input.limit + 1);
+    const rows = await db.query<NewsRow>(`${newsSelect()} WHERE ${where} ORDER BY a.published_at DESC,a.id DESC LIMIT $${params.length}`, params);
+    const page = rows.rows.slice(0, input.limit);
+    const last = page[page.length - 1];
+    return {
+      data: await Promise.all(page.map(newsArticleJson)),
+      meta: { nextCursor: rows.rows.length > input.limit && last ? encodeCursor({ created_at: last.published_at, id: last.id }) : null },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+      .send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Haberler yüklenemedi.' } });
+  }
+});
+
+/// What the home screen's headline strip is: the same articles, ordered by the
+/// rank an editor gave them rather than by when they went out.
+app.get('/v1/community/news/headlines', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = newsHeadlineQuery.parse(request.query);
+    const rows = await db.query<NewsRow>(
+      `${newsSelect()} WHERE ${NEWS_VISIBLE} AND a.headline_rank IS NOT NULL ORDER BY a.headline_rank ASC,a.published_at DESC LIMIT $2`,
+      [userId, input.limit],
+    );
+    return { data: await Promise.all(rows.rows.map(newsArticleJson)) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Manşetler yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/news/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<NewsRow>(
+      `${newsSelect('a.body,a.comments_enabled,')} WHERE ${NEWS_VISIBLE} AND a.id=$2`,
+      [userId, id],
+    );
+    const article = rows.rows[0];
+    if (!article) return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    return { data: await newsArticleJson(article) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Haber yüklenemedi.' } });
+  }
+});
+
+app.put('/v1/community/news/:id/reactions', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = newsReactionBody.parse(request.body);
+    if (input.value === null) {
+      await db.query('DELETE FROM news_reactions WHERE article_id=$1 AND user_id=$2', [id, userId]);
+    } else {
+      // Guarded by the same visibility rule as the read: an unpublished article
+      // is not something anyone can be voting on.
+      const written = await db.query(
+        `INSERT INTO news_reactions(article_id,user_id,value)
+         SELECT a.id,$2,$3 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE}
+         ON CONFLICT(article_id,user_id) DO UPDATE SET value=EXCLUDED.value,created_at=now()`,
+        [id, userId, input.value],
+      );
+      if (!written.rowCount) return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    }
+    const tally = await db.query<{ like_count: string; dislike_count: string }>(
+      `SELECT count(*) FILTER (WHERE value='like') like_count,count(*) FILTER (WHERE value='dislike') dislike_count FROM news_reactions WHERE article_id=$1`,
+      [id],
+    );
+    return { data: { likeCount: Number(tally.rows[0]!.like_count), dislikeCount: Number(tally.rows[0]!.dislike_count), viewerReaction: input.value } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_REACTION_FAILED', message: 'Tepkin kaydedilemedi.' } });
+  }
+});
+
+// The display name is joined here and not left to the client. The feed's own
+// comment list still omits it, which is why comments there render under whatever
+// the caller happens to know; a news article has no such context to fall back on.
+const NEWS_COMMENT_SELECT = `
+  SELECT c.id,c.author_id,c.parent_id,c.body,c.created_at,
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name
+    FROM news_comments c
+    LEFT JOIN community_profile_projection p ON p.user_id=c.author_id`;
+
+type NewsCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string };
+const newsCommentJson = (row: NewsCommentRow) => ({
+  id: row.id,
+  authorId: row.author_id,
+  authorName: row.author_name,
+  parentId: row.parent_id,
+  body: row.body,
+  createdAt: row.created_at.toISOString(),
+});
+
+app.get('/v1/community/news/:id/comments', async (request, reply) => {
+  try {
+    await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<NewsCommentRow>(
+      `${NEWS_COMMENT_SELECT} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+      [id],
+    );
+    return { data: rows.rows.map(newsCommentJson) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_COMMENTS_FAILED', message: 'Yorumlar yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/news/:id/comments', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = commentBody.parse(request.body);
+    const article = await db.query(`SELECT 1 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE} AND a.comments_enabled`, [id]);
+    if (!article.rows[0]) return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Bu haber yorumlara kapalı.' } });
+    const inserted = await db.query<{ id: string }>(
+      'INSERT INTO news_comments(article_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
+      [id, userId, input.parentId ?? null, input.body],
+    );
+    const row = await db.query<NewsCommentRow>(`${NEWS_COMMENT_SELECT} WHERE c.id=$1`, [inserted.rows[0]!.id]);
+    // Streak only. `vocalist` counts comments on the feed, and quietly earning a
+    // feed badge somewhere else would make its own description untrue.
+    void grantInBackground('news_comment', async (journey) => { await touchStreak(journey, userId); });
+    return reply.code(201).send({ data: newsCommentJson(row.rows[0]!) });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_COMMENT_CREATE_FAILED', message: 'Yorum gönderilemedi.' } });
+  }
+});
+
+app.delete('/v1/community/news/comments/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    await db.query("UPDATE news_comments SET deleted_at=now(),moderation_state='removed' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL", [id, userId]);
+    return reply.code(204).send();
+  } catch {
+    return reply.code(400).send({ error: { code: 'NEWS_COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
+  }
+});
+
+/// Publishing from Gatework, with the same guarantees as an official post: the
+/// author has to be an active system account, the command is idempotent, and the
+/// operation is audited whether it succeeds or not.
+app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkNewsBody.parse(request.body);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const prior = await client.query<{ result_id: string | null }>(
+        "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='news_article.create' FOR UPDATE",
+        [actor.actorId, input.idempotencyKey],
+      );
+      if (prior.rows[0]?.result_id) {
+        await client.query('COMMIT');
+        return reply.code(200).send({ data: { id: prior.rows[0].result_id } });
+      }
+      const author = await client.query<{ display_name: string }>(
+        `SELECT COALESCE(p.display_name,'TurkSquare') display_name
+           FROM community_system_accounts s LEFT JOIN community_profile_projection p ON p.user_id=s.user_id
+          WHERE s.user_id=$1 AND s.role='official' AND s.active`,
+        [input.authorId],
+      );
+      if (!author.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+      // Media is verified before it is stored, not when it is served: an article
+      // pointing at a rejected upload would fail silently at read time and leave
+      // an editor wondering where the picture went.
+      if (input.heroMediaId) {
+        const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND status='ready'", [input.heroMediaId]);
+        if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+      }
+      const article = await client.query<{ id: string }>(
+        `INSERT INTO news_articles(title,summary,body,hero_media_id,category,author_id,author_name,region_code,published_at,headline_rank,comments_enabled,created_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9::timestamptz,now()),$10,$11,$12) RETURNING id`,
+        [input.title, input.summary, input.body, input.heroMediaId ?? null, input.category, input.authorId, author.rows[0].display_name,
+          input.regionCode?.toUpperCase() ?? null, input.publishedAt ?? null, input.headlineRank ?? null, input.commentsEnabled, actor.actorId],
+      );
+      await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'news_article.create',$3)", [actor.actorId, input.idempotencyKey, article.rows[0]!.id]);
+      await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.publish', targetType: 'news_article', targetId: article.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+      await client.query('COMMIT');
+      return reply.code(201).send({ data: article.rows[0] });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_REJECTED' } });
+  }
+});
+
+/// Retracting a published article. A soft delete, so the comments and any report
+/// filed against it still resolve to something after it comes down.
+app.delete('/v1/internal/gatework/news/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const reason = z.string().trim().min(5).max(500).parse((request.body as { reason?: string } | undefined)?.reason);
+    const removed = await db.query('UPDATE news_articles SET deleted_at=now(),updated_at=now() WHERE id=$1 AND deleted_at IS NULL', [id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.retract', targetType: 'news_article', targetId: id, reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: removed.rowCount ? 'succeeded' : 'failed' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_RETRACT_REJECTED' } });
+  }
+});
+
 // --- Outbox publisher ---------------------------------------------------
 // Same contract as Identity's: the domain write and the outbox row commit
 // together, delivery is retried until the broker accepts it, and `occurredAt`
