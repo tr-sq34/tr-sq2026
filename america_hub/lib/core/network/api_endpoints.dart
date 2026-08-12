@@ -80,6 +80,13 @@ abstract final class ApiEndpoints {
       '/community/news/$id/comments';
   static String communityNewsComment(String commentId) =>
       '/community/news/comments/$commentId';
+  // Sponsorlu alanlar: ana sayfanın okuduğu liste, üyenin kendi talepleri ve
+  // günlük toplanan gösterim/tıklama sayacı.
+  static const communityPromotions = '/community/promotions';
+  static const communityPromotionsActive = '/community/promotions/active';
+  static const communityMyPromotions = '/community/promotions/me';
+  static String communityPromotionEvents(String id) =>
+      '/community/promotions/$id/events';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

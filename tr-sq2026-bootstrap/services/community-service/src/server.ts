@@ -1791,6 +1791,317 @@ app.delete('/v1/internal/gatework/news/:id', async (request, reply) => {
   }
 });
 
+// --- Tanitim Yap ---------------------------------------------------------
+// Sponsored placements: the featured story slot, the in-app banner and the
+// "Sana Ozel One Cikanlar" cards. Members ask for the first two and an operator
+// decides; the third is placed from the console only, because it is editorial
+// space rather than something anyone can buy into.
+//
+// Nothing here charges anybody. A request is approved on its merits, and the
+// pricing question is left to a later phase on purpose - see 018_promotions.sql.
+
+const memberPlacements = ['story_slot', 'app_banner'] as const;
+const promotionPlacements = [...memberPlacements, 'featured_card'] as const;
+const promotionTargetKinds = ['post', 'listing', 'news', 'event', 'external'] as const;
+
+// A window has to be finite and a promotion cannot start in the past: both are
+// there so an approval today cannot silently turn into a placement that ran
+// last week or one that never ends.
+const MAX_PROMOTION_DAYS = 30;
+const promotionWindow = {
+  startsAt: z.string().datetime(),
+  endsAt: z.string().datetime(),
+};
+const withCheckedWindow = <T extends { startsAt: string; endsAt: string }>(schema: z.ZodType<T>) =>
+  schema.refine((value) => {
+    const start = new Date(value.startsAt).getTime();
+    const end = new Date(value.endsAt).getTime();
+    return end > start && end - start <= MAX_PROMOTION_DAYS * 86_400_000 && end > Date.now();
+  }, { message: 'INVALID_WINDOW' });
+
+const promotionTarget = {
+  targetKind: z.enum(promotionTargetKinds).optional(),
+  targetValue: z.string().trim().min(1).max(500).optional(),
+};
+const promotionAudience = {
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  city: z.string().trim().min(2).max(80).optional(),
+};
+
+const promotionRequestBody = withCheckedWindow(z.object({
+  placement: z.enum(memberPlacements),
+  title: z.string().trim().min(3).max(120),
+  subtitle: z.string().trim().min(1).max(200).optional(),
+  mediaId: z.string().uuid(),
+  ...promotionTarget,
+  ...promotionAudience,
+  ...promotionWindow,
+  note: z.string().trim().min(3).max(500),
+}));
+
+const gateworkPromotionBody = withCheckedWindow(z.object({
+  placement: z.enum(promotionPlacements),
+  ownerId: z.string().uuid(),
+  title: z.string().trim().min(3).max(120),
+  subtitle: z.string().trim().min(1).max(200).optional(),
+  mediaId: z.string().uuid().optional(),
+  ...promotionTarget,
+  ...promotionAudience,
+  ...promotionWindow,
+  reason: z.string().trim().min(5).max(500),
+  idempotencyKey: z.string().uuid(),
+}));
+
+const promotionDecisionBody = z.object({
+  action: z.enum(['approve', 'reject', 'end']),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+const promotionQueueQuery = z.object({
+  status: z.enum(['pending', 'approved', 'rejected', 'ended']).default('pending'),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+const promotionEventBody = z.object({ kind: z.enum(['impression', 'click']) });
+
+type PromotionRow = {
+  id: string; owner_id: string; placement: string; title: string; subtitle: string | null;
+  media_url: string | null; target_kind: string | null; target_value: string | null;
+  region_code: string | null; city: string | null; starts_at: Date; ends_at: Date;
+  status: string; decision_reason: string | null; request_note?: string | null;
+  created_at: Date; owner_name?: string; impressions?: string; clicks?: string;
+};
+
+const PROMOTION_SELECT = `
+  SELECT p.id,p.owner_id,p.placement,p.title,p.subtitle,m.safe_url media_url,p.target_kind,p.target_value,
+         p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at
+    FROM promotions p
+    LEFT JOIN media_assets m ON m.id=p.media_id AND m.status='ready'`;
+
+const promotionJson = async (row: PromotionRow) => ({
+  id: row.id,
+  placement: row.placement,
+  title: row.title,
+  subtitle: row.subtitle,
+  // Signed on the way out, never stored - the same rule posts, stories and news
+  // articles follow.
+  imageUrl: row.media_url ? await mediaObjectUrl(row.media_url) : null,
+  targetKind: row.target_kind,
+  targetValue: row.target_value,
+  regionCode: row.region_code,
+  city: row.city,
+  startsAt: row.starts_at.toISOString(),
+  endsAt: row.ends_at.toISOString(),
+  status: row.status,
+  decisionReason: row.decision_reason,
+  createdAt: row.created_at.toISOString(),
+});
+
+/// What the home screen reads. "Live" is computed here rather than stored: an
+/// approved promotion is showing exactly when the clock is inside its window,
+/// and nothing has to run on a schedule for that to be true.
+app.get('/v1/community/promotions/active', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query<PromotionRow>(
+      `${PROMOTION_SELECT}
+        LEFT JOIN community_profile_projection v ON v.user_id=$1
+        WHERE p.status='approved' AND p.starts_at<=now() AND p.ends_at>now()
+          -- Nationwide placements reach everyone; a targeted one only reaches
+          -- the place it was bought for. An unknown viewer location sees the
+          -- nationwide ones, never somebody else's city.
+          AND (p.region_code IS NULL OR p.region_code=v.region_code)
+          AND (p.city IS NULL OR p.city=v.city)
+        ORDER BY p.starts_at DESC,p.id DESC LIMIT 20`,
+      [userId],
+    );
+    return { data: await Promise.all(rows.rows.map(promotionJson)) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTIONS_UNAVAILABLE', message: 'Tanıtımlar yüklenemedi.' } });
+  }
+});
+
+/// The member's own requests, decisions included. A rejection is only useful if
+/// the person who asked can read why.
+app.get('/v1/community/promotions/me', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query<PromotionRow>(
+      `${PROMOTION_SELECT} WHERE p.owner_id=$1 ORDER BY p.created_at DESC LIMIT 50`,
+      [userId],
+    );
+    const totals = await db.query<{ promotion_id: string; impressions: string; clicks: string }>(
+      `SELECT i.promotion_id,sum(i.impressions) impressions,sum(i.clicks) clicks
+         FROM promotion_impressions i JOIN promotions p ON p.id=i.promotion_id
+        WHERE p.owner_id=$1 GROUP BY i.promotion_id`,
+      [userId],
+    );
+    const byId = new Map(totals.rows.map((row) => [row.promotion_id, row]));
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        ...await promotionJson(row),
+        requestNote: row.request_note ?? null,
+        impressions: Number(byId.get(row.id)?.impressions ?? 0),
+        clicks: Number(byId.get(row.id)?.clicks ?? 0),
+      }))),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTIONS_UNAVAILABLE', message: 'Tanıtım taleplerin yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/promotions', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    // A muted member cannot buy their way back onto the home screen.
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const input = promotionRequestBody.parse(request.body);
+    // The media has to be theirs and scanned, checked at write time: a request
+    // pointing at a rejected upload would only fail once a reviewer opened it.
+    const media = await db.query("SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status='ready'", [input.mediaId, userId]);
+    if (!media.rows[0]) return reply.code(400).send({ error: { code: 'MEDIA_NOT_READY', message: 'Görsel hazır değil.' } });
+    const row = await db.query<{ id: string }>(
+      `INSERT INTO promotions(owner_id,placement,title,subtitle,media_id,target_kind,target_value,region_code,city,starts_at,ends_at,request_note)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [userId, input.placement, input.title, input.subtitle ?? null, input.mediaId, input.targetKind ?? null, input.targetValue ?? null,
+        input.regionCode?.toUpperCase() ?? null, input.city ?? null, input.startsAt, input.endsAt, input.note],
+    );
+    return reply.code(201).send({ data: { id: row.rows[0]!.id, status: 'pending' } });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTION_REQUEST_FAILED', message: 'Tanıtım talebin gönderilemedi.' } });
+  }
+});
+
+/// Counted per day and upserted, so the write is one row per placement per day
+/// no matter how busy the home screen is. Only a promotion that is actually
+/// showing can be counted; otherwise the numbers stop meaning "was seen".
+app.post('/v1/community/promotions/:id/events', { config: { rateLimit: { max: 240, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = promotionEventBody.parse(request.body);
+    const counted = await db.query(
+      `INSERT INTO promotion_impressions(promotion_id,day,impressions,clicks)
+       SELECT p.id,current_date,$2::int,$3::int FROM promotions p
+        WHERE p.id=$1 AND p.status='approved' AND p.starts_at<=now() AND p.ends_at>now()
+       ON CONFLICT (promotion_id,day) DO UPDATE
+         SET impressions=promotion_impressions.impressions+EXCLUDED.impressions,
+             clicks=promotion_impressions.clicks+EXCLUDED.clicks`,
+      [id, input.kind === 'impression' ? 1 : 0, input.kind === 'click' ? 1 : 0],
+    );
+    return reply.code(counted.rowCount ? 204 : 404).send();
+  } catch {
+    return reply.code(400).send({ error: { code: 'PROMOTION_EVENT_FAILED' } });
+  }
+});
+
+app.get('/v1/internal/gatework/promotions', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator']);
+    const input = promotionQueueQuery.parse(request.query);
+    const rows = await db.query<PromotionRow>(
+      `${PROMOTION_SELECT} WHERE p.status=$1 ORDER BY p.created_at ASC LIMIT $2 OFFSET $3`,
+      [input.status, input.limit, input.offset],
+    );
+    const owners = await db.query<{ user_id: string; display_name: string }>(
+      'SELECT user_id,display_name FROM community_profile_projection WHERE user_id=ANY($1::uuid[])',
+      [rows.rows.map((row) => row.owner_id)],
+    );
+    const names = new Map(owners.rows.map((row) => [row.user_id, row.display_name]));
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        ...await promotionJson(row),
+        ownerId: row.owner_id,
+        ownerName: names.get(row.owner_id) ?? 'TurkSquare üyesi',
+        requestNote: row.request_note ?? null,
+      }))),
+      nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null,
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'PROMOTION_QUEUE_UNAVAILABLE', message: 'Tanıtım kuyruğu okunamadı.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/promotions/:id/decision', async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = promotionDecisionBody.parse(request.body);
+    await client.query('BEGIN');
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='promotion.decide' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]) { await client.query('COMMIT'); return { data: { id: prior.rows[0].result_id, duplicate: true } }; }
+
+    const promotion = await client.query<{ id: string; status: string }>('SELECT id,status FROM promotions WHERE id=$1 FOR UPDATE', [id]);
+    if (!promotion.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'PROMOTION_NOT_FOUND', message: 'Tanıtım bulunamadı.' } }); }
+    // 'end' pulls a running placement; the other two are first decisions. A
+    // rejected request is not re-openable here - the member submits a new one,
+    // so the trail keeps both the refusal and what changed.
+    const current = promotion.rows[0].status;
+    const allowed = input.action === 'end' ? current === 'approved' : current === 'pending';
+    if (!allowed) { await client.query('ROLLBACK'); return reply.code(409).send({ error: { code: 'PROMOTION_ALREADY_DECIDED', message: 'Bu tanıtım zaten sonuçlandırılmış.' } }); }
+
+    const next = input.action === 'approve' ? 'approved' : input.action === 'reject' ? 'rejected' : 'ended';
+    await client.query(
+      'UPDATE promotions SET status=$2,decision_reason=$3,decided_by=$4,decided_at=now(),updated_at=now() WHERE id=$1',
+      [id, next, input.reason, actor.actorId],
+    );
+    await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'promotion.decide',$3)", [actor.actorId, input.idempotencyKey, id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: `promotion.${input.action}`, targetType: 'promotion', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return { data: { id, status: next, duplicate: false } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTION_DECISION_FAILED', message: 'Karar kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+/// Placing one straight from the console - the sponsored story slot the panel
+/// fills itself, and the "Sana Ozel One Cikanlar" cards, which have no member
+/// request behind them. Approved on creation, since the person creating it is
+/// the person who would have approved it, and audited for exactly that reason.
+app.post('/v1/internal/gatework/promotions', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkPromotionBody.parse(request.body);
+    await client.query('BEGIN');
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='promotion.place' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]?.result_id) { await client.query('COMMIT'); return reply.code(200).send({ data: { id: prior.rows[0].result_id } }); }
+    if (input.mediaId) {
+      const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND status='ready'", [input.mediaId]);
+      if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+    }
+    const row = await client.query<{ id: string }>(
+      `INSERT INTO promotions(owner_id,placement,title,subtitle,media_id,target_kind,target_value,region_code,city,starts_at,ends_at,status,decision_reason,decided_by,decided_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'approved',$12,$13,now()) RETURNING id`,
+      [input.ownerId, input.placement, input.title, input.subtitle ?? null, input.mediaId ?? null, input.targetKind ?? null, input.targetValue ?? null,
+        input.regionCode?.toUpperCase() ?? null, input.city ?? null, input.startsAt, input.endsAt, input.reason, actor.actorId],
+    );
+    await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'promotion.place',$3)", [actor.actorId, input.idempotencyKey, row.rows[0]!.id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'promotion.place', targetType: 'promotion', targetId: row.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return reply.code(201).send({ data: row.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_PROMOTION_REJECTED' } });
+  } finally {
+    client.release();
+  }
+});
+
 // --- Outbox publisher ---------------------------------------------------
 // Same contract as Identity's: the domain write and the outbox row commit
 // together, delivery is retried until the broker accepts it, and `occurredAt`

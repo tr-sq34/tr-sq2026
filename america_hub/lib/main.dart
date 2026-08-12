@@ -62,6 +62,10 @@ import 'features/news/data/repositories/mock_news_comments_repository.dart';
 import 'features/news/data/repositories/mock_news_repository.dart';
 import 'features/news/domain/repositories/news_repository.dart';
 import 'features/notifications/application/notifications_controller.dart';
+import 'features/promotions/application/promotions_controller.dart';
+import 'features/promotions/data/repositories/api_promotion_repository.dart';
+import 'features/promotions/data/repositories/mock_promotion_repository.dart';
+import 'features/promotions/domain/repositories/promotion_repository.dart';
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
 
@@ -251,6 +255,16 @@ Future<void> main() async {
         : ApiNewsCommentsRepository(client: communityApiClient),
   );
 
+  // The sponsored story slot, the in-app banner and the "Sana Özel Öne Çıkanlar"
+  // cards are one record with a placement on it, so one repository serves all
+  // three. Nothing here charges anybody: a request is approved on its merits.
+  final PromotionRepository promotionRepository = useMockServices
+      ? MockPromotionRepository()
+      : ApiPromotionRepository(client: communityApiClient);
+  final promotionsController = PromotionsController(
+    repository: promotionRepository,
+  );
+
   // Deliberately empty on both sides of the mock flag: no service publishes
   // member notifications yet, so the bell stays at zero until one does.
   final notificationsController = NotificationsController(
@@ -279,6 +293,7 @@ Future<void> main() async {
       notificationsController: notificationsController,
       newsController: newsController,
       newsCommentsController: newsCommentsController,
+      promotionsController: promotionsController,
     ),
   );
 }

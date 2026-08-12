@@ -18,6 +18,7 @@ import '../features/messaging/domain/repositories/message_moderation_repository.
 import '../features/home/application/community_home_controller.dart';
 import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
+import '../features/promotions/application/promotions_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
 import 'router/app_routes.dart';
@@ -46,6 +47,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.notificationsController,
     required this.newsController,
     required this.newsCommentsController,
+    required this.promotionsController,
   });
 
   final AuthController authController;
@@ -85,6 +87,9 @@ class AmericaHubApp extends StatelessWidget {
   /// repository: the editor is shared, the threads are not.
   final CommunityCommentsController newsCommentsController;
 
+  /// Sponsorlu Story yuvası ve öne çıkan kartlar; ana sayfa bunu okur.
+  final PromotionsController promotionsController;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -113,6 +118,7 @@ class AmericaHubApp extends StatelessWidget {
         notificationsController: notificationsController,
         newsController: newsController,
         newsCommentsController: newsCommentsController,
+        promotionsController: promotionsController,
       ).onGenerateRoute,
     );
   }

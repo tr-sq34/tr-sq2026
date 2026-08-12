@@ -26,6 +26,8 @@ import 'package:america_hub/features/news/data/repositories/mock_news_repository
 import 'package:america_hub/features/notifications/application/notifications_controller.dart';
 import 'package:america_hub/features/notifications/data/repositories/empty_notification_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
+import 'package:america_hub/features/promotions/application/promotions_controller.dart';
+import 'package:america_hub/features/promotions/data/repositories/mock_promotion_repository.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
 import 'package:america_hub/features/journey/application/journey_controller.dart';
 import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
@@ -129,12 +131,25 @@ Future<AuthController> pumpShell(
             viewer: () => authController.user,
           ),
         ),
+        promotionsController: PromotionsController(
+          repository: MockPromotionRepository(),
+        ),
         onSignOut: () async {},
       ),
     ),
   );
   await tester.pump();
   return authController;
+}
+
+/// Taps a bottom-bar tab by name.
+///
+/// The label alone is not enough: the home screen's search box carries a
+/// "Çarşı" badge of its own, so `find.text('Çarşı')` matches twice. The bar
+/// carries a key per tab exactly so a test can mean the tab and nothing else.
+Future<void> tapTab(WidgetTester tester, String label) async {
+  await tester.tap(find.byKey(ValueKey('nav-$label')));
+  await tester.pump();
 }
 
 /// Answers the home summary without touching the network.

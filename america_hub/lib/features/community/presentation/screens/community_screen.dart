@@ -16,6 +16,7 @@ import '../../application/story_controller.dart';
 import '../../application/community_comments_controller.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
+import '../../../promotions/application/promotions_controller.dart';
 import '../widgets/comments_sheet.dart';
 import '../widgets/special_post_request_sheet.dart';
 import '../../domain/repositories/content_moderation_repository.dart';
@@ -37,6 +38,7 @@ class CommunityScreen extends StatefulWidget {
     required this.mediaUploadController,
     required this.specialRequestController,
     required this.moderationRepository,
+    required this.promotionsController,
     this.viewer,
   });
   final CommunityFeedController controller;
@@ -44,6 +46,10 @@ class CommunityScreen extends StatefulWidget {
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+
+  /// Story oluşturma akışındaki "Tanıtım Yap" adımı buradan gönderilir:
+  /// paylaşılan görsel, sponsorlu alan talebinin de görseli olur.
+  final PromotionsController promotionsController;
 
   /// The signed-in member, so the composer can say who is about to post. Null
   /// only in builds with no session, where the composer names nobody at all.
@@ -237,6 +243,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
         moderationRepository: widget.moderationRepository,
+        promotionsController: widget.promotionsController,
         viewer: widget.viewer,
       );
     },
@@ -251,6 +258,7 @@ class _Feed extends StatefulWidget {
     required this.mediaUploadController,
     required this.specialRequestController,
     required this.moderationRepository,
+    required this.promotionsController,
     this.viewer,
   });
   final CommunityFeedController controller;
@@ -259,6 +267,7 @@ class _Feed extends StatefulWidget {
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
   final ContentModerationRepository moderationRepository;
+  final PromotionsController promotionsController;
   final AppUser? viewer;
 
   @override
@@ -366,6 +375,7 @@ class _FeedState extends State<_Feed> {
                 controller: widget.storyController,
                 mediaUploadController: widget.mediaUploadController,
                 moderationRepository: widget.moderationRepository,
+                promotionsController: widget.promotionsController,
               ),
               const SizedBox(height: 10),
               Padding(
@@ -561,10 +571,12 @@ class _StoryRail extends StatelessWidget {
     required this.controller,
     required this.mediaUploadController,
     required this.moderationRepository,
+    required this.promotionsController,
   });
   final StoryController controller;
   final MediaUploadController mediaUploadController;
   final ContentModerationRepository moderationRepository;
+  final PromotionsController promotionsController;
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
@@ -588,6 +600,7 @@ class _StoryRail extends StatelessWidget {
                 builder: (_) => StoryComposerSheet(
                   storyController: controller,
                   mediaUploadController: mediaUploadController,
+                  promotionsController: promotionsController,
                 ),
               ),
               borderRadius: BorderRadius.circular(11),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/widgets/app_bottom_sheet.dart';
 import '../../../community/application/community_feed_controller.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/application/community_comments_controller.dart';
@@ -21,6 +23,11 @@ import '../../../news/presentation/screens/news_article_screen.dart';
 import '../../../news/presentation/screens/news_center_screen.dart';
 import '../../../notifications/application/notifications_controller.dart';
 import '../../../notifications/presentation/screens/notifications_screen.dart';
+import '../../../promotions/application/promotions_controller.dart';
+import '../../../promotions/domain/entities/promotion.dart';
+import '../../../promotions/presentation/widgets/promotion_detail_sheet.dart';
+import '../../../community/domain/entities/feed_extensions.dart';
+import '../../../community/presentation/screens/story_viewer_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
 import '../widgets/app_top_bar.dart';
@@ -50,6 +57,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.notificationsController,
     required this.newsController,
     required this.newsCommentsController,
+    required this.promotionsController,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
@@ -73,6 +81,9 @@ class MainLayoutScreen extends StatefulWidget {
   /// depo.
   final CommunityCommentsController newsCommentsController;
 
+  /// Sponsorlu Story yuvası ve "Sana Özel Öne Çıkanlar" kartları.
+  final PromotionsController promotionsController;
+
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
 }
@@ -93,6 +104,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       newsController: widget.newsController,
       onOpenArticle: (article) => _openArticle(article.id),
       onOpenNewsCenter: _openNewsCenter,
+      storyController: widget.storyController,
+      promotionsController: widget.promotionsController,
+      marketplaceController: widget.marketplaceController,
+      onOpenStory: _openStory,
+      onOpenPromotion: _openPromotion,
+      onOpenMarketplace: () => setState(() => _currentIndex = 2),
     ),
     // The pages are built once, but the composer inside the feed names the
     // member, and that name can still arrive on a token refresh. Listening
@@ -106,6 +123,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
         moderationRepository: widget.contentModerationRepository,
+        promotionsController: widget.promotionsController,
         viewer: widget.authController.user,
       ),
     ),
@@ -136,6 +154,61 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       ),
     ),
   );
+
+  /// The home rail and the feed rail share one controller, so a Story opened
+  /// from either side counts as read on both.
+  void _openStory(StoryItem story) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => StoryViewerScreen(
+        controller: widget.storyController,
+        initialStoryId: story.id,
+        moderationRepository: widget.contentModerationRepository,
+      ),
+    ),
+  );
+
+  /// Where a sponsored card leads. A promotion without a target is not a dead
+  /// card: it opens itself, because most of them are an announcement and
+  /// nothing more.
+  Future<void> _openPromotion(Promotion promotion) async {
+    widget.promotionsController.recordClick(promotion.id);
+    final value = promotion.targetValue;
+    if (value != null && value.isNotEmpty) {
+      switch (promotion.targetKind) {
+        case PromotionTargetKind.news:
+          _openArticle(value);
+          return;
+        case PromotionTargetKind.listing:
+          setState(() => _currentIndex = 2);
+          return;
+        case PromotionTargetKind.post:
+          setState(() => _currentIndex = 1);
+          return;
+        case PromotionTargetKind.external:
+          final uri = Uri.tryParse(value);
+          // Yalnızca http(s): tanıtım kartı, uygulamanın başka bir şemayla ne
+          // açacağına karar verdiği yer değil.
+          if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+            final opened = await launchUrl(
+              uri,
+              mode: LaunchMode.externalApplication,
+            );
+            if (opened) return;
+          }
+        // Etkinlik ekranı bu fazın dışında; hedef çözülemezse tanıtımın
+        // kendisi açılır.
+        case PromotionTargetKind.event:
+        case null:
+          break;
+      }
+    }
+    if (!mounted) return;
+    await showAppBottomSheet<void>(
+      context: context,
+      child: PromotionDetailSheet(promotion: promotion),
+    );
+  }
 
   @override
   void initState() {
@@ -259,10 +332,6 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ]),
                     builder: (_, _) {
                       final user = widget.authController.user;
-                      debugPrint(
-                        'TOPBAR index=$_currentIndex user=${user?.email} '
-                        'name=${user?.displayName} short=${user?.shortName}',
-                      );
                       return AppTopBar(
                         title: _titleFor(_currentIndex, user?.displayName),
                         greetingName: _currentIndex == 0
@@ -908,6 +977,10 @@ class _FloatingNav extends StatelessWidget {
               child: _pageForSlot[slot] == null
                   ? _ComposeButton(onTap: onCompose, label: items[slot].$3)
                   : _NavItem(
+                      // Sekmenin adı ana sayfada da geçebiliyor (arama
+                      // kutusundaki "Çarşı" rozeti gibi); testlerin sekmeyi
+                      // metinden bulması bu yüzden güvenilir değil.
+                      key: ValueKey('nav-${items[slot].$3}'),
                       icon: items[slot].$1,
                       activeIcon: items[slot].$2,
                       label: items[slot].$3,
@@ -923,6 +996,7 @@ class _FloatingNav extends StatelessWidget {
 
 class _NavItem extends StatelessWidget {
   const _NavItem({
+    super.key,
     required this.icon,
     required this.activeIcon,
     required this.label,

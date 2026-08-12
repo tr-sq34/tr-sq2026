@@ -4,21 +4,41 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../promotions/application/promotions_controller.dart';
+import '../../../promotions/domain/entities/promotion.dart';
+import '../../../promotions/domain/repositories/promotion_repository.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/story_controller.dart';
 import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 import '../../domain/entities/post_media_upload.dart';
 
+/// Bir tanıtım talebinin kapsayabileceği en uzun aralık; sunucudaki
+/// `MAX_PROMOTION_DAYS` ile aynı sayı. Burada da sınırlanıyor ki üye, tarihi
+/// seçtiği anda reddedileceğini öğrensin.
+const _maxPromotionDays = 30;
+
+/// "12.08" — seçilen aralık düğmenin üstünde bu biçimde okunuyor, tanıtım
+/// listesindeki `Promotion.windowLabel` ile aynı dilde.
+String _formatDay(DateTime value) =>
+    '${value.day.toString().padLeft(2, '0')}.'
+    '${value.month.toString().padLeft(2, '0')}';
+
 class StoryComposerSheet extends StatefulWidget {
   const StoryComposerSheet({
     super.key,
     required this.storyController,
     required this.mediaUploadController,
+    required this.promotionsController,
   });
 
   final StoryController storyController;
   final MediaUploadController mediaUploadController;
+
+  /// "Tanıtım Yap" adımı için: aynı görsel hem Story olarak paylaşılır hem de
+  /// sponsorlu alan talebine iliştirilir. Bu fazda ödeme yok — talep yalnızca
+  /// onay kuyruğuna düşer.
+  final PromotionsController promotionsController;
 
   @override
   State<StoryComposerSheet> createState() => _StoryComposerSheetState();
@@ -35,6 +55,23 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
   bool _saveAsHighlight = false;
   final TextEditingController _highlightTitleController =
       TextEditingController();
+
+  bool _promote = false;
+  PromotionPlacement _placement = PromotionPlacement.storySlot;
+  DateTimeRange? _window;
+  final TextEditingController _promotionTitleController =
+      TextEditingController();
+  final TextEditingController _promotionSubtitleController =
+      TextEditingController();
+  final TextEditingController _promotionNoteController =
+      TextEditingController();
+
+  /// Talebin gönderilebilir olması: başlık, gerekçe ve bir tarih aralığı.
+  /// Görselin kendisi zaten Story'nin görseli, ayrıca seçtirilmiyor.
+  bool get _promotionReady =>
+      _window != null &&
+      _promotionTitleController.text.trim().isNotEmpty &&
+      _promotionNoteController.text.trim().isNotEmpty;
 
   Future<void> _pick() async {
     final source = await showModalBottomSheet<ImageSource>(
@@ -103,7 +140,42 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
           storyIds: [story.id],
         );
       }
-      if (mounted) Navigator.pop(context);
+      // Tanıtım talebi Story paylaşıldıktan sonra gönderilir ve ayrı yakalanır:
+      // talep gönderilemediyse bile Story paylaşılmış olur, bunu "hiçbiri
+      // olmadı" gibi göstermek yanlış olurdu.
+      var promotionFailed = false;
+      if (_promote && _promotionReady) {
+        try {
+          await widget.promotionsController.submit(
+            PromotionRequestDraft(
+              placement: _placement,
+              title: _promotionTitleController.text.trim(),
+              subtitle: _promotionSubtitleController.text.trim(),
+              mediaId: media.id,
+              startsAt: _window!.start,
+              // Aralığın son günü de tanıtıma dahil: üye 5-7 Eylül seçtiyse
+              // 7 Eylül akşamına kadar yayında kalmasını bekler.
+              endsAt: _window!.end.add(const Duration(days: 1)),
+              note: _promotionNoteController.text.trim(),
+            ),
+          );
+        } catch (_) {
+          promotionFailed = true;
+        }
+      }
+      if (!mounted) return;
+      Navigator.pop(context);
+      if (_promote) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              promotionFailed
+                  ? 'Story paylaşıldı ama tanıtım talebin gönderilemedi.'
+                  : 'Tanıtım talebin incelenmek üzere gönderildi.',
+            ),
+          ),
+        );
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -115,9 +187,35 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
     }
   }
 
+  Future<void> _chooseWindow() async {
+    final today = DateTime.now();
+    final firstDate = DateTime(today.year, today.month, today.day);
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: firstDate,
+      lastDate: firstDate.add(const Duration(days: 180)),
+      initialDateRange: _window,
+      helpText: 'Tanıtım tarih aralığı',
+      saveText: 'Seç',
+    );
+    if (range == null || !mounted) return;
+    if (range.duration.inDays >= _maxPromotionDays) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bir tanıtım en çok $_maxPromotionDays gün sürebilir.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _window = range);
+  }
+
   @override
   void dispose() {
     _highlightTitleController.dispose();
+    _promotionTitleController.dispose();
+    _promotionSubtitleController.dispose();
+    _promotionNoteController.dispose();
     super.dispose();
   }
 
@@ -223,7 +321,10 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
             20,
             20 + MediaQuery.viewInsetsOf(context).bottom,
           ),
-          child: Column(
+          // Tanıtım adımı açıldığında sayfa ekrandan taşıyor; kaydırılabilir
+          // olmasaydı "Paylaş" düğmesi klavyenin altında kalırdı.
+          child: SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -392,22 +493,108 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
                     ),
                   ),
                 ),
+              const Divider(height: 28),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                value: _promote,
+                onChanged: (value) => setState(() => _promote = value),
+                title: const Text(
+                  'Tanıtım yap',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: const Text(
+                  'Aynı görsel sponsorlu alanda gösterilsin. Ücret alınmaz; '
+                  'talebin önce incelenir.',
+                ),
+              ),
+              if (_promote) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Nerede gösterilsin?',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                // Yalnızca üyenin isteyebileceği alanlar: "Öne Çıkan Kart"
+                // panelden yerleştirilir, buradan talep edilemez.
+                Wrap(
+                  spacing: 8,
+                  children: PromotionPlacement.requestable
+                      .map(
+                        (placement) => ChoiceChip(
+                          label: Text(placement.label),
+                          selected: _placement == placement,
+                          onSelected: (_) =>
+                              setState(() => _placement = placement),
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _promotionTitleController,
+                  maxLength: 60,
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Başlık',
+                    hintText: 'Örn. Paterson\'da Türk kahvaltısı',
+                  ),
+                ),
+                TextField(
+                  controller: _promotionSubtitleController,
+                  maxLength: 90,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Alt başlık (isteğe bağlı)',
+                  ),
+                ),
+                const SizedBox(height: 4),
+                OutlinedButton.icon(
+                  onPressed: _chooseWindow,
+                  icon: const Icon(Icons.date_range_outlined),
+                  label: Text(
+                    _window == null
+                        ? 'Tarih aralığı seç'
+                        : '${_formatDay(_window!.start)} - '
+                              '${_formatDay(_window!.end)}',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _promotionNoteController,
+                  maxLength: 240,
+                  maxLines: 3,
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Gerekçe',
+                    hintText: 'Bu tanıtımı neden yapmak istiyorsun?',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: ready && !_publishing ? _publish : null,
+                  onPressed:
+                      ready && !_publishing && (!_promote || _promotionReady)
+                      ? _publish
+                      : null,
                   icon: const Icon(Icons.send_rounded),
                   label: Text(
                     _publishing
                         ? 'Paylaşılıyor...'
                         : uploading
                         ? 'Güvenlik kontrolü sürüyor...'
+                        : _promote
+                        ? 'Paylaş ve tanıtım iste'
                         : 'Story paylaş',
                   ),
                 ),
               ),
             ],
+            ),
           ),
         ),
       );
