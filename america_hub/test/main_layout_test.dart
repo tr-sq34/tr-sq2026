@@ -23,8 +23,7 @@ void main() {
 
     final bar = find.byType(AppTopBar);
     for (final tab in ['Ana Sayfa', 'Akış', 'Çarşı', 'Profil']) {
-      await tester.tap(find.text(tab));
-      await tester.pump();
+      await tapTab(tester, tab);
 
       expect(
         find.descendant(of: bar, matching: find.byIcon(Icons.menu_rounded)),
@@ -47,8 +46,7 @@ void main() {
   ) async {
     await pumpShell(tester, signUpName: 'Zeynep Kaya');
 
-    await tester.tap(find.text('Çarşı'));
-    await tester.pump();
+    await tapTab(tester, 'Çarşı');
     await tester.tap(find.byIcon(Icons.menu_rounded));
     await settle(tester);
 
@@ -74,8 +72,7 @@ void main() {
   ) async {
     await pumpShell(tester);
 
-    await tester.tap(find.text('Profil'));
-    await tester.pump();
+    await tapTab(tester, 'Profil');
     await tester.tap(find.byIcon(Icons.add_rounded));
     await settle(tester);
     expect(find.byType(AppTopBar), findsNothing, reason: 'düzenleyici açılmadı');
@@ -114,8 +111,7 @@ void main() {
   ) async {
     await pumpShell(tester, signUpName: 'Zeynep Kaya');
 
-    await tester.tap(find.text('Akış'));
-    await tester.pump();
+    await tapTab(tester, 'Akış');
     await tester.tap(find.text('Topluluğa bir şey sor veya paylaş...'));
     await settle(tester);
 

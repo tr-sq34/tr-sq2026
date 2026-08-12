@@ -30,6 +30,8 @@ import 'package:america_hub/features/news/application/news_controller.dart';
 import 'package:america_hub/features/news/data/repositories/mock_news_comments_repository.dart';
 import 'package:america_hub/features/news/data/repositories/mock_news_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
+import 'package:america_hub/features/promotions/application/promotions_controller.dart';
+import 'package:america_hub/features/promotions/data/repositories/mock_promotion_repository.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
 import 'package:america_hub/features/journey/application/journey_controller.dart';
 import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
@@ -83,6 +85,9 @@ void main() {
         // has no byline to offer — and no business inventing one.
         newsCommentsController: CommunityCommentsController(
           repository: MockNewsCommentsRepository(viewer: () => null),
+        ),
+        promotionsController: PromotionsController(
+          repository: MockPromotionRepository(),
         ),
       ),
     );

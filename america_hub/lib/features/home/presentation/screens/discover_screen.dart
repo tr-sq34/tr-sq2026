@@ -1,10 +1,18 @@
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
+import '../../../../core/widgets/app_remote_image.dart';
 import '../../application/community_home_controller.dart';
+import '../../data/community_home_repository.dart';
+import '../../../community/application/story_controller.dart';
+import '../../../community/domain/entities/feed_extensions.dart';
+import '../../../marketplace/application/marketplace_controller.dart';
+import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../news/application/news_controller.dart';
 import '../../../news/domain/entities/news_article.dart';
 import '../../../news/presentation/widgets/headline_strip.dart';
+import '../../../promotions/application/promotions_controller.dart';
+import '../../../promotions/domain/entities/promotion.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
@@ -14,6 +22,12 @@ class DiscoverScreen extends StatefulWidget {
     required this.newsController,
     required this.onOpenArticle,
     required this.onOpenNewsCenter,
+    required this.storyController,
+    required this.promotionsController,
+    required this.marketplaceController,
+    required this.onOpenStory,
+    required this.onOpenPromotion,
+    required this.onOpenMarketplace,
   });
 
   final CommunityHomeController controller;
@@ -28,6 +42,22 @@ class DiscoverScreen extends StatefulWidget {
   final ValueChanged<NewsArticle> onOpenArticle;
   final VoidCallback onOpenNewsCenter;
 
+  /// The rail shows the member's own network, exactly as the feed's rail does.
+  /// One controller, two surfaces: a Story marked read here is read there too.
+  final StoryController storyController;
+
+  /// The sponsored slot at the head of the rail and the "Sana Özel Öne
+  /// Çıkanlar" cards; both are promotions, told apart by their placement.
+  final PromotionsController promotionsController;
+
+  /// The listings strip reads the same repository the Çarşı tab does, so the
+  /// home screen can never advertise something the marketplace has not got.
+  final MarketplaceController marketplaceController;
+
+  final ValueChanged<StoryItem> onOpenStory;
+  final ValueChanged<Promotion> onOpenPromotion;
+  final VoidCallback onOpenMarketplace;
+
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
 }
@@ -38,6 +68,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     super.initState();
     widget.controller.load();
     widget.newsController.loadHeadlines();
+    // Both are shared with other tabs and both guard against a second call in
+    // flight, so asking here costs nothing when the member opened the feed
+    // first.
+    widget.storyController.load();
+    widget.promotionsController.loadActive();
+    widget.marketplaceController.load();
   }
 
   @override
@@ -54,25 +90,55 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             // shell's AppTopBar: they belong to every tab, not just this one.
             if (summary?.isNewMember == true)
               _NewMemberWelcome(city: summary?.city),
-            _StoriesSection(),
-            _CommunityPulse(),
-            SizedBox(height: 20),
-            _HighlightsSection(onOpenBadges: widget.onOpenBadges),
-            _LiveBiddingSection(),
-            _LocalContextSection(),
+            _StoriesSection(
+              storyController: widget.storyController,
+              promotionsController: widget.promotionsController,
+              onOpenStory: widget.onOpenStory,
+              onOpenPromotion: widget.onOpenPromotion,
+            ),
+            _CommunityPulse(
+              summary: summary,
+              onOpenMarketplace: widget.onOpenMarketplace,
+            ),
+            const SizedBox(height: 20),
+            _HighlightsSection(
+              onOpenBadges: widget.onOpenBadges,
+              promotionsController: widget.promotionsController,
+              onOpenPromotion: widget.onOpenPromotion,
+            ),
+            const _LiveBiddingSection(),
+            const _LocalContextSection(),
             HeadlineStrip(
               controller: widget.newsController,
               onOpenArticle: widget.onOpenArticle,
               onOpenNewsCenter: widget.onOpenNewsCenter,
             ),
-            _ForumSection(),
-            _RecentListingsSection(),
-            SizedBox(height: 100),
+            const _ForumSection(),
+            _RecentListingsSection(
+              controller: widget.marketplaceController,
+              onOpenMarketplace: widget.onOpenMarketplace,
+            ),
+            const SizedBox(height: 100),
           ],
         ),
       );
     },
   );
+}
+
+/// Gösterim sayacı çizim sırasında değil, kare bittikten sonra işlenir: build
+/// içinden denetleyiciye yazmak, aynı karede yeniden çizim istemek olurdu.
+/// Denetleyici zaten oturum başına tek gösterim sayar.
+void _countImpressions(
+  PromotionsController controller,
+  Iterable<Promotion> shown,
+) {
+  if (shown.isEmpty) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    for (final promotion in shown) {
+      controller.recordImpression(promotion.id);
+    }
+  });
 }
 
 class _NewMemberWelcome extends StatelessWidget {
@@ -118,23 +184,41 @@ class _HomeScrollBehavior extends MaterialScrollBehavior {
 }
 
 // 2. Stories Section
+///
+/// Şeridin başında yayındaki sponsorlu yuvalar, ardından üyenin kendi ağındaki
+/// Story'ler durur. İkisi de gerçek: hiçbiri yoksa şerit hiç çizilmez, çünkü
+/// boş bir Story rayını dolduracak tek şey örnek kullanıcı olurdu.
 class _StoriesSection extends StatelessWidget {
-  const _StoriesSection();
+  const _StoriesSection({
+    required this.storyController,
+    required this.promotionsController,
+    required this.onOpenStory,
+    required this.onOpenPromotion,
+  });
+
+  final StoryController storyController;
+  final PromotionsController promotionsController;
+  final ValueChanged<StoryItem> onOpenStory;
+  final ValueChanged<Promotion> onOpenPromotion;
 
   @override
-  Widget build(BuildContext context) => Container(
-    color: Colors.white,
-    padding: const EdgeInsets.only(bottom: 16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'ÖNE ÇIKAN TANITIMLAR',
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: Listenable.merge([storyController, promotionsController]),
+    builder: (context, _) {
+      final sponsored = promotionsController.storySlots;
+      final stories = storyController.railItems;
+      if (sponsored.isEmpty && stories.isEmpty) return const SizedBox.shrink();
+      _countImpressions(promotionsController, sponsored);
+      return Container(
+        color: Colors.white,
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Text(
+                'STORY’LER',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -142,107 +226,145 @@ class _StoriesSection extends StatelessWidget {
                   letterSpacing: 1.2,
                 ),
               ),
-              Text(
-                'Sponsorlu',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF6355D8).withValues(alpha: 0.8),
-                ),
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 96,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  for (final promotion in sponsored)
+                    _StoryItem(
+                      name: promotion.title,
+                      imageUrl: promotion.imageUrl ?? '',
+                      isSponsored: true,
+                      onTap: () => onOpenPromotion(promotion),
+                    ),
+                  for (final story in stories)
+                    _StoryItem(
+                      name: story.authorName,
+                      imageUrl: story.media.thumbnailUrl ?? story.media.url,
+                      // Okunmuş Story'nin halkası soluk: hangisine bakılmadığı
+                      // rayın tek işe yarar bilgisi.
+                      isUnread: !story.isViewed,
+                      onTap: () => onOpenStory(story),
+                    ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
-        SizedBox(
-          height: 90,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: const [
-              _StoryItem(
-                name: 'Elif',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
-              ),
-              _StoryItem(
-                name: 'Mert',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
-              ),
-              _StoryItem(
-                name: 'Zeynep',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
-              ),
-              _StoryItem(
-                name: 'Can',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80',
-              ),
-              _StoryItem(
-                name: 'Selin',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=200&q=80',
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
+      );
+    },
   );
 }
 
 class _StoryItem extends StatelessWidget {
-  const _StoryItem({required this.name, required this.imageUrl});
+  const _StoryItem({
+    required this.name,
+    required this.imageUrl,
+    required this.onTap,
+    this.isSponsored = false,
+    this.isUnread = true,
+  });
   final String name;
   final String imageUrl;
+  final VoidCallback onTap;
+  final bool isSponsored;
+  final bool isUnread;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 6),
-    child: Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(2.5),
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [Color(0xFFFBBF24), Color(0xFFF43F5E), Color(0xFF6355D8)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        width: 68,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(2.5),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: isUnread
+                    ? LinearGradient(
+                        colors: isSponsored
+                            ? const [Color(0xFF6355D8), Color(0xFF3B3383)]
+                            : const [
+                                Color(0xFFFBBF24),
+                                Color(0xFFF43F5E),
+                                Color(0xFF6355D8),
+                              ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      )
+                    : null,
+                color: isUnread ? null : const Color(0xFFE2E8F0),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: ClipOval(
+                  child: SizedBox(
+                    width: 52,
+                    height: 52,
+                    child: AppRemoteImage(
+                      imageUrl: imageUrl,
+                      semanticLabel: isSponsored
+                          ? '$name tanıtımı'
+                          : '$name hikayesi',
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
-          child: Container(
-            padding: const EdgeInsets.all(2),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
+            const SizedBox(height: 5),
+            Text(
+              isSponsored ? 'Sponsorlu' : name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: isSponsored
+                    ? const Color(0xFF6355D8)
+                    : const Color(0xFF334155),
+              ),
             ),
-            child: CircleAvatar(
-              radius: 26,
-              backgroundImage: NetworkImage(imageUrl),
-              onBackgroundImageError: (_, __) {},
-            ),
-          ),
+            if (isSponsored)
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF94A3B8),
+                ),
+              ),
+          ],
         ),
-        const SizedBox(height: 6),
-        Text(
-          name,
-          style: const TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF334155),
-          ),
-        ),
-      ],
+      ),
     ),
   );
 }
 
 // 3. Community Pulse (Dark Section)
+///
+/// Buradaki her sayı `/community/home/summary`den gelir. Özet yüklenmeden ya da
+/// alınamadan sayaç satırı hiç çizilmez: uydurulmuş bir "8 aktif ilan", boş
+/// bırakılmış bir satırdan çok daha kötüdür.
 class _CommunityPulse extends StatelessWidget {
-  const _CommunityPulse();
+  const _CommunityPulse({required this.summary, required this.onOpenMarketplace});
+
+  final CommunityHomeSummary? summary;
+  final VoidCallback onOpenMarketplace;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -296,17 +418,19 @@ class _CommunityPulse extends StatelessWidget {
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
               ),
-              child: const Row(
+              child: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.location_on_rounded,
                     size: 10,
                     color: Color(0xFFF43F5E),
                   ),
-                  SizedBox(width: 4),
+                  const SizedBox(width: 4),
                   Text(
-                    'New York',
-                    style: TextStyle(
+                    // Konumunu vermemiş üyeye başkasının şehrini göstermek
+                    // yerine ülke geneli deniyor.
+                    summary?.city ?? 'Amerika geneli',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
@@ -318,258 +442,227 @@ class _CommunityPulse extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        // Search Bar
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
+        // Arama kutusu bir görsel değil, Çarşı'nın arama alanına açılan kapı.
+        Material(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            onTap: onOpenMarketplace,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.search_rounded,
+                    color: Color(0xFF6355D8),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Ev, iş veya eşya ara...',
+                      style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF6355D8).withValues(alpha: 0.8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'Çarşı',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-          child: Row(
+        ),
+        if (summary case final value?) ...[
+          const SizedBox(height: 16),
+          Row(
             children: [
-              const Icon(
-                Icons.search_rounded,
-                color: Color(0xFF6355D8),
-                size: 20,
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Ev, İş, Eşya veya Rehber ara...',
-                  style: TextStyle(
-                    color: Color(0xFF94A3B8),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
+              Expanded(
+                child: _PulseStat(
+                  icon: Icons.group_rounded,
+                  iconColor: const Color(0xFF6355D8),
+                  value: '${value.connections}',
+                  label: 'Bağlantın',
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 4,
+              const SizedBox(width: 10),
+              Expanded(
+                child: _PulseStat(
+                  icon: Icons.forum_rounded,
+                  iconColor: const Color(0xFFFBBF24),
+                  value: '${value.localPosts}',
+                  label: 'Çevrende paylaşım',
                 ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF6355D8).withValues(alpha: 0.8),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'Ara',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _PulseStat(
+                  icon: Icons.auto_awesome_rounded,
+                  iconColor: const Color(0xFF10B981),
+                  value: '${value.activeStories}',
+                  label: 'Aktif Story',
                 ),
               ),
             ],
           ),
+        ],
+      ],
+    ),
+  );
+}
+
+class _PulseStat extends StatelessWidget {
+  const _PulseStat({
+    required this.icon,
+    required this.iconColor,
+    required this.value,
+    required this.label,
+  });
+  final IconData icon;
+  final Color iconColor;
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.05),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    ),
+    child: Column(
+      children: [
+        Icon(icon, color: iconColor, size: 18),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 17,
+            fontWeight: FontWeight.w900,
+          ),
         ),
-        const SizedBox(height: 16),
-        // 2x2 Grid
-        Row(
-          children: [
-            Expanded(
-              child: _PulseCard(
-                icon: Icons.house_rounded,
-                iconBg: const Color(0xFF6355D8),
-                title: 'Kiralık & Oda',
-                subtitle: '8 Aktif İlan',
-                onTap: () {},
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _PulseCard(
-                icon: Icons.work_rounded,
-                iconBg: const Color(0xFFFBBF24),
-                title: 'İş & Hizmetler',
-                subtitle: '12 Fırsat',
-                onTap: () {},
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _PulseCard(
-                icon: Icons.favorite_rounded,
-                iconBg: const Color(0xFF10B981),
-                title: 'İmece & Yardım',
-                subtitle: 'Ücretsiz Eşyalar',
-                subtitleColor: const Color(0xFF10B981),
-                onTap: () {},
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _PulseCard(
-                icon: Icons.help_outline_rounded,
-                iconBg: const Color(0xFFF43F5E),
-                title: 'Soru Sor & Danış',
-                subtitle: 'ABD Rehberi',
-                onTap: () {},
-              ),
-            ),
-          ],
+        const SizedBox(height: 2),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF94A3B8),
+            fontSize: 9,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ],
     ),
   );
 }
 
-class _PulseCard extends StatelessWidget {
-  const _PulseCard({
-    required this.icon,
-    required this.iconBg,
-    required this.title,
-    required this.subtitle,
-    this.subtitleColor,
-    required this.onTap,
+// 4. Highlights Section
+///
+/// Rozet kartı her zaman durur — o üyenin kendi ilerlemesi. Geri kalanı
+/// panelden yerleştirilmiş `featured_card` tanıtımlarıdır; bu alan editoryal,
+/// üye buraya kendi talebiyle giremez.
+class _HighlightsSection extends StatelessWidget {
+  const _HighlightsSection({
+    required this.onOpenBadges,
+    required this.promotionsController,
+    required this.onOpenPromotion,
   });
-  final IconData icon;
-  final Color iconBg;
-  final String title;
-  final String subtitle;
-  final Color? subtitleColor;
-  final VoidCallback onTap;
+
+  final VoidCallback onOpenBadges;
+  final PromotionsController promotionsController;
+  final ValueChanged<Promotion> onOpenPromotion;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: Colors.white.withValues(alpha: 0.05),
-    borderRadius: BorderRadius.circular(16),
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: iconBg.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: iconBg.withValues(alpha: 0.3)),
-              ),
-              child: Icon(icon, color: iconBg, size: 16),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: promotionsController,
+    builder: (context, _) {
+      final cards = promotionsController.featuredCards;
+      _countImpressions(promotionsController, cards);
+      return Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
+                    'Sana Özel Öne Çıkanlar',
                     style: TextStyle(
-                      color: subtitleColor ?? const Color(0xFF94A3B8),
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF0F172A),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    'Bulunduğun yere göre seçilen kartlar',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF64748B),
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-// 4. Highlights Section
-class _HighlightsSection extends StatelessWidget {
-  const _HighlightsSection({required this.onOpenBadges});
-
-  final VoidCallback onOpenBadges;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 130,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               children: [
-                Text(
-                  'Sana Özel Öne Çıkanlar',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF0F172A),
-                  ),
+                _HighlightCard(
+                  title: 'Topluluk Rozetini Al!',
+                  subtitle: 'Rozetini tamamla, öne çık.',
+                  badge: 'Güvenli Profil',
+                  gradient: const [Color(0xFF1E1A47), Color(0xFF3B3383)],
+                  onTap: onOpenBadges,
                 ),
-                Text(
-                  'İlgi alanlarına göre seçilen kartlar',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Color(0xFF64748B),
-                    fontWeight: FontWeight.w500,
+                for (final promotion in cards)
+                  _HighlightCard(
+                    title: promotion.title,
+                    subtitle: promotion.subtitle ?? promotion.audienceLabel,
+                    badge: 'Sponsorlu',
+                    imageUrl: promotion.imageUrl,
+                    gradient: const [Color(0xFF334155), Color(0xFF0F172A)],
+                    onTap: () => onOpenPromotion(promotion),
                   ),
-                ),
               ],
             ),
-            Text(
-              'Öneriler >',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF6355D8),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 8),
-      SizedBox(
-        height: 130,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          children: [
-            _HighlightCard(
-              title: 'Topluluk Rozetini Al!',
-              subtitle: 'Rozetini tamamla, öne çık.',
-              badge: 'Güvenli Profil',
-              progress: '⚡ %85 Dolu',
-              gradient: const [Color(0xFF1E1A47), Color(0xFF3B3383)],
-              onTap: onOpenBadges,
-            ),
-            _HighlightCard(
-              title: "New York'ta İlk Yıl",
-              subtitle: 'Banka hesabı, ehliyet...',
-              badge: 'Rehber & İpuçları',
-              imageUrl:
-                  'https://images.unsplash.com/photo-1534430480872-3498386e7856?auto=format&fit=crop&w=500&q=80',
-              onTap: () {},
-            ),
-          ],
-        ),
-      ),
-    ],
+          ),
+        ],
+      );
+    },
   );
 }
 
@@ -578,7 +671,6 @@ class _HighlightCard extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.badge,
-    this.progress,
     this.imageUrl,
     this.gradient,
     required this.onTap,
@@ -586,7 +678,6 @@ class _HighlightCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final String badge;
-  final String? progress;
   final String? imageUrl;
   final List<Color>? gradient;
   final VoidCallback onTap;
@@ -634,54 +725,34 @@ class _HighlightCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Both sides give way rather than overflow: the card is a
-                    // fixed width, and a long badge at a large system text
-                    // scale would otherwise run off its own edge.
-                    Flexible(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
-                          ),
-                        ),
-                        child: Text(
-                          badge,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                // The badge gives way rather than overflow: the card is a fixed
+                // width, and a long badge at a large system text scale would
+                // otherwise run off its own edge.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.2),
                       ),
                     ),
-                    if (progress != null)
-                      Flexible(
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 6),
-                          child: Text(
-                            progress!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Color(0xFFFBBF24),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
+                    child: Text(
+                      badge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
                       ),
-                  ],
+                    ),
+                  ),
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1451,90 +1522,104 @@ class _FilterChip extends StatelessWidget {
 }
 
 // 8. Recent Listings
+///
+/// Çarşı sekmesiyle aynı denetleyiciyi okur: ana sayfa, çarşıda olmayan bir
+/// ilanı hiçbir zaman gösteremez. İlan yoksa şerit hiç çizilmez.
 class _RecentListingsSection extends StatelessWidget {
-  const _RecentListingsSection();
+  const _RecentListingsSection({
+    required this.controller,
+    required this.onOpenMarketplace,
+  });
+
+  final MarketplaceController controller;
+  final VoidCallback onOpenMarketplace;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
-    child: Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final listings = controller.items.take(6).toList(growable: false);
+      if (listings.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
+        child: Column(
           children: [
-            const Row(
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(
-                  Icons.local_offer_rounded,
-                  size: 14,
-                  color: Color(0xFF10B981),
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.local_offer_rounded,
+                      size: 14,
+                      color: Color(0xFF10B981),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'SON EKLENEN İLANLAR',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF334155),
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                  ],
                 ),
-                SizedBox(width: 8),
-                Text(
-                  'SON EKLENEN İLANLAR',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF334155),
-                    letterSpacing: 1.1,
+                TextButton(
+                  onPressed: onOpenMarketplace,
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text(
+                    'Çarşıya Git >',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF6355D8),
+                    ),
                   ),
                 ),
               ],
             ),
-            Text(
-              'Çarşıya Git >',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF6355D8),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 190,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.zero,
+                itemCount: listings.length,
+                itemBuilder: (_, index) => _RecentListingCard(
+                  listing: listings[index],
+                  onTap: onOpenMarketplace,
+                ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 190,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            children: const [
-              _RecentListingCard(
-                title: 'Vintage El Dokuma Kilim',
-                price: '\$1,450',
-                loc: 'New York, NY',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1600121848594-d8644e57abab?auto=format&fit=crop&w=400&q=80',
-                badge: 'Manhattan',
-              ),
-              _RecentListingCard(
-                title: 'Çocuk Türkçe Masal Seti',
-                price: '\$12',
-                loc: 'Queens, NY',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=400&q=80',
-                badge: 'Queens',
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
+      );
+    },
   );
 }
 
 class _RecentListingCard extends StatelessWidget {
-  const _RecentListingCard({
-    required this.title,
-    required this.price,
-    required this.loc,
-    required this.imageUrl,
-    required this.badge,
-  });
-  final String title;
-  final String price;
-  final String loc;
-  final String imageUrl;
-  final String badge;
+  const _RecentListingCard({required this.listing, required this.onTap});
+  final MarketplaceListing listing;
+  final VoidCallback onTap;
+
+  /// "$1,450" — binlik ayracı elle konuyor; intl paketi bu ekran için tek
+  /// başına bağımlılık olurdu.
+  String get _price {
+    final whole = listing.price.round().toString();
+    final buffer = StringBuffer();
+    for (var index = 0; index < whole.length; index++) {
+      if (index > 0 && (whole.length - index) % 3 == 0) buffer.write(',');
+      buffer.write(whole[index]);
+    }
+    return '\$$buffer';
+  }
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1554,84 +1639,98 @@ class _RecentListingCard extends StatelessWidget {
         ],
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Stack(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
-                height: 110,
-                width: double.infinity,
-                child: Image.network(imageUrl, fit: BoxFit.cover),
-              ),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    badge,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
+              Stack(
+                children: [
+                  SizedBox(
+                    height: 110,
+                    width: double.infinity,
+                    child: AppRemoteImage(
+                      imageUrl: listing.imageUrl,
+                      semanticLabel: listing.title,
                     ),
                   ),
-                ),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    color: Color(0xFF1E293B),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  price,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
-                    color: Color(0xFF1E1A47),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      loc,
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 9,
-                        fontWeight: FontWeight.w500,
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        listing.category,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                    const Row(
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      listing.title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                        color: Color(0xFF1E293B),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _price,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                        color: Color(0xFF1E1A47),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Icon(Icons.star_rounded, size: 10, color: Colors.amber),
-                        SizedBox(width: 2),
+                        // Yıldızlı puan burada yoktu ve ilanın da böyle bir
+                        // alanı yok; yerinde ilanın kendi durumu duruyor.
+                        Expanded(
+                          child: Text(
+                            listing.location,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFF94A3B8),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
                         Text(
-                          '4.8',
-                          style: TextStyle(
-                            color: Colors.amber,
+                          listing.condition,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF10B981),
                             fontSize: 9,
                             fontWeight: FontWeight.bold,
                           ),
@@ -1640,10 +1739,10 @@ class _RecentListingCard extends StatelessWidget {
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     ),
   );

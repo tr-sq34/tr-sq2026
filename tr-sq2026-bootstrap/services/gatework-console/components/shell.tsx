@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { Activity, BadgeCheck, ClipboardList, GalleryVerticalEnd, Gavel, MapPinned, MessageSquare, Newspaper, ShieldAlert, Users, Workflow } from 'lucide-react';
+import { Activity, BadgeCheck, ClipboardList, GalleryVerticalEnd, Gavel, MapPinned, Megaphone, MessageSquare, Newspaper, ShieldAlert, Users, Workflow } from 'lucide-react';
 import type { GateworkMember } from '@/lib/types';
 
 const items = [
-  ['Komuta Merkezi', '/command-center', Activity], ['İçerik Stüdyosu', '/content', GalleryVerticalEnd], ['Haber Merkezi', '/news', Newspaper], ['Üyeler', '/members', Users], ['Moderasyon', '/moderation', ShieldAlert], ['Çarşı ve İhaleler', '/marketplace', Gavel], ['Mesajlar ve Forum', '/communications', MessageSquare], ['Güvenlik ve SOS', '/safety', Workflow], ['Analitik ve Konum', '/analytics', MapPinned], ['Doğrulama', '/verification', BadgeCheck], ['Sistem ve Denetim', '/system', ClipboardList],
+  ['Komuta Merkezi', '/command-center', Activity], ['İçerik Stüdyosu', '/content', GalleryVerticalEnd], ['Haber Merkezi', '/news', Newspaper], ['Tanıtımlar', '/promotions', Megaphone], ['Üyeler', '/members', Users], ['Moderasyon', '/moderation', ShieldAlert], ['Çarşı ve İhaleler', '/marketplace', Gavel], ['Mesajlar ve Forum', '/communications', MessageSquare], ['Güvenlik ve SOS', '/safety', Workflow], ['Analitik ve Konum', '/analytics', MapPinned], ['Doğrulama', '/verification', BadgeCheck], ['Sistem ve Denetim', '/system', ClipboardList],
 ] as const;
 
 export function Shell({ member, children }: { member: GateworkMember; children: React.ReactNode }) {
