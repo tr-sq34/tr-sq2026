@@ -592,11 +592,16 @@ class _StoryRail extends StatelessWidget {
         itemBuilder: (_, index) {
           if (index == 0) {
             return InkWell(
+              // Duzenleyici kendi koyu yuzeyini ciziyor; buradaki saydam arka
+              // plan yalnizca o yuzeyin ust kose yuvarlaklarini goruniyor
+              // kiliyor. Perde de koyulasiyor ki arkadaki akis dikkat
+              // dagitmasin.
               onTap: () => showModalBottomSheet<void>(
                 context: context,
                 isScrollControlled: true,
                 useSafeArea: true,
                 backgroundColor: Colors.transparent,
+                barrierColor: const Color(0xCC000000),
                 builder: (_) => StoryComposerSheet(
                   storyController: controller,
                   mediaUploadController: mediaUploadController,
