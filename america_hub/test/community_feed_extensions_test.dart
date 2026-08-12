@@ -44,6 +44,28 @@ void main() {
       },
     );
 
+    // With an empty rail there was nothing to tap, so the whole story feature
+    // read as broken in mock mode. These three exist only in this repository.
+    test('mock mode has stories to walk through', () async {
+      final page = await MockCommunityRepository().fetchStories();
+
+      expect(page.items, hasLength(3));
+      expect(page.items.every((story) => !story.isExpired), isTrue);
+      expect(page.items.map((story) => story.authorName), contains('Elif Demir'));
+    });
+
+    test('viewing and liking a demo story sticks', () async {
+      final repository = MockCommunityRepository();
+      final first = (await repository.fetchStories()).items.first;
+
+      final viewed = await repository.markViewed(first.id);
+      final liked = await repository.setLiked(first.id, true);
+
+      expect(viewed.isViewed, isTrue);
+      expect(liked.likeCount, first.likeCount + 1);
+      expect((await repository.fetchStories()).items.first.isViewed, isTrue);
+    });
+
     test('story TTL accepts supported durations only', () {
       final media = PostMedia(
         id: 'media',

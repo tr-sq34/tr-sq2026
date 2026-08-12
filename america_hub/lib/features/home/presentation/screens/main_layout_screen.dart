@@ -4,16 +4,21 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../community/application/community_feed_controller.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/application/community_comments_controller.dart';
-import '../../../community/application/profile_posts_controller.dart';
 import '../../../community/application/media_upload_controller.dart';
+import '../../../community/domain/repositories/community_repository.dart';
 import '../../../community/application/community_special_request_controller.dart';
 import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../profile/application/profile_controller.dart';
+import '../../../journey/application/journey_controller.dart';
+import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
 import '../../../community/presentation/screens/create_post_flow_screen.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
+import '../../../news/application/news_controller.dart';
+import '../../../news/presentation/screens/news_article_screen.dart';
+import '../../../news/presentation/screens/news_center_screen.dart';
 import '../../../notifications/application/notifications_controller.dart';
 import '../../../notifications/presentation/screens/notifications_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
@@ -30,34 +35,43 @@ class MainLayoutScreen extends StatefulWidget {
     required this.communityController,
     required this.storyController,
     required this.commentsController,
-    required this.profilePostsController,
     required this.mediaUploadController,
+    required this.postCommands,
     required this.specialRequestController,
     required this.contentModerationRepository,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.journeyController,
     required this.onSignOut,
     required this.homeController,
     required this.memberCapabilitiesController,
     required this.authController,
     required this.notificationsController,
+    required this.newsController,
+    required this.newsCommentsController,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
-  final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
+  final CommunityPostCommands postCommands;
   final CommunitySpecialRequestController specialRequestController;
   final ContentModerationRepository contentModerationRepository;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final JourneyController journeyController;
   final Future<void> Function() onSignOut;
   final CommunityHomeController homeController;
   final MemberCapabilitiesController memberCapabilitiesController;
   final AuthController authController;
   final NotificationsController notificationsController;
+  final NewsController newsController;
+
+  /// Haber yorumları için kurulmuş denetleyici; akıştakiyle aynı sınıf, ayrı
+  /// depo.
+  final CommunityCommentsController newsCommentsController;
 
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
@@ -73,14 +87,27 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   late List<Widget> _pages;
 
   List<Widget> _buildPages() => [
-    DiscoverScreen(controller: widget.homeController),
-    CommunityScreen(
-      controller: widget.communityController,
-      storyController: widget.storyController,
-      commentsController: widget.commentsController,
-      mediaUploadController: widget.mediaUploadController,
-      specialRequestController: widget.specialRequestController,
-      moderationRepository: widget.contentModerationRepository,
+    DiscoverScreen(
+      controller: widget.homeController,
+      onOpenBadges: _openBadges,
+      newsController: widget.newsController,
+      onOpenArticle: (article) => _openArticle(article.id),
+      onOpenNewsCenter: _openNewsCenter,
+    ),
+    // The pages are built once, but the composer inside the feed names the
+    // member, and that name can still arrive on a token refresh. Listening
+    // here keeps it current without rebuilding the whole stack.
+    AnimatedBuilder(
+      animation: widget.authController,
+      builder: (_, _) => CommunityScreen(
+        controller: widget.communityController,
+        storyController: widget.storyController,
+        commentsController: widget.commentsController,
+        mediaUploadController: widget.mediaUploadController,
+        specialRequestController: widget.specialRequestController,
+        moderationRepository: widget.contentModerationRepository,
+        viewer: widget.authController.user,
+      ),
     ),
     MarketplaceScreen(
       controller: widget.marketplaceController,
@@ -88,12 +115,27 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
     ProfileScreen(
       controller: widget.profileController,
-      postsController: widget.profilePostsController,
+      journeyController: widget.journeyController,
       onSignOut: widget.onSignOut,
       memberCapabilitiesController: widget.memberCapabilitiesController,
       storyController: widget.storyController,
+      mediaUploadController: widget.mediaUploadController,
+      postCommands: widget.postCommands,
     ),
   ];
+
+  /// The home screen's badge card promised a destination and never had one.
+  /// It leads where the profile's badge counter leads: the Journey cabinet,
+  /// opened on its Rozetler tab. The route lives here because DiscoverScreen
+  /// only takes a callback.
+  void _openBadges() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => JourneyScreen(
+        controller: widget.journeyController,
+        initialTab: JourneyTab.badges,
+      ),
+    ),
+  );
 
   @override
   void initState() {
@@ -136,6 +178,32 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
   void _openMessages() => Navigator.of(context).pushNamed(AppRoutes.inbox);
 
+  /// Haber Merkezi ana sayfadaki manşet şeridiyle aynı denetleyiciyi paylaşır;
+  /// bir haberi burada beğenmek şeritteki sayacı da günceller.
+  /// Manşet şeridinden doğrudan habere; Haber Merkezi'nden geçmeye gerek yok.
+  void _openArticle(String articleId) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => NewsArticleScreen(
+        articleId: articleId,
+        controller: widget.newsController,
+        commentsController: widget.newsCommentsController,
+        moderationRepository: widget.contentModerationRepository,
+        viewerId: widget.authController.user?.id ?? 'local-user',
+      ),
+    ),
+  );
+
+  void _openNewsCenter() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => NewsCenterScreen(
+        controller: widget.newsController,
+        commentsController: widget.newsCommentsController,
+        moderationRepository: widget.contentModerationRepository,
+        viewerId: widget.authController.user?.id ?? 'local-user',
+      ),
+    ),
+  );
+
   void _openNotifications() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) =>
@@ -153,6 +221,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       builder: (_) => CreatePostFlowScreen(
         feedController: widget.communityController,
         mediaUploadController: widget.mediaUploadController,
+        viewer: widget.authController.user,
       ),
     ),
   );
@@ -190,6 +259,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ]),
                     builder: (_, _) {
                       final user = widget.authController.user;
+                      debugPrint(
+                        'TOPBAR index=$_currentIndex user=${user?.email} '
+                        'name=${user?.displayName} short=${user?.shortName}',
+                      );
                       return AppTopBar(
                         title: _titleFor(_currentIndex, user?.displayName),
                         greetingName: _currentIndex == 0
@@ -463,7 +536,22 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 2. FORUM
+                  // 2. HABER MERKEZİ
+                  _buildDrawerItem(
+                    title: 'Haber Merkezi',
+                    subtitle: 'Amerika gündemi ve topluluk haberleri',
+                    icon: Icons.newspaper_rounded,
+                    iconBg: AppColors.primary.withValues(alpha: 0.15),
+                    iconColor: const Color(0xFF818CF8),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openNewsCenter();
+                    },
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // 3. FORUM
                   _buildDrawerItem(
                     title: 'Forum',
                     subtitle: 'Topluluk tartışmaları',
@@ -476,7 +564,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 3. TURKSQUARE YAYIN (SESLİ SOHBET SİSTEMİ)
+                  // 4. TURKSQUARE YAYIN (SESLİ SOHBET SİSTEMİ)
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -575,7 +663,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 4. PROFİL VE HESAP
+                  // 5. PROFİL VE HESAP
                   _buildDrawerItem(
                     title: 'Profil ve Hesap',
                     subtitle: 'Üyelik & kişisel veriler',
@@ -596,7 +684,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ),
                   ),
 
-                  // 5. BİLDİRİM TERCİHLERİ
+                  // 6. BİLDİRİM TERCİHLERİ
                   _buildDrawerItem(
                     title: 'Bildirim Tercihleri',
                     subtitle: 'Anlık bildirim & e-posta',
@@ -609,7 +697,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 6. YARDIM & DESTEK
+                  // 7. YARDIM & DESTEK
                   _buildDrawerItem(
                     title: 'Yardım & Destek',
                     subtitle: 'SSS ve canlı destek',

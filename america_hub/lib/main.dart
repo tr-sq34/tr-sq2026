@@ -15,7 +15,6 @@ import 'features/auth/domain/repositories/auth_repository.dart';
 import 'features/community/application/community_feed_controller.dart';
 import 'features/community/application/story_controller.dart';
 import 'features/community/application/community_comments_controller.dart';
-import 'features/community/application/profile_posts_controller.dart';
 import 'features/community/application/media_upload_controller.dart';
 import 'features/community/application/community_special_request_controller.dart';
 import 'features/community/data/repositories/mock_community_repository.dart';
@@ -36,7 +35,13 @@ import 'features/marketplace/data/repositories/api_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/cached_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer.dart';
 import 'features/profile/application/profile_controller.dart';
+import 'features/profile/data/repositories/api_profile_repository.dart';
 import 'features/profile/data/repositories/mock_profile_repository.dart';
+import 'features/profile/domain/repositories/profile_repository.dart';
+import 'features/journey/application/journey_controller.dart';
+import 'features/journey/data/repositories/api_journey_repository.dart';
+import 'features/journey/data/repositories/mock_journey_repository.dart';
+import 'features/journey/domain/repositories/journey_repository.dart';
 import 'features/messaging/application/messaging_controller.dart';
 import 'features/community/data/repositories/api_content_moderation_repository.dart';
 import 'features/community/data/repositories/mock_content_moderation_repository.dart';
@@ -50,6 +55,12 @@ import 'features/messaging/domain/repositories/direct_message_repository.dart';
 import 'features/messaging/domain/repositories/message_moderation_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
+import 'features/news/application/news_controller.dart';
+import 'features/news/data/repositories/api_news_comments_repository.dart';
+import 'features/news/data/repositories/api_news_repository.dart';
+import 'features/news/data/repositories/mock_news_comments_repository.dart';
+import 'features/news/data/repositories/mock_news_repository.dart';
+import 'features/news/domain/repositories/news_repository.dart';
 import 'features/notifications/application/notifications_controller.dart';
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
@@ -96,8 +107,12 @@ Future<void> main() async {
     onSessionExpired: () => authController.expireSession(),
   );
 
+  // One mock auth object for the whole app: it is the only thing that knows who
+  // signed in and what they answered during setup, and the mock profile reads
+  // that instead of inventing a member of its own.
+  final mockAuthRepository = MockAuthRepository(cacheStore: cacheStore);
   final AuthRepository authRepository = useMockServices
-      ? MockAuthRepository()
+      ? mockAuthRepository
       : ApiAuthRepository(client: apiClient);
 
   final passkeyService = useMockServices
@@ -151,12 +166,11 @@ Future<void> main() async {
     repository: MockCommunityCommentsRepository(),
   );
 
-  final profilePostsController = ProfilePostsController(
-    archive: mockCommunityRemote,
-  );
-
+  // Shared with the profile repository, which needs it to turn an upload id
+  // back into the file the member picked.
+  final mockMediaUploadRepository = MockMediaUploadRepository();
   final MediaUploadRepository mediaUploadRepository = useMockServices
-      ? MockMediaUploadRepository()
+      ? mockMediaUploadRepository
       : ApiMediaUploadRepository(client: communityApiClient);
   final mediaUploadController = MediaUploadController(
     repository: mediaUploadRepository,
@@ -184,9 +198,19 @@ Future<void> main() async {
     draftStore: cacheStore,
   );
 
-  final profileController = ProfileController(
-    repository: MockProfileRepository(),
-  );
+  final ProfileRepository profileRepository = useMockServices
+      ? MockProfileRepository(
+          auth: mockAuthRepository,
+          cacheStore: cacheStore,
+          media: mockMediaUploadRepository,
+        )
+      : ApiProfileRepository(client: communityApiClient);
+  final profileController = ProfileController(repository: profileRepository);
+
+  final JourneyRepository journeyRepository = useMockServices
+      ? const MockJourneyRepository()
+      : ApiJourneyRepository(client: communityApiClient);
+  final journeyController = JourneyController(repository: journeyRepository);
 
   // One object serves both messaging roles against the gateway, so the inbox
   // list and an open thread always agree about what a conversation is.
@@ -213,6 +237,20 @@ Future<void> main() async {
       ? MockContentModerationRepository()
       : ApiContentModerationRepository(client: communityApiClient);
 
+  // The Haber Merkezi and the home screen's "Amerika'dan Manşetler" strip read
+  // the same repository, so a headline can never drift from the article behind
+  // it. News comments deliberately reuse the feed's comment controller and
+  // sheet: one editor, two surfaces.
+  final NewsRepository newsRepository = useMockServices
+      ? MockNewsRepository()
+      : ApiNewsRepository(client: communityApiClient);
+  final newsController = NewsController(repository: newsRepository);
+  final newsCommentsController = CommunityCommentsController(
+    repository: useMockServices
+        ? MockNewsCommentsRepository(viewer: () => authController.user)
+        : ApiNewsCommentsRepository(client: communityApiClient),
+  );
+
   // Deliberately empty on both sides of the mock flag: no service publishes
   // member notifications yet, so the bell stays at zero until one does.
   final notificationsController = NotificationsController(
@@ -225,12 +263,13 @@ Future<void> main() async {
       communityController: communityController,
       storyController: storyController,
       commentsController: commentsController,
-      profilePostsController: profilePostsController,
       mediaUploadController: mediaUploadController,
+      postCommands: communityCommands,
       specialRequestController: specialRequestController,
       eventsController: eventsController,
       marketplaceController: marketplaceController,
       profileController: profileController,
+      journeyController: journeyController,
       messagingController: messagingController,
       directMessageRepository: directMessageRepository,
       messageModerationRepository: messageModerationRepository,
@@ -238,6 +277,8 @@ Future<void> main() async {
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
       notificationsController: notificationsController,
+      newsController: newsController,
+      newsCommentsController: newsCommentsController,
     ),
   );
 }

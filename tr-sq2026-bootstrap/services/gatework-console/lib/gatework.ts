@@ -18,6 +18,24 @@ export async function delegation(accessToken: string) {
 export const createSystemAccountSchema = z.object({ displayName: z.string().trim().min(2).max(100), handle: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{2,39}$/), reason: z.string().trim().min(5).max(500) });
 export const publishOfficialPostSchema = z.object({ authorId: z.string().uuid(), body: z.string().trim().min(1).max(2200), visibility: z.enum(['public','friends_only']).default('public'), regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(), reason: z.string().trim().min(5).max(500) });
 
+// Haber Merkezi. Same delegation path as an official post - the console never
+// writes to Community with the operator's own token - and the same author rule:
+// news goes out under an active official account, not under a person.
+export const publishNewsArticleSchema = z.object({
+  authorId: z.string().uuid(),
+  title: z.string().trim().min(3).max(200),
+  summary: z.string().trim().min(3).max(500),
+  body: z.string().trim().min(1).max(20000),
+  category: z.enum(['gundem','gocmenlik','ekonomi','yasam','spor','kultur','topluluk']),
+  heroMediaId: z.string().uuid().optional(),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  // Empty means "not on the home screen". The strip is short on purpose, so a
+  // rank is a decision an editor takes rather than a default every piece gets.
+  headlineRank: z.coerce.number().int().min(1).max(20).optional(),
+  commentsEnabled: z.boolean().default(true),
+  reason: z.string().trim().min(5).max(500),
+});
+
 export async function createSystemAccount(raw: unknown) {
   const input = createSystemAccountSchema.parse(raw); const session = await requiredSession(); const idempotencyKey = randomUUID();
   const principalResponse = await identityFetch('/v1/auth/gatework/system-principals', { method: 'POST', body: JSON.stringify({ ...input, idempotencyKey }) }, session.accessToken);
@@ -30,6 +48,12 @@ export async function createSystemAccount(raw: unknown) {
 export async function publishOfficialPost(raw: unknown) {
   const input = publishOfficialPostSchema.parse(raw); const session = await requiredSession(); const token = await delegation(session.accessToken);
   const response = await fetch(`${communityBase()}/v1/internal/gatework/posts`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...input, idempotencyKey: randomUUID() }), cache: 'no-store' });
+  if (!response.ok) throw new Error(`COMMUNITY_${response.status}`);
+  return z.object({ data: z.object({ id: z.string().uuid() }) }).parse(await response.json()).data;
+}
+export async function publishNewsArticle(raw: unknown) {
+  const input = publishNewsArticleSchema.parse(raw); const session = await requiredSession(); const token = await delegation(session.accessToken);
+  const response = await fetch(`${communityBase()}/v1/internal/gatework/news`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ ...input, idempotencyKey: randomUUID() }), cache: 'no-store' });
   if (!response.ok) throw new Error(`COMMUNITY_${response.status}`);
   return z.object({ data: z.object({ id: z.string().uuid() }) }).parse(await response.json()).data;
 }

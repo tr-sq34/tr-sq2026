@@ -4,17 +4,19 @@ import '../features/auth/application/auth_controller.dart';
 import '../features/community/application/community_feed_controller.dart';
 import '../features/community/application/story_controller.dart';
 import '../features/community/application/community_comments_controller.dart';
-import '../features/community/application/profile_posts_controller.dart';
 import '../features/community/application/media_upload_controller.dart';
+import '../features/community/domain/repositories/community_repository.dart';
 import '../features/community/application/community_special_request_controller.dart';
 import '../features/events/application/events_controller.dart';
 import '../features/marketplace/application/marketplace_controller.dart';
 import '../features/profile/application/profile_controller.dart';
+import '../features/journey/application/journey_controller.dart';
 import '../features/messaging/application/messaging_controller.dart';
 import '../features/messaging/domain/repositories/direct_message_repository.dart';
 import '../features/community/domain/repositories/content_moderation_repository.dart';
 import '../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../features/home/application/community_home_controller.dart';
+import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
@@ -28,12 +30,13 @@ class AmericaHubApp extends StatelessWidget {
     required this.communityController,
     required this.storyController,
     required this.commentsController,
-    required this.profilePostsController,
     required this.mediaUploadController,
+    required this.postCommands,
     required this.specialRequestController,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.journeyController,
     required this.messagingController,
     required this.directMessageRepository,
     required this.messageModerationRepository,
@@ -41,18 +44,24 @@ class AmericaHubApp extends StatelessWidget {
     required this.communityHomeController,
     required this.memberCapabilitiesController,
     required this.notificationsController,
+    required this.newsController,
+    required this.newsCommentsController,
   });
 
   final AuthController authController;
   final CommunityFeedController communityController;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
-  final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
+
+  /// Deleting a post from the profile grid goes through the same commands the
+  /// feed uses, so a post removed here disappears everywhere at once.
+  final CommunityPostCommands postCommands;
   final CommunitySpecialRequestController specialRequestController;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final JourneyController journeyController;
   final MessagingController messagingController;
 
   /// A chat thread gets its own controller when it is opened, so what is held
@@ -70,6 +79,11 @@ class AmericaHubApp extends StatelessWidget {
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
   final NotificationsController notificationsController;
+  final NewsController newsController;
+
+  /// News comments use the feed's controller class against a different
+  /// repository: the editor is shared, the threads are not.
+  final CommunityCommentsController newsCommentsController;
 
   @override
   Widget build(BuildContext context) {
@@ -83,12 +97,13 @@ class AmericaHubApp extends StatelessWidget {
         communityController: communityController,
         storyController: storyController,
         commentsController: commentsController,
-        profilePostsController: profilePostsController,
         mediaUploadController: mediaUploadController,
+        postCommands: postCommands,
         specialRequestController: specialRequestController,
         eventsController: eventsController,
         marketplaceController: marketplaceController,
         profileController: profileController,
+        journeyController: journeyController,
         messagingController: messagingController,
         directMessageRepository: directMessageRepository,
         messageModerationRepository: messageModerationRepository,
@@ -96,6 +111,8 @@ class AmericaHubApp extends StatelessWidget {
         communityHomeController: communityHomeController,
         memberCapabilitiesController: memberCapabilitiesController,
         notificationsController: notificationsController,
+        newsController: newsController,
+        newsCommentsController: newsCommentsController,
       ).onGenerateRoute,
     );
   }

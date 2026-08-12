@@ -54,6 +54,32 @@ abstract final class ApiEndpoints {
   // the report before the author can delete it.
   static const communityReports = '/community/reports';
   static const communityMyRestriction = '/community/restrictions/me';
+  // The member's identity inside the app: name and locality come from the
+  // onboarding projection, bio and avatar from what they typed in Community.
+  // Both are served by the community service, which is why they resolve against
+  // ApiConfig.communityBaseUrl rather than the identity URL.
+  static const communityProfileMe = '/community/profiles/me';
+  static String communityProfile(String userId) => '/community/profiles/$userId';
+  static String communityProfilePosts(String userId) =>
+      '/community/profiles/$userId/posts';
+  static String communityPostArchive(String postId) =>
+      '/community/posts/$postId/archive';
+  static const communityJourney = '/community/me/journey';
+  static const communityBadges = '/community/badges';
+  static String communityUserBadges(String userId) =>
+      '/community/users/$userId/badges';
+  static const communityLeaderboard = '/community/leaderboard';
+  // Haber Merkezi ile ana sayfanın manşet şeridi aynı uçtan beslenir; manşet
+  // olan haber, listedeki haberin editör tarafından sıralanmış hâlidir.
+  static const communityNews = '/community/news';
+  static const communityNewsHeadlines = '/community/news/headlines';
+  static String communityNewsArticle(String id) => '/community/news/$id';
+  static String communityNewsReactions(String id) =>
+      '/community/news/$id/reactions';
+  static String communityNewsComments(String id) =>
+      '/community/news/$id/comments';
+  static String communityNewsComment(String commentId) =>
+      '/community/news/comments/$commentId';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

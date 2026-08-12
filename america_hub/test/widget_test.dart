@@ -6,7 +6,6 @@ import 'package:america_hub/features/auth/application/auth_controller.dart';
 import 'package:america_hub/features/auth/data/repositories/mock_auth_repository.dart';
 import 'package:america_hub/features/community/application/community_feed_controller.dart';
 import 'package:america_hub/features/community/application/community_comments_controller.dart';
-import 'package:america_hub/features/community/application/profile_posts_controller.dart';
 import 'package:america_hub/features/community/application/media_upload_controller.dart';
 import 'package:america_hub/features/community/application/community_special_request_controller.dart';
 import 'package:america_hub/features/community/application/story_controller.dart';
@@ -27,8 +26,13 @@ import 'package:america_hub/features/messaging/application/messaging_controller.
 import 'package:america_hub/features/messaging/data/repositories/mock_direct_message_repository.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_message_moderation_repository.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_messaging_repository.dart';
+import 'package:america_hub/features/news/application/news_controller.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_comments_repository.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
+import 'package:america_hub/features/journey/application/journey_controller.dart';
+import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -53,12 +57,13 @@ void main() {
         ),
         storyController: StoryController(repository: communityRepository),
         commentsController: CommunityCommentsController(repository: MockCommunityCommentsRepository()),
-        profilePostsController: ProfilePostsController(archive: communityRepository),
         mediaUploadController: MediaUploadController(repository: MockMediaUploadRepository()),
+        postCommands: communityRepository,
         specialRequestController: CommunitySpecialRequestController(repository: MockCommunitySpecialRequestRepository()),
         eventsController: EventsController(repository: MockEventsRepository()),
         marketplaceController: MarketplaceController(repository: MockMarketplaceRepository()),
         profileController: ProfileController(repository: MockProfileRepository()),
+        journeyController: JourneyController(repository: const MockJourneyRepository()),
         messagingController: MessagingController(repository: MockMessagingRepository()),
         directMessageRepository: MockDirectMessageRepository(),
         messageModerationRepository: MockMessageModerationRepository(),
@@ -72,6 +77,12 @@ void main() {
         ),
         notificationsController: NotificationsController(
           repository: const EmptyNotificationRepository(),
+        ),
+        newsController: NewsController(repository: MockNewsRepository()),
+        // Nobody is signed in on the login screen, so the news comment editor
+        // has no byline to offer — and no business inventing one.
+        newsCommentsController: CommunityCommentsController(
+          repository: MockNewsCommentsRepository(viewer: () => null),
         ),
       ),
     );

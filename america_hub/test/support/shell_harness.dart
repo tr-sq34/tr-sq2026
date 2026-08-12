@@ -7,7 +7,6 @@ import 'package:america_hub/features/community/application/community_comments_co
 import 'package:america_hub/features/community/application/community_feed_controller.dart';
 import 'package:america_hub/features/community/application/community_special_request_controller.dart';
 import 'package:america_hub/features/community/application/media_upload_controller.dart';
-import 'package:america_hub/features/community/application/profile_posts_controller.dart';
 import 'package:america_hub/features/community/application/story_controller.dart';
 import 'package:america_hub/features/community/data/repositories/mock_community_comments_repository.dart';
 import 'package:america_hub/features/community/data/repositories/mock_community_repository.dart';
@@ -21,10 +20,15 @@ import 'package:america_hub/features/home/data/community_home_repository.dart';
 import 'package:america_hub/features/home/presentation/screens/main_layout_screen.dart';
 import 'package:america_hub/features/marketplace/application/marketplace_controller.dart';
 import 'package:america_hub/features/marketplace/data/repositories/mock_marketplace_repository.dart';
+import 'package:america_hub/features/news/application/news_controller.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_comments_repository.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_repository.dart';
 import 'package:america_hub/features/notifications/application/notifications_controller.dart';
 import 'package:america_hub/features/notifications/data/repositories/empty_notification_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
+import 'package:america_hub/features/journey/application/journey_controller.dart';
+import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -95,12 +99,10 @@ Future<AuthController> pumpShell(
         commentsController: CommunityCommentsController(
           repository: MockCommunityCommentsRepository(),
         ),
-        profilePostsController: ProfilePostsController(
-          archive: communityRepository,
-        ),
         mediaUploadController: MediaUploadController(
           repository: MockMediaUploadRepository(),
         ),
+        postCommands: communityRepository,
         specialRequestController: CommunitySpecialRequestController(
           repository: MockCommunitySpecialRequestRepository(),
         ),
@@ -110,6 +112,9 @@ Future<AuthController> pumpShell(
           repository: MockMarketplaceRepository(),
         ),
         profileController: ProfileController(repository: MockProfileRepository()),
+        journeyController: JourneyController(
+          repository: const MockJourneyRepository(),
+        ),
         homeController: CommunityHomeController(
           _StubHomeRepository(apiClient),
         ),
@@ -117,6 +122,12 @@ Future<AuthController> pumpShell(
         authController: authController,
         notificationsController: NotificationsController(
           repository: const EmptyNotificationRepository(),
+        ),
+        newsController: NewsController(repository: MockNewsRepository()),
+        newsCommentsController: CommunityCommentsController(
+          repository: MockNewsCommentsRepository(
+            viewer: () => authController.user,
+          ),
         ),
         onSignOut: () async {},
       ),

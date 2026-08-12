@@ -10,6 +10,7 @@ import { createDatabasePool } from './database.js';
 import { closeServiceBus, isMessagingProjectionConfigured, sendMessagingProjectionEvent } from './infrastructure/azureServiceBus.js';
 import { generateMediaUploadSasUrl, generateMediaReadSasUrl, headMediaBlob } from './infrastructure/azureBlob.js';
 import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js';
+import { advanceProgress, awardBadge, recomputeScore, reporterTrust, touchStreak } from './journey.js';
 
 const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Missing ${key}`); return value; };
 const db = createDatabasePool();
@@ -295,7 +296,7 @@ app.get('/v1/community/home/summary', async (request, reply) => {
     const [profile, connections, localPosts, stories] = await Promise.all([
       db.query<{ city: string; region_code: string; interests: string[] }>('SELECT city,region_code,interests FROM community_profile_projection WHERE user_id=$1', [userId]),
       db.query<{ count: string }>('SELECT count(*) FROM relationship_projection WHERE viewer_id=$1 AND active', [userId]),
-      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.moderation_state='active' AND p.region_code=v.region_code`, [userId]),
+      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND p.region_code=v.region_code`, [userId]),
       db.query<{ count: string }>(`SELECT count(*) FROM stories s JOIN relationship_projection r ON r.subject_id=s.author_id WHERE r.viewer_id=$1 AND r.active AND s.expires_at>now()`, [userId]),
     ]);
     const locality = profile.rows[0];
@@ -350,7 +351,7 @@ app.get('/v1/community/me/capabilities', async (request, reply) => {
 app.get('/v1/community/feed', async (request, reply) => {
   try {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
-    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
     if (input.mode === 'following') where += ` AND EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.active)`;
     if (input.mode === 'nearby') where += ` AND p.location_cell IS NOT NULL AND ST_DWithin(p.location_cell,(SELECT approximate_cell FROM viewer_location_projection WHERE user_id=$1),50000)`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
@@ -365,6 +366,14 @@ app.put('/v1/community/posts/:id/reactions/:kind', async (request, reply) => {
   try { const userId = await viewer(request.headers); const postId = z.string().uuid().parse((request.params as { id: string }).id); const kind = z.enum(['like','save']).parse((request.params as { kind: string }).kind); const input = interactionBody.parse(request.body);
     if (input.enabled) await db.query('INSERT INTO post_reactions(post_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL) ON CONFLICT DO NOTHING', [postId,userId,kind]);
     else await db.query('DELETE FROM post_reactions WHERE post_id=$1 AND actor_id=$2 AND kind=$3', [postId,userId,kind]);
+    // Gozcu wants five *different* posts, so the counter is a DISTINCT count and
+    // not a tally of taps. Un-reacting therefore walks the progress back, which
+    // is the honest reading of "five posts you interacted with".
+    if (input.enabled) void grantInBackground('reaction', async (journey) => {
+      await touchStreak(journey, userId);
+      const seen = await journey.query<{ count: string }>('SELECT count(DISTINCT post_id) FROM post_reactions WHERE actor_id=$1', [userId]);
+      await advanceProgress(journey, userId, 'observer', Number(seen.rows[0]!.count), { absolute: true });
+    });
     return reply.code(204).send();
   } catch { return reply.code(400).send({ error: { code:'INTERACTION_FAILED', message:'Etkileşim kaydedilemedi.' } }); }
 });
@@ -386,7 +395,17 @@ app.post('/v1/community/posts', async (request, reply) => {
     if (input.marketplaceListingId) { const listing = await client.query('SELECT 1 FROM marketplace_listing_projection WHERE listing_id=$1 AND owner_id=$2 AND status=\'active\'', [input.marketplaceListingId,userId]); if (!listing.rows[0]) return reply.code(403).send({error:{code:'LISTING_NOT_AVAILABLE',message:'Aktif ilan bulunamadı.'}}); }
     const kind = input.poll ? 'poll' : input.marketplaceListingId ? 'marketplace_listing' : 'standard'; const result = await client.query<{id:string}>('INSERT INTO community_posts(author_id,kind,visibility,body,location_label,region_code,marketplace_listing_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',[userId,kind,input.visibility,input.body,input.locationLabel??null,input.locationRegionCode?.toUpperCase()??null,input.marketplaceListingId??null]); const id=result.rows[0]!.id;
     if(input.poll){const poll=await client.query<{post_id:string}>('INSERT INTO post_polls(post_id,selection_mode,closes_at) VALUES($1,$2,$3) RETURNING post_id',[id,input.poll.selectionMode,input.poll.closesAt??null]); for(const [ordinal,label] of input.poll.options.entries()) await client.query('INSERT INTO post_poll_options(post_id,ordinal,label) VALUES($1,$2,$3)',[poll.rows[0]!.post_id,ordinal,label]);}
-    await client.query('COMMIT'); return reply.code(201).send({data:{id}});
+    await client.query('COMMIT');
+    // Awarded after the commit, in its own transaction: the post is the member's
+    // work and it is already saved. Kirk Ambar counts from COUNT(*) rather than
+    // adding one, so a retried request cannot inflate it.
+    void grantInBackground('post', async (journey) => {
+      await touchStreak(journey, userId);
+      await awardBadge(journey, userId, 'welcome_neighbor');
+      const total = await journey.query<{ count: string }>("SELECT count(*) FROM community_posts WHERE author_id=$1 AND deleted_at IS NULL", [userId]);
+      await advanceProgress(journey, userId, 'content_machine', Number(total.rows[0]!.count), { absolute: true });
+    });
+    return reply.code(201).send({data:{id}});
   } catch(e){await client.query('ROLLBACK');throw e;} finally{client.release();} } catch { return reply.code(400).send({error:{code:'POST_CREATE_FAILED',message:'Paylaşım oluşturulamadı.'}}); }
 });
 app.post('/v1/community/posts/:postId/poll/votes', async (request, reply) => {
@@ -456,7 +475,9 @@ app.get('/v1/community/me/story-audience-contacts', async (request, reply) => {
     return reply.code(400).send({ error: { code: 'STORY_AUDIENCE_CONTACTS_UNAVAILABLE', message: 'Story gizlilik kişileri yüklenemedi.' } });
   }
 });
-app.post('/v1/community/stories',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const input=storyBody.parse(request.body);await client.query('BEGIN');const media=await client.query('SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status=\'ready\' FOR KEY SHARE',[input.mediaId,userId]);if(!media.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'MEDIA_NOT_READY',message:'Medya hazır değil.'}});}const r=await client.query<{id:string}>('INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) SELECT $1,$2,$3,p.region_code,now()+($4::text||\' hours\')::interval FROM community_profile_projection p WHERE p.user_id=$1 RETURNING id',[userId,input.mediaId,input.visibility,input.ttlHours]);if(!r.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'PROFILE_REQUIRED',message:'Story paylaşmadan önce profil konumunu tamamlayın.'}});}if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[r.rows[0].id,input.excludedUserIds]);await client.query('COMMIT');return reply.code(201).send({data:r.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_CREATE_FAILED',message:'Story oluşturulamadı.'}});}finally{client.release();}});
+app.post('/v1/community/stories',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const input=storyBody.parse(request.body);await client.query('BEGIN');const media=await client.query('SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status=\'ready\' FOR KEY SHARE',[input.mediaId,userId]);if(!media.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'MEDIA_NOT_READY',message:'Medya hazır değil.'}});}const r=await client.query<{id:string}>('INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) SELECT $1,$2,$3,p.region_code,now()+($4::text||\' hours\')::interval FROM community_profile_projection p WHERE p.user_id=$1 RETURNING id',[userId,input.mediaId,input.visibility,input.ttlHours]);if(!r.rows[0]){await client.query('ROLLBACK');return reply.code(400).send({error:{code:'PROFILE_REQUIRED',message:'Story paylaşmadan önce profil konumunu tamamlayın.'}});}if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[r.rows[0].id,input.excludedUserIds]);await client.query('COMMIT');
+  void grantInBackground('story', async (journey) => { await touchStreak(journey, userId); await awardBadge(journey, userId, 'first_spark'); });
+  return reply.code(201).send({data:r.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_CREATE_FAILED',message:'Story oluşturulamadı.'}});}finally{client.release();}});
 // Audience exclusions are an author-controlled deny list. They are checked by
 // every Story read/view/like authorization path, never only by the client UI.
 app.put('/v1/community/stories/:id/audience/exclusions',{config:{rateLimit:{max:12,timeWindow:'1 minute'}}},async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const storyId=z.string().uuid().parse((request.params as {id:string}).id);const input=storyAudienceExclusionsBody.parse(request.body);await client.query('BEGIN');const story=await client.query('SELECT 1 FROM stories WHERE id=$1 AND author_id=$2 AND expires_at>now() FOR UPDATE',[storyId,userId]);if(!story.rows[0]){await client.query('ROLLBACK');return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});}await client.query('DELETE FROM story_audience_exclusions WHERE story_id=$1',[storyId]);if(input.excludedUserIds.length)await client.query('INSERT INTO story_audience_exclusions(story_id,excluded_user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[storyId,input.excludedUserIds]);await client.query('COMMIT');return reply.code(204).send();}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'STORY_AUDIENCE_UPDATE_FAILED',message:'Story görünürlüğü güncellenemedi.'}});}finally{client.release();}});
@@ -466,7 +487,11 @@ app.get('/v1/community/me/story-highlights',async(request,reply)=>{try{const use
 app.post('/v1/community/stories/:id/views',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});await db.query('INSERT INTO story_views(story_id,viewer_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.put('/v1/community/stories/:id/likes',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=interactionBody.parse(request.body);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});if(input.enabled)await db.query('INSERT INTO story_likes(story_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);else await db.query('DELETE FROM story_likes WHERE story_id=$1 AND actor_id=$2',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.get('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {id:string}).id);const rows=await db.query('SELECT id,author_id,parent_id,body,created_at FROM community_comments WHERE post_id=$1 AND deleted_at IS NULL AND moderation_state=\'active\' ORDER BY created_at DESC LIMIT 50',[postId]);return{data:rows.rows};}catch{return reply.code(401).send({error:{code:'COMMENTS_FAILED',message:'Yorumlar yüklenemedi.'}});}});
-app.post('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const postId=z.string().uuid().parse((request.params as {id:string}).id);const input=commentBody.parse(request.body);const post=await db.query('SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL AND comments_enabled',[postId]);if(!post.rows[0])return reply.code(403).send({error:{code:'COMMENTS_DISABLED',message:'Yorumlar kapalı.'}});const result=await db.query('INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',[postId,userId,input.parentId??null,input.body]);return reply.code(201).send({data:result.rows[0]});}catch{return reply.code(400).send({error:{code:'COMMENT_CREATE_FAILED',message:'Yorum gönderilemedi.'}});}});
+app.post('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const postId=z.string().uuid().parse((request.params as {id:string}).id);const input=commentBody.parse(request.body);const post=await db.query('SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL AND comments_enabled',[postId]);if(!post.rows[0])return reply.code(403).send({error:{code:'COMMENTS_DISABLED',message:'Yorumlar kapalı.'}});const result=await db.query('INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',[postId,userId,input.parentId??null,input.body]);
+    // Ses Ver: the first comment. Everything else about commenting is counted
+    // elsewhere; this is the one badge the act itself earns.
+    void grantInBackground('comment', async (journey) => { await touchStreak(journey, userId); await awardBadge(journey, userId, 'vocalist'); });
+    return reply.code(201).send({data:result.rows[0]});}catch{return reply.code(400).send({error:{code:'COMMENT_CREATE_FAILED',message:'Yorum gönderilemedi.'}});}});
 app.delete('/v1/community/comments/:id',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);await db.query('UPDATE community_comments SET deleted_at=now(),moderation_state=\'removed\' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
@@ -653,11 +678,15 @@ app.post('/v1/community/reports', { config: { rateLimit: { max: 30, timeWindow: 
 
     const priority = URGENT_CATEGORIES.has(input.category) ? 'urgent' : 'standard';
     const slaHours = priority === 'urgent' ? URGENT_SLA_HOURS : STANDARD_SLA_HOURS;
+    // Frozen at report time, for the same reason due_at is: an auditor reading
+    // this row a year later has to see the standing the reporter had when they
+    // filed, not the standing they have now.
+    const trust = await reporterTrust(client, reporterId);
     const inserted = await client.query<{ id: string; created_at: Date; due_at: Date }>(
-      `INSERT INTO content_reports(reporter_id,reported_user_id,target_type,target_id,category,note,evidence,priority,due_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,now()+($9::text||' hours')::interval)
+      `INSERT INTO content_reports(reporter_id,reported_user_id,target_type,target_id,category,note,evidence,priority,due_at,reporter_trust)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,now()+($9::text||' hours')::interval,$10)
        RETURNING id,created_at,due_at`,
-      [reporterId, captured.authorId, input.targetType, input.targetId, input.category, input.note ?? null, JSON.stringify(captured.evidence), priority, String(slaHours)],
+      [reporterId, captured.authorId, input.targetType, input.targetId, input.category, input.note ?? null, JSON.stringify(captured.evidence), priority, String(slaHours), trust],
     );
     await client.query('COMMIT');
     const report = inserted.rows[0]!;
@@ -719,7 +748,7 @@ type ContentReportRow = {
   target_type: 'post' | 'comment' | 'story'; target_id: string; category: string; note: string | null;
   evidence: Record<string, unknown>; priority: 'urgent' | 'standard'; status: string; due_at: Date;
   assigned_to: string | null; resolution: string | null; resolved_by: string | null; resolved_at: Date | null;
-  created_at: Date; active_restriction: string | null;
+  created_at: Date; active_restriction: string | null; reporter_trust: 'standard' | 'high' | null;
 };
 
 const toContentReportDto = (row: ContentReportRow) => ({
@@ -740,6 +769,9 @@ const toContentReportDto = (row: ContentReportRow) => ({
   reportedUserId: row.reported_user_id,
   reportedUserName: row.reported_name,
   activeRestriction: row.active_restriction,
+  // Drawn as a "Yüksek Güvenilirlik" chip in Gatework. It is a hint about who
+  // filed the report, never a verdict about the content.
+  reporterTrust: row.reporter_trust ?? 'standard',
   assignedTo: row.assigned_to,
   resolution: row.resolution,
   resolvedBy: row.resolved_by,
@@ -757,7 +789,14 @@ app.get('/v1/internal/gatework/community/reports', async (request, reply) => {
         WHERE ($1::boolean OR r.status=$2)
           AND (NOT $1::boolean OR r.status IN ('open','in_review'))
           AND ($3::text IS NULL OR r.category=$3)
-        ORDER BY (r.status IN ('open','in_review')) DESC, r.due_at ASC, r.id ASC
+        ORDER BY (r.status IN ('open','in_review')) DESC,
+                 -- Overdue outranks trust. A trusted reporter's report jumps the
+                 -- queue among reports still inside their SLA; it must never
+                 -- push a late one further back, or the SLA stops meaning
+                 -- anything for everyone without badges.
+                 (r.due_at<now()) DESC,
+                 (r.reporter_trust='high') DESC,
+                 r.due_at ASC, r.id ASC
         LIMIT $4 OFFSET $5`,
       [unresolved, unresolved ? 'open' : status, category ?? null, limit, offset],
     );
@@ -845,8 +884,8 @@ app.post('/v1/internal/gatework/community/reports/:id/decision', async (request,
     );
     if (prior.rows[0]) { await client.query('COMMIT'); return { data: { id: prior.rows[0].result_id, duplicate: true } }; }
 
-    const report = await client.query<{ id: string; status: string; target_type: 'post' | 'comment' | 'story'; target_id: string; reported_user_id: string }>(
-      'SELECT id,status,target_type,target_id,reported_user_id FROM content_reports WHERE id=$1 FOR UPDATE',
+    const report = await client.query<{ id: string; status: string; target_type: 'post' | 'comment' | 'story'; target_id: string; reported_user_id: string; reporter_id: string }>(
+      'SELECT id,status,target_type,target_id,reported_user_id,reporter_id FROM content_reports WHERE id=$1 FOR UPDATE',
       [id],
     );
     if (!report.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'REPORT_NOT_FOUND', message: 'Şikâyet bulunamadı.' } }); }
@@ -901,6 +940,14 @@ app.post('/v1/internal/gatework/community/reports/:id/decision', async (request,
       requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
     });
     await client.query('COMMIT');
+    // Mahalle Bekcisi is "reported ten things that turned out to be real", so it
+    // is earned here - at the moment a moderator agrees - and not when the
+    // report was filed. Counting actioned reports rather than adding one keeps a
+    // reversed decision from leaving the member with credit for it.
+    if (input.action !== 'dismiss') void grantInBackground('moderation', async (journey) => {
+      const upheld = await journey.query<{ count: string }>("SELECT count(*) FROM content_reports WHERE reporter_id=$1 AND status='actioned'", [row.reporter_id]);
+      await advanceProgress(journey, row.reporter_id, 'neighborhood_sentinel', Number(upheld.rows[0]!.count), { absolute: true });
+    });
     return { data: { id, status: input.action === 'dismiss' ? 'dismissed' : 'actioned', duplicate: false } };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -960,6 +1007,787 @@ app.delete('/v1/internal/gatework/community/restrictions/:userId', async (reques
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'LIFT_FAILED', message: 'Kısıtlama kaldırılamadı.' } });
+  }
+});
+
+// --- Member profile -----------------------------------------------------
+// The app's profile screen was fed entirely by MockProfileRepository: a
+// hardcoded name, a hardcoded origin city, three invented badges and two
+// invented restaurants. These endpoints are what replace it. Community owns the
+// profile because Community owns the social graph the profile is read through;
+// the onboarding answers arrive as a projection and are never edited here, so
+// there is exactly one writer for each fact.
+
+const profilePatchBody = z.object({
+  bio: z.string().trim().max(280).nullable().optional(),
+  avatarMediaId: z.string().uuid().nullable().optional(),
+  visibility: z.enum(['public', 'friends_only']).optional(),
+  showcasedBadges: z.array(z.string().regex(/^[a-z0-9_]{3,60}$/)).max(3).optional(),
+});
+const profilePostsQuery = z.object({
+  state: z.enum(['active', 'archived']).default('active'),
+  cursor: z.string().max(128).optional(),
+  limit: z.coerce.number().int().min(1).max(60).default(24),
+});
+const leaderboardQuery = z.object({
+  scope: z.enum(['city', 'region', 'global']).default('city'),
+  window: z.enum(['week', 'all']).default('week'),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+/// A badge is only ever granted as a side effect of something the member did,
+/// so a failure to grant it must never fail that action. Wrapped in its own
+/// transaction and swallowed on error: losing a badge to a deadlock is a bug
+/// worth logging, not a reason a post fails to publish.
+async function grantInBackground(label: string, work: (client: pg.PoolClient) => Promise<void>) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await work(client);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    app.log.warn({ err: error, label }, 'Journey award skipped');
+  } finally {
+    client.release();
+  }
+}
+
+/// Whether [viewerId] may see the full profile of [ownerId].
+///
+/// Decided here, on the server. The client draws a lock; it does not get the
+/// data and choose to hide it. A block in either direction closes the profile
+/// regardless of visibility - the point of a block is not to be seen.
+async function profileAccess(viewerId: string, ownerId: string) {
+  if (viewerId === ownerId) return { self: true, blocked: false, full: true };
+  const row = await db.query<{ blocked: boolean; friend: boolean; visibility: string }>(
+    `SELECT
+       EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=$2) OR (b.blocker_id=$2 AND b.blocked_id=$1)) blocked,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.relationship='friend' AND r.active) friend,
+       COALESCE((SELECT visibility FROM member_profiles WHERE user_id=$2),'friends_only') visibility`,
+    [viewerId, ownerId],
+  );
+  const access = row.rows[0]!;
+  return { self: false, blocked: access.blocked, full: !access.blocked && (access.visibility === 'public' || access.friend) };
+}
+
+type ProfileRow = {
+  user_id: string; display_name: string; city: string | null; region_code: string | null; interests: string[];
+  born_in_us: boolean; arrived_month: number | null; arrived_year: number | null; origin_country: string | null;
+  origin_city: string | null; primary_intent: string | null; bio: string | null; visibility: string | null;
+  showcased_badges: string[] | null; avatar_url: string | null; identity_verified: boolean;
+  post_count: string; friend_count: string; points: number | null; level: number | null; badge_count: number | null;
+  streak_days: number | null; level_title: string | null; next_level_points: number | null;
+};
+
+const PROFILE_SELECT = `
+  SELECT p.user_id,p.display_name,p.city,p.region_code,p.interests,
+         p.born_in_us,p.arrived_month,p.arrived_year,p.origin_country,p.origin_city,p.primary_intent,
+         mp.bio,mp.visibility,mp.showcased_badges,
+         (SELECT m.safe_url FROM media_assets m WHERE m.id=mp.avatar_media_id AND m.status='ready') avatar_url,
+         COALESCE(mc.identity_verified,false) identity_verified,
+         (SELECT count(*) FROM community_posts cp WHERE cp.author_id=p.user_id AND cp.deleted_at IS NULL AND cp.archived_at IS NULL AND cp.moderation_state='active') post_count,
+         (SELECT count(*) FROM relationship_projection r WHERE r.viewer_id=p.user_id AND r.relationship='friend' AND r.active) friend_count,
+         ms.points,ms.level,ms.badge_count,ms.streak_days,
+         (SELECT l.title FROM journey_levels l WHERE l.level=COALESCE(ms.level,1)) level_title,
+         (SELECT min(l.min_points) FROM journey_levels l WHERE l.min_points>COALESCE(ms.points,0)) next_level_points
+    FROM community_profile_projection p
+    LEFT JOIN member_profiles mp ON mp.user_id=p.user_id
+    LEFT JOIN member_capabilities mc ON mc.user_id=p.user_id
+    LEFT JOIN member_scores ms ON ms.user_id=p.user_id`;
+
+async function toProfileDto(row: ProfileRow, access: { self: boolean; full: boolean }) {
+  const showcased = row.showcased_badges ?? [];
+  const badges = showcased.length
+    ? await db.query<{ code: string; title: string; icon: string; tier: string }>(
+        'SELECT code,title,icon,tier FROM badge_definitions WHERE code=ANY($1::text[])',
+        [showcased],
+      )
+    : { rows: [] as { code: string; title: string; icon: string; tier: string }[] };
+  return {
+    id: row.user_id,
+    displayName: row.display_name,
+    city: row.city,
+    regionCode: row.region_code,
+    // Everything below the fold is withheld from a viewer the member has not
+    // let in. The name and city stay so a locked profile is still identifiable
+    // enough to send a friend request to.
+    interests: access.full ? row.interests : [],
+    bornInUs: row.born_in_us,
+    arrivedMonth: access.full ? row.arrived_month : null,
+    arrivedYear: access.full ? row.arrived_year : null,
+    originCountry: access.full ? row.origin_country : null,
+    originCity: access.full ? row.origin_city : null,
+    primaryIntent: access.full ? row.primary_intent : null,
+    bio: access.full ? row.bio ?? '' : '',
+    avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
+    visibility: row.visibility ?? 'friends_only',
+    identityVerified: row.identity_verified,
+    showcasedBadges: badges.rows.map((badge) => ({ code: badge.code, title: badge.title, icon: badge.icon, tier: badge.tier })),
+    counts: {
+      posts: Number(row.post_count),
+      friends: Number(row.friend_count),
+      badges: row.badge_count ?? 0,
+    },
+    journey: {
+      points: row.points ?? 0,
+      level: row.level ?? 1,
+      levelTitle: row.level_title ?? 'Fresh off the Boat',
+      nextLevelPoints: row.next_level_points,
+      streakDays: row.streak_days ?? 0,
+    },
+    isSelf: access.self,
+    canViewFullProfile: access.full,
+  };
+}
+
+app.get('/v1/community/profiles/me', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const row = await db.query<ProfileRow>(`${PROFILE_SELECT} WHERE p.user_id=$1`, [userId]);
+    if (!row.rows[0]) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı. Önce kurulumu tamamlayın.' } });
+    return { data: await toProfileDto(row.rows[0], { self: true, full: true }) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROFILE_UNAVAILABLE', message: 'Profil yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/profiles/:userId', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const ownerId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const access = await profileAccess(viewerId, ownerId);
+    // A blocked profile answers 404, not 403: confirming the account exists
+    // would make the block a discovery tool.
+    if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    const row = await db.query<ProfileRow>(`${PROFILE_SELECT} WHERE p.user_id=$1`, [ownerId]);
+    if (!row.rows[0]) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    return { data: await toProfileDto(row.rows[0], access) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROFILE_UNAVAILABLE', message: 'Profil yüklenemedi.' } });
+  }
+});
+
+// Origin city and arrival date are deliberately not editable here. They are
+// onboarding answers owned by identity, and the profile screen sends the member
+// to PUT /v1/auth/onboarding to change them; accepting them in both places would
+// give one fact two writers and let a replayed projection event silently undo
+// what the member just typed.
+app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const userId = await viewer(request.headers);
+    const input = profilePatchBody.parse(request.body);
+    await client.query('BEGIN');
+
+    if (input.avatarMediaId) {
+      // The avatar must be the member's own, fully scanned image. Anything else
+      // would let a profile picture point at a blob that never passed the
+      // quarantine the rest of the media pipeline enforces.
+      const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status='ready' AND kind='image'", [input.avatarMediaId, userId]);
+      if (!media.rows[0]) { await client.query('ROLLBACK'); return reply.code(400).send({ error: { code: 'AVATAR_NOT_READY', message: 'Profil fotoğrafı henüz hazır değil.' } }); }
+    }
+    if (input.showcasedBadges?.length) {
+      const owned = await client.query('SELECT badge_code FROM member_badges WHERE user_id=$1 AND badge_code=ANY($2::text[])', [userId, input.showcasedBadges]);
+      if (owned.rows.length !== new Set(input.showcasedBadges).size) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: { code: 'BADGE_NOT_EARNED', message: 'Vitrine yalnızca kazandığın rozetleri koyabilirsin.' } });
+      }
+    }
+
+    await client.query(
+      `INSERT INTO member_profiles(user_id,bio,avatar_media_id,visibility,showcased_badges)
+       VALUES($1,$2,$3,COALESCE($4,'friends_only'),COALESCE($5::text[],'{}'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         bio=CASE WHEN $6::boolean THEN $2 ELSE member_profiles.bio END,
+         avatar_media_id=CASE WHEN $7::boolean THEN $3 ELSE member_profiles.avatar_media_id END,
+         visibility=COALESCE($4,member_profiles.visibility),
+         showcased_badges=COALESCE($5::text[],member_profiles.showcased_badges),
+         updated_at=now()`,
+      [
+        userId,
+        input.bio ?? null,
+        input.avatarMediaId ?? null,
+        input.visibility ?? null,
+        input.showcasedBadges ?? null,
+        // Distinguishes "clear it" from "leave it alone": an absent key keeps
+        // the stored value, an explicit null wipes it.
+        Object.prototype.hasOwnProperty.call(request.body ?? {}, 'bio'),
+        Object.prototype.hasOwnProperty.call(request.body ?? {}, 'avatarMediaId'),
+      ],
+    );
+
+    // Profil Sampiyonu: photo, bio and verification all present. Checked here
+    // because this is the only place the first two can become true.
+    const complete = await client.query<{ done: boolean }>(
+      `SELECT (mp.bio IS NOT NULL AND char_length(trim(mp.bio))>0 AND mp.avatar_media_id IS NOT NULL AND COALESCE(mc.identity_verified,false)) done
+         FROM member_profiles mp LEFT JOIN member_capabilities mc ON mc.user_id=mp.user_id WHERE mp.user_id=$1`,
+      [userId],
+    );
+    if (complete.rows[0]?.done) await awardBadge(client, userId, 'profile_champion');
+    await client.query('COMMIT');
+
+    const row = await db.query<ProfileRow>(`${PROFILE_SELECT} WHERE p.user_id=$1`, [userId]);
+    if (!row.rows[0]) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    return { data: await toProfileDto(row.rows[0], { self: true, full: true }) };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROFILE_UPDATE_FAILED', message: 'Profil güncellenemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+// The grid behind the "Paylasimlar" tab. Archived posts are visible to their
+// author and to nobody else, which is the difference between archiving and
+// deleting: the member keeps them, the app stops showing them.
+app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const ownerId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const input = profilePostsQuery.parse(request.query);
+    const access = await profileAccess(viewerId, ownerId);
+    if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    if (input.state === 'archived' && !access.self) return reply.code(403).send({ error: { code: 'ARCHIVE_IS_PRIVATE', message: 'Arşiv yalnızca sahibine açıktır.' } });
+    if (!access.full) return { data: [], meta: { nextCursor: null, locked: true } };
+
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [ownerId, viewerId];
+    let where = `p.author_id=$1 AND p.deleted_at IS NULL AND p.moderation_state='active' AND p.archived_at IS ${input.state === 'archived' ? 'NOT NULL' : 'NULL'}`;
+    if (!access.self) where += " AND p.visibility='public'";
+    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    params.push(input.limit + 1);
+    const rows = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; visibility: string; likes: string; comments: string; is_liked: boolean; thumbnail_url: string | null; safe_url: string | null }>(
+      `SELECT p.id,p.created_at,p.body,p.location_label,p.visibility,
+              (SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,
+              (SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,
+              EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$2 AND x.kind='like') is_liked,
+              (SELECT m.thumbnail_url FROM post_media_refs r JOIN media_assets m ON m.id=r.media_id WHERE r.post_id=p.id AND m.status='ready' ORDER BY r.ordinal LIMIT 1) thumbnail_url,
+              (SELECT m.safe_url FROM post_media_refs r JOIN media_assets m ON m.id=r.media_id WHERE r.post_id=p.id AND m.status='ready' ORDER BY r.ordinal LIMIT 1) safe_url
+         FROM community_posts p
+        WHERE ${where}
+        ORDER BY p.created_at DESC,p.id DESC
+        LIMIT $${params.length}`,
+      params,
+    );
+    const page = rows.rows.slice(0, input.limit);
+    const data = await Promise.all(page.map(async (post) => ({
+      id: post.id,
+      message: post.body,
+      createdAt: post.created_at.toISOString(),
+      location: post.location_label ?? '',
+      visibility: post.visibility,
+      likes: Number(post.likes),
+      comments: Number(post.comments),
+      isLiked: post.is_liked,
+      archived: input.state === 'archived',
+      thumbnailUrl: post.thumbnail_url ? await mediaObjectUrl(post.thumbnail_url) : post.safe_url ? await mediaObjectUrl(post.safe_url) : null,
+    })));
+    return { data, meta: { nextCursor: rows.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null, locked: false } };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({ error: { code: 'PROFILE_POSTS_UNAVAILABLE', message: 'Paylaşımlar yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/posts/:id/archive', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const updated = await db.query('UPDATE community_posts SET archived_at=now() WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL AND archived_at IS NULL', [id, userId]);
+    if (!updated.rowCount) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'ARCHIVE_FAILED', message: 'Paylaşım arşivlenemedi.' } });
+  }
+});
+
+app.delete('/v1/community/posts/:id/archive', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const updated = await db.query('UPDATE community_posts SET archived_at=NULL WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL AND archived_at IS NOT NULL', [id, userId]);
+    if (!updated.rowCount) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'UNARCHIVE_FAILED', message: 'Paylaşım geri alınamadı.' } });
+  }
+});
+
+// --- Gurbet Yolculugu ---------------------------------------------------
+
+/// The catalogue, annotated for one member: which badges they hold, how far
+/// along they are on the ones they do not, and how rare each is.
+///
+/// A secret badge that has not been earned yet is returned without its title or
+/// description. Sending them and asking the client to blur would put the answer
+/// in the response body of a hidden achievement.
+app.get('/v1/community/badges', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query<{
+      code: string; title: string; description: string; icon: string; category: string; tier: string;
+      points: number; is_secret: boolean; earned_at: Date | null; current: number | null; target: number | null; holders: string; members: string;
+    }>(
+      `SELECT d.code,d.title,d.description,d.icon,d.category,d.tier,d.points,d.is_secret,
+              b.earned_at,pr.current,pr.target,
+              (SELECT count(*) FROM member_badges mb WHERE mb.badge_code=d.code) holders,
+              (SELECT count(*) FROM community_profile_projection) members
+         FROM badge_definitions d
+         LEFT JOIN member_badges b ON b.badge_code=d.code AND b.user_id=$1
+         LEFT JOIN member_badge_progress pr ON pr.badge_code=d.code AND pr.user_id=$1
+        ORDER BY d.sort_order,d.code`,
+      [userId],
+    );
+    return {
+      data: rows.rows.map((badge) => {
+        const earned = badge.earned_at !== null;
+        const hidden = badge.is_secret && !earned;
+        const members = Math.max(1, Number(badge.members));
+        return {
+          code: badge.code,
+          title: hidden ? 'Gizli rozet' : badge.title,
+          description: hidden ? 'Kriteri açıklanmıyor. Kazandığında burada belirecek.' : badge.description,
+          icon: hidden ? 'lock' : badge.icon,
+          category: badge.category,
+          tier: badge.tier,
+          points: badge.points,
+          isSecret: badge.is_secret,
+          earned,
+          earnedAt: badge.earned_at?.toISOString() ?? null,
+          current: hidden ? 0 : badge.current ?? 0,
+          target: hidden ? null : badge.target,
+          // "Uyelerin %3'u aldi" - the number that makes a badge worth chasing.
+          rarityPercent: Math.round((Number(badge.holders) / members) * 1000) / 10,
+        };
+      }),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BADGES_UNAVAILABLE', message: 'Rozetler yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/users/:userId/badges', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const ownerId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const access = await profileAccess(viewerId, ownerId);
+    if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    const rows = await db.query<{ code: string; title: string; description: string; icon: string; tier: string; points: number; earned_at: Date }>(
+      `SELECT d.code,d.title,d.description,d.icon,d.tier,d.points,b.earned_at
+         FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code
+        WHERE b.user_id=$1 ORDER BY d.points DESC,b.earned_at DESC`,
+      [ownerId],
+    );
+    return { data: rows.rows.map((badge) => ({ code: badge.code, title: badge.title, description: badge.description, icon: badge.icon, tier: badge.tier, points: badge.points, earnedAt: badge.earned_at.toISOString() })) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BADGES_UNAVAILABLE', message: 'Rozetler yüklenemedi.' } });
+  }
+});
+
+/// The journey screen: where the member stands, and what the next task is.
+app.get('/v1/community/me/journey', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const [score, stages, tasks] = await Promise.all([
+      db.query<{ points: number; level: number; badge_count: number; streak_days: number; streak_best: number; perks_frozen_until: Date | null; level_title: string; next_level: number | null; next_points: number | null; next_title: string | null }>(
+        `SELECT COALESCE(s.points,0) points,COALESCE(s.level,1) level,COALESCE(s.badge_count,0) badge_count,
+                COALESCE(s.streak_days,0) streak_days,COALESCE(s.streak_best,0) streak_best,s.perks_frozen_until,
+                (SELECT l.title FROM journey_levels l WHERE l.level=COALESCE(s.level,1)) level_title,
+                (SELECT l.level FROM journey_levels l WHERE l.min_points>COALESCE(s.points,0) ORDER BY l.min_points LIMIT 1) next_level,
+                (SELECT l.min_points FROM journey_levels l WHERE l.min_points>COALESCE(s.points,0) ORDER BY l.min_points LIMIT 1) next_points,
+                (SELECT l.title FROM journey_levels l WHERE l.min_points>COALESCE(s.points,0) ORDER BY l.min_points LIMIT 1) next_title
+           FROM (SELECT 1) one LEFT JOIN member_scores s ON s.user_id=$1`,
+        [userId],
+      ),
+      db.query<{ ordinal: number; title: string; level_title: string; reward: string }>('SELECT ordinal,title,level_title,reward FROM journey_stages ORDER BY ordinal'),
+      db.query<{ code: string; stage_ordinal: number; ordinal: number; title: string; description: string; points: number; badge_code: string; earned_at: Date | null; current: number | null; target: number | null }>(
+        `SELECT t.code,t.stage_ordinal,t.ordinal,t.title,t.description,t.points,t.badge_code,
+                b.earned_at,pr.current,pr.target
+           FROM journey_tasks t
+           LEFT JOIN member_badges b ON b.badge_code=t.badge_code AND b.user_id=$1
+           LEFT JOIN member_badge_progress pr ON pr.badge_code=t.badge_code AND pr.user_id=$1
+          ORDER BY t.stage_ordinal,t.ordinal`,
+        [userId],
+      ),
+    ]);
+    const row = score.rows[0]!;
+    const taskDto = tasks.rows.map((task) => ({
+      code: task.code,
+      stage: task.stage_ordinal,
+      title: task.title,
+      description: task.description,
+      points: task.points,
+      badgeCode: task.badge_code,
+      completed: task.earned_at !== null,
+      current: task.earned_at !== null ? task.target ?? 1 : task.current ?? 0,
+      target: task.target ?? 1,
+    }));
+    return {
+      data: {
+        points: row.points,
+        level: row.level,
+        levelTitle: row.level_title,
+        nextLevel: row.next_level,
+        nextLevelTitle: row.next_title,
+        nextLevelPoints: row.next_points,
+        badgeCount: row.badge_count,
+        streakDays: row.streak_days,
+        streakBest: row.streak_best,
+        perksFrozenUntil: row.perks_frozen_until?.toISOString() ?? null,
+        stages: stages.rows.map((stage) => ({
+          ordinal: stage.ordinal,
+          title: stage.title,
+          levelTitle: stage.level_title,
+          reward: stage.reward,
+          tasks: taskDto.filter((task) => task.stage === stage.ordinal),
+        })),
+        // The one thing the profile card shows. Null when everything on the map
+        // is done, which the client renders as a finished journey rather than an
+        // empty row.
+        nextTask: taskDto.find((task) => !task.completed) ?? null,
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'JOURNEY_UNAVAILABLE', message: 'Gurbet Yolculuğu yüklenemedi.' } });
+  }
+});
+
+/// The weekly race. `week` sums the XP of badges earned in the last seven days
+/// rather than reading total points, so a member who earned everything a year
+/// ago does not sit at the top of a leaderboard called "this week".
+app.get('/v1/community/leaderboard', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = leaderboardQuery.parse(request.query);
+    const rows = await db.query<{ user_id: string; display_name: string; city: string | null; region_code: string | null; score: string; level: number; rank: string }>(
+      `WITH me AS (SELECT city,region_code FROM member_scores WHERE user_id=$1),
+       scoped AS (
+         SELECT s.user_id,s.city,s.region_code,s.level,
+                CASE WHEN $2='week'
+                  THEN COALESCE((SELECT sum(d.points) FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code WHERE b.user_id=s.user_id AND b.earned_at>now()-interval '7 days'),0)
+                  ELSE s.points END::int score
+           FROM member_scores s
+          WHERE ($3='global')
+             OR ($3='region' AND s.region_code IS NOT NULL AND s.region_code=(SELECT region_code FROM me))
+             OR ($3='city'   AND s.city IS NOT NULL AND s.city=(SELECT city FROM me) AND s.region_code IS NOT DISTINCT FROM (SELECT region_code FROM me))
+       )
+       SELECT scoped.user_id,COALESCE(p.display_name,'TurkSquare üyesi') display_name,scoped.city,scoped.region_code,scoped.score,scoped.level,
+              rank() OVER (ORDER BY scoped.score DESC,scoped.user_id) rank
+         FROM scoped LEFT JOIN community_profile_projection p ON p.user_id=scoped.user_id
+        WHERE scoped.score>0
+        ORDER BY scoped.score DESC,scoped.user_id
+        LIMIT $4`,
+      [userId, input.window, input.scope, input.limit],
+    );
+    return {
+      data: rows.rows.map((entry) => ({
+        userId: entry.user_id,
+        displayName: entry.display_name,
+        city: entry.city,
+        regionCode: entry.region_code,
+        score: Number(entry.score),
+        level: entry.level,
+        rank: Number(entry.rank),
+        isSelf: entry.user_id === userId,
+      })),
+      meta: { scope: input.scope, window: input.window },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'LEADERBOARD_UNAVAILABLE', message: 'Liderlik tablosu yüklenemedi.' } });
+  }
+});
+
+// --- Haber Merkezi ------------------------------------------------------
+// One table read from two places: the drawer's news centre and the home
+// screen's "Amerika'dan Mansetler" strip. The strip is not a second feed, it is
+// this list filtered by `headline_rank IS NOT NULL` - which is what makes the
+// two stay in step without anyone syncing them.
+//
+// Articles are written from Gatework (see the internal endpoint below). What a
+// member contributes is a reaction and a comment, and both reuse the shapes the
+// feed already has so that the app can reuse the feed's comment editor and the
+// moderation queue in 014 already knows what to do with a row.
+
+const newsCategories = ['gundem', 'gocmenlik', 'ekonomi', 'yasam', 'spor', 'kultur', 'topluluk'] as const;
+const newsQuery = z.object({ cursor: z.string().max(128).optional(), limit: z.coerce.number().int().min(1).max(50).default(20), category: z.enum(newsCategories).optional() });
+const newsHeadlineQuery = z.object({ limit: z.coerce.number().int().min(1).max(10).default(5) });
+// `null` is "take my reaction back". A tap on the icon that is already lit is a
+// removal, not a second vote, and the table's primary key says the same thing.
+const newsReactionBody = z.object({ value: z.enum(['like', 'dislike']).nullable() });
+const gateworkNewsBody = z.object({
+  title: z.string().trim().min(3).max(200),
+  summary: z.string().trim().min(3).max(500),
+  body: z.string().trim().min(1).max(20000),
+  category: z.enum(newsCategories),
+  authorId: z.string().uuid(),
+  heroMediaId: z.string().uuid().optional(),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  headlineRank: z.coerce.number().int().min(1).max(20).optional(),
+  publishedAt: z.string().datetime().optional(),
+  commentsEnabled: z.boolean().default(true),
+  reason: z.string().trim().min(5).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+
+type NewsRow = {
+  id: string; title: string; summary: string; body?: string; category: string; author_name: string;
+  region_code: string | null; published_at: Date; headline_rank: number | null; hero_url: string | null;
+  comments_enabled?: boolean; like_count: string; dislike_count: string; comment_count: string;
+  viewer_reaction: 'like' | 'dislike' | null;
+};
+
+// $1 is always the viewer: their own reaction travels with the row so the app
+// can draw the icons in the right state without a second round trip. [extra] is
+// what only the detail screen needs - the list must not carry 20kB of body text
+// per row.
+const newsSelect = (extra = '') => `
+  SELECT a.id,a.title,a.summary,${extra}a.category,a.author_name,a.region_code,a.published_at,a.headline_rank,
+         m.safe_url hero_url,
+         (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id AND r.value='like') like_count,
+         (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id AND r.value='dislike') dislike_count,
+         (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
+         (SELECT r.value FROM news_reactions r WHERE r.article_id=a.id AND r.user_id=$1) viewer_reaction
+    FROM news_articles a
+    LEFT JOIN media_assets m ON m.id=a.hero_media_id AND m.status='ready'`;
+
+// Published, not deleted, not scheduled for later. Every read path shares it;
+// a listing that forgets one of the three is how a draft reaches a reader.
+const NEWS_VISIBLE = "a.deleted_at IS NULL AND a.published_at IS NOT NULL AND a.published_at<=now()";
+
+const newsArticleJson = async (row: NewsRow) => ({
+  id: row.id,
+  title: row.title,
+  summary: row.summary,
+  ...(row.body === undefined ? {} : { body: row.body }),
+  category: row.category,
+  authorName: row.author_name,
+  regionCode: row.region_code,
+  publishedAt: row.published_at.toISOString(),
+  headlineRank: row.headline_rank,
+  // Signed on the way out, never stored: the same rule posts and stories follow.
+  imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
+  ...(row.comments_enabled === undefined ? {} : { commentsEnabled: row.comments_enabled }),
+  likeCount: Number(row.like_count),
+  dislikeCount: Number(row.dislike_count),
+  commentCount: Number(row.comment_count),
+  viewerReaction: row.viewer_reaction,
+});
+
+app.get('/v1/community/news', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = newsQuery.parse(request.query);
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [userId];
+    let where = NEWS_VISIBLE;
+    if (input.category) { params.push(input.category); where += ` AND a.category=$${params.length}`; }
+    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (a.published_at,a.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    params.push(input.limit + 1);
+    const rows = await db.query<NewsRow>(`${newsSelect()} WHERE ${where} ORDER BY a.published_at DESC,a.id DESC LIMIT $${params.length}`, params);
+    const page = rows.rows.slice(0, input.limit);
+    const last = page[page.length - 1];
+    return {
+      data: await Promise.all(page.map(newsArticleJson)),
+      meta: { nextCursor: rows.rows.length > input.limit && last ? encodeCursor({ created_at: last.published_at, id: last.id }) : null },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+      .send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Haberler yüklenemedi.' } });
+  }
+});
+
+/// What the home screen's headline strip is: the same articles, ordered by the
+/// rank an editor gave them rather than by when they went out.
+app.get('/v1/community/news/headlines', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = newsHeadlineQuery.parse(request.query);
+    const rows = await db.query<NewsRow>(
+      `${newsSelect()} WHERE ${NEWS_VISIBLE} AND a.headline_rank IS NOT NULL ORDER BY a.headline_rank ASC,a.published_at DESC LIMIT $2`,
+      [userId, input.limit],
+    );
+    return { data: await Promise.all(rows.rows.map(newsArticleJson)) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Manşetler yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/news/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<NewsRow>(
+      `${newsSelect('a.body,a.comments_enabled,')} WHERE ${NEWS_VISIBLE} AND a.id=$2`,
+      [userId, id],
+    );
+    const article = rows.rows[0];
+    if (!article) return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    return { data: await newsArticleJson(article) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Haber yüklenemedi.' } });
+  }
+});
+
+app.put('/v1/community/news/:id/reactions', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = newsReactionBody.parse(request.body);
+    if (input.value === null) {
+      await db.query('DELETE FROM news_reactions WHERE article_id=$1 AND user_id=$2', [id, userId]);
+    } else {
+      // Guarded by the same visibility rule as the read: an unpublished article
+      // is not something anyone can be voting on.
+      const written = await db.query(
+        `INSERT INTO news_reactions(article_id,user_id,value)
+         SELECT a.id,$2,$3 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE}
+         ON CONFLICT(article_id,user_id) DO UPDATE SET value=EXCLUDED.value,created_at=now()`,
+        [id, userId, input.value],
+      );
+      if (!written.rowCount) return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    }
+    const tally = await db.query<{ like_count: string; dislike_count: string }>(
+      `SELECT count(*) FILTER (WHERE value='like') like_count,count(*) FILTER (WHERE value='dislike') dislike_count FROM news_reactions WHERE article_id=$1`,
+      [id],
+    );
+    return { data: { likeCount: Number(tally.rows[0]!.like_count), dislikeCount: Number(tally.rows[0]!.dislike_count), viewerReaction: input.value } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_REACTION_FAILED', message: 'Tepkin kaydedilemedi.' } });
+  }
+});
+
+// The display name is joined here and not left to the client. The feed's own
+// comment list still omits it, which is why comments there render under whatever
+// the caller happens to know; a news article has no such context to fall back on.
+const NEWS_COMMENT_SELECT = `
+  SELECT c.id,c.author_id,c.parent_id,c.body,c.created_at,
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name
+    FROM news_comments c
+    LEFT JOIN community_profile_projection p ON p.user_id=c.author_id`;
+
+type NewsCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string };
+const newsCommentJson = (row: NewsCommentRow) => ({
+  id: row.id,
+  authorId: row.author_id,
+  authorName: row.author_name,
+  parentId: row.parent_id,
+  body: row.body,
+  createdAt: row.created_at.toISOString(),
+});
+
+app.get('/v1/community/news/:id/comments', async (request, reply) => {
+  try {
+    await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<NewsCommentRow>(
+      `${NEWS_COMMENT_SELECT} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+      [id],
+    );
+    return { data: rows.rows.map(newsCommentJson) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_COMMENTS_FAILED', message: 'Yorumlar yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/news/:id/comments', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = commentBody.parse(request.body);
+    const article = await db.query(`SELECT 1 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE} AND a.comments_enabled`, [id]);
+    if (!article.rows[0]) return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Bu haber yorumlara kapalı.' } });
+    const inserted = await db.query<{ id: string }>(
+      'INSERT INTO news_comments(article_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
+      [id, userId, input.parentId ?? null, input.body],
+    );
+    const row = await db.query<NewsCommentRow>(`${NEWS_COMMENT_SELECT} WHERE c.id=$1`, [inserted.rows[0]!.id]);
+    // Streak only. `vocalist` counts comments on the feed, and quietly earning a
+    // feed badge somewhere else would make its own description untrue.
+    void grantInBackground('news_comment', async (journey) => { await touchStreak(journey, userId); });
+    return reply.code(201).send({ data: newsCommentJson(row.rows[0]!) });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_COMMENT_CREATE_FAILED', message: 'Yorum gönderilemedi.' } });
+  }
+});
+
+app.delete('/v1/community/news/comments/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    await db.query("UPDATE news_comments SET deleted_at=now(),moderation_state='removed' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL", [id, userId]);
+    return reply.code(204).send();
+  } catch {
+    return reply.code(400).send({ error: { code: 'NEWS_COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
+  }
+});
+
+/// Publishing from Gatework, with the same guarantees as an official post: the
+/// author has to be an active system account, the command is idempotent, and the
+/// operation is audited whether it succeeds or not.
+app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkNewsBody.parse(request.body);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const prior = await client.query<{ result_id: string | null }>(
+        "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='news_article.create' FOR UPDATE",
+        [actor.actorId, input.idempotencyKey],
+      );
+      if (prior.rows[0]?.result_id) {
+        await client.query('COMMIT');
+        return reply.code(200).send({ data: { id: prior.rows[0].result_id } });
+      }
+      const author = await client.query<{ display_name: string }>(
+        `SELECT COALESCE(p.display_name,'TurkSquare') display_name
+           FROM community_system_accounts s LEFT JOIN community_profile_projection p ON p.user_id=s.user_id
+          WHERE s.user_id=$1 AND s.role='official' AND s.active`,
+        [input.authorId],
+      );
+      if (!author.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+      // Media is verified before it is stored, not when it is served: an article
+      // pointing at a rejected upload would fail silently at read time and leave
+      // an editor wondering where the picture went.
+      if (input.heroMediaId) {
+        const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND status='ready'", [input.heroMediaId]);
+        if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+      }
+      const article = await client.query<{ id: string }>(
+        `INSERT INTO news_articles(title,summary,body,hero_media_id,category,author_id,author_name,region_code,published_at,headline_rank,comments_enabled,created_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9::timestamptz,now()),$10,$11,$12) RETURNING id`,
+        [input.title, input.summary, input.body, input.heroMediaId ?? null, input.category, input.authorId, author.rows[0].display_name,
+          input.regionCode?.toUpperCase() ?? null, input.publishedAt ?? null, input.headlineRank ?? null, input.commentsEnabled, actor.actorId],
+      );
+      await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'news_article.create',$3)", [actor.actorId, input.idempotencyKey, article.rows[0]!.id]);
+      await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.publish', targetType: 'news_article', targetId: article.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+      await client.query('COMMIT');
+      return reply.code(201).send({ data: article.rows[0] });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_REJECTED' } });
+  }
+});
+
+/// Retracting a published article. A soft delete, so the comments and any report
+/// filed against it still resolve to something after it comes down.
+app.delete('/v1/internal/gatework/news/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const reason = z.string().trim().min(5).max(500).parse((request.body as { reason?: string } | undefined)?.reason);
+    const removed = await db.query('UPDATE news_articles SET deleted_at=now(),updated_at=now() WHERE id=$1 AND deleted_at IS NULL', [id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.retract', targetType: 'news_article', targetId: id, reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: removed.rowCount ? 'succeeded' : 'failed' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_RETRACT_REJECTED' } });
   }
 });
 

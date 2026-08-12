@@ -4,12 +4,13 @@ import '../../features/auth/application/auth_controller.dart';
 import '../../features/community/application/community_feed_controller.dart';
 import '../../features/community/application/story_controller.dart';
 import '../../features/community/application/community_comments_controller.dart';
-import '../../features/community/application/profile_posts_controller.dart';
 import '../../features/community/application/media_upload_controller.dart';
+import '../../features/community/domain/repositories/community_repository.dart';
 import '../../features/community/application/community_special_request_controller.dart';
 import '../../features/events/application/events_controller.dart';
 import '../../features/marketplace/application/marketplace_controller.dart';
 import '../../features/profile/application/profile_controller.dart';
+import '../../features/journey/application/journey_controller.dart';
 import '../../features/messaging/application/direct_conversation_controller.dart';
 import '../../features/messaging/application/messaging_controller.dart';
 import '../../features/messaging/domain/repositories/direct_message_repository.dart';
@@ -17,6 +18,7 @@ import '../../features/community/domain/repositories/content_moderation_reposito
 import '../../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
 import '../../features/home/application/community_home_controller.dart';
+import '../../features/news/application/news_controller.dart';
 import '../../features/notifications/application/notifications_controller.dart';
 import '../../features/verification/application/member_capabilities_controller.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
@@ -35,12 +37,13 @@ class AppRouter {
     required this.communityController,
     required this.storyController,
     required this.commentsController,
-    required this.profilePostsController,
     required this.mediaUploadController,
+    required this.postCommands,
     required this.specialRequestController,
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.journeyController,
     required this.messagingController,
     required this.directMessageRepository,
     required this.messageModerationRepository,
@@ -48,18 +51,21 @@ class AppRouter {
     required this.communityHomeController,
     required this.memberCapabilitiesController,
     required this.notificationsController,
+    required this.newsController,
+    required this.newsCommentsController,
   });
 
   final AuthController authController;
   final CommunityFeedController communityController;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
-  final ProfilePostsController profilePostsController;
   final MediaUploadController mediaUploadController;
+  final CommunityPostCommands postCommands;
   final CommunitySpecialRequestController specialRequestController;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final JourneyController journeyController;
   final MessagingController messagingController;
   final DirectMessageRepository directMessageRepository;
   final MessageModerationRepository messageModerationRepository;
@@ -67,6 +73,8 @@ class AppRouter {
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
   final NotificationsController notificationsController;
+  final NewsController newsController;
+  final CommunityCommentsController newsCommentsController;
 
   /// Where a member lands right after signing in.
   ///
@@ -91,17 +99,20 @@ class AppRouter {
             communityController: communityController,
             storyController: storyController,
             commentsController: commentsController,
-            profilePostsController: profilePostsController,
             mediaUploadController: mediaUploadController,
+            postCommands: postCommands,
             specialRequestController: specialRequestController,
             eventsController: eventsController,
             marketplaceController: marketplaceController,
             profileController: profileController,
+            journeyController: journeyController,
             contentModerationRepository: contentModerationRepository,
             homeController: communityHomeController,
             memberCapabilitiesController: memberCapabilitiesController,
             authController: authController,
             notificationsController: notificationsController,
+            newsController: newsController,
+            newsCommentsController: newsCommentsController,
             onSignOut: () async {
               await authController.signOut();
               if (context.mounted) {

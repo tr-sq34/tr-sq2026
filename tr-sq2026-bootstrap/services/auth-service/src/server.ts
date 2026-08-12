@@ -715,7 +715,24 @@ app.put('/v1/auth/onboarding', { config: { rateLimit: { max: 10, timeWindow: '1 
       await client.query(
         `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
          VALUES('user_onboarding',$1,'community.profile_upserted',$2::jsonb)`,
-        [user.id, JSON.stringify({ userId: user.id, displayName: user.display_name, city: input.city, countryCode: input.countryCode, regionCode, interests: input.interests })],
+        // The arrival and origin answers travel with the event rather than being
+        // fetched by Community later: the profile screen shows "Izmir -> Paterson,
+        // NJ" and Community must not read identity tables to render it. Additive,
+        // so a consumer deployed before this still projects name and locality.
+        [user.id, JSON.stringify({
+          userId: user.id,
+          displayName: user.display_name,
+          city: input.city,
+          countryCode: input.countryCode,
+          regionCode,
+          interests: input.interests,
+          primaryIntent: input.primaryIntent,
+          bornInUs: input.bornInUs,
+          arrivedMonth,
+          arrivedYear,
+          originCountry,
+          originCity,
+        })],
       );
       await client.query('COMMIT');
     } catch (error) {

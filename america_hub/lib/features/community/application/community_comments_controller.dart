@@ -29,10 +29,19 @@ class CommunityCommentsController extends ChangeNotifier {
     if (!PostAccessPolicy.canComment(post: post, viewerId: viewerId, isFriend: isFriend)) {
       throw StateError('Bu paylaşıma yorum yapma izniniz yok.');
     }
+    await submitComment(targetId: post.id, message: message, parentId: parentId);
+  }
+
+  /// Erişim politikası çağıranda olan yorumlar için.
+  ///
+  /// Haber yorumları akışın görünürlük kurallarına tabi değil — haber herkese
+  /// açık — ama aynı listeyi, aynı depoyu ve aynı editörü kullanıyor. Politikayı
+  /// [addComment] uygular, yazma işini ikisi de buraya bırakır.
+  Future<void> submitComment({required String targetId, required String message, String? parentId}) async {
     _isSubmitting = true;
     notifyListeners();
     try {
-      final comment = await _repository.createComment(postId: post.id, message: message, parentId: parentId);
+      final comment = await _repository.createComment(postId: targetId, message: message, parentId: parentId);
       final current = _state;
       if (current is AsyncData<List<CommunityComment>>) {
         _state = AsyncData([...current.value, comment]);
@@ -54,6 +63,12 @@ class CommunityCommentsController extends ChangeNotifier {
     if (!PostAccessPolicy.canDeleteComment(comment: comment, post: post, viewerId: viewerId)) {
       throw StateError('Bu yorumu silme izniniz yok.');
     }
+    await removeComment(comment);
+  }
+
+  /// Silme izni çağıranda olan yorumlar için: haberde kural tek satır, kendi
+  /// yorumunu silersin.
+  Future<void> removeComment(CommunityComment comment) async {
     await _repository.deleteComment(comment.id);
     final current = _state;
     if (current is AsyncData<List<CommunityComment>>) {
