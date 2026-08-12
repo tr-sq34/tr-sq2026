@@ -332,10 +332,6 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ]),
                     builder: (_, _) {
                       final user = widget.authController.user;
-                      debugPrint(
-                        'TOPBAR index=$_currentIndex user=${user?.email} '
-                        'name=${user?.displayName} short=${user?.shortName}',
-                      );
                       return AppTopBar(
                         title: _titleFor(_currentIndex, user?.displayName),
                         greetingName: _currentIndex == 0
