@@ -20,6 +20,9 @@ import 'package:america_hub/features/home/data/community_home_repository.dart';
 import 'package:america_hub/features/home/presentation/screens/main_layout_screen.dart';
 import 'package:america_hub/features/marketplace/application/marketplace_controller.dart';
 import 'package:america_hub/features/marketplace/data/repositories/mock_marketplace_repository.dart';
+import 'package:america_hub/features/news/application/news_controller.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_comments_repository.dart';
+import 'package:america_hub/features/news/data/repositories/mock_news_repository.dart';
 import 'package:america_hub/features/notifications/application/notifications_controller.dart';
 import 'package:america_hub/features/notifications/data/repositories/empty_notification_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
@@ -119,6 +122,12 @@ Future<AuthController> pumpShell(
         authController: authController,
         notificationsController: NotificationsController(
           repository: const EmptyNotificationRepository(),
+        ),
+        newsController: NewsController(repository: MockNewsRepository()),
+        newsCommentsController: CommunityCommentsController(
+          repository: MockNewsCommentsRepository(
+            viewer: () => authController.user,
+          ),
         ),
         onSignOut: () async {},
       ),

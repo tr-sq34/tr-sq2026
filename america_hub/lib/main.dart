@@ -55,6 +55,12 @@ import 'features/messaging/domain/repositories/direct_message_repository.dart';
 import 'features/messaging/domain/repositories/message_moderation_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
+import 'features/news/application/news_controller.dart';
+import 'features/news/data/repositories/api_news_comments_repository.dart';
+import 'features/news/data/repositories/api_news_repository.dart';
+import 'features/news/data/repositories/mock_news_comments_repository.dart';
+import 'features/news/data/repositories/mock_news_repository.dart';
+import 'features/news/domain/repositories/news_repository.dart';
 import 'features/notifications/application/notifications_controller.dart';
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
@@ -231,6 +237,20 @@ Future<void> main() async {
       ? MockContentModerationRepository()
       : ApiContentModerationRepository(client: communityApiClient);
 
+  // The Haber Merkezi and the home screen's "Amerika'dan Manşetler" strip read
+  // the same repository, so a headline can never drift from the article behind
+  // it. News comments deliberately reuse the feed's comment controller and
+  // sheet: one editor, two surfaces.
+  final NewsRepository newsRepository = useMockServices
+      ? MockNewsRepository()
+      : ApiNewsRepository(client: communityApiClient);
+  final newsController = NewsController(repository: newsRepository);
+  final newsCommentsController = CommunityCommentsController(
+    repository: useMockServices
+        ? MockNewsCommentsRepository(viewer: () => authController.user)
+        : ApiNewsCommentsRepository(client: communityApiClient),
+  );
+
   // Deliberately empty on both sides of the mock flag: no service publishes
   // member notifications yet, so the bell stays at zero until one does.
   final notificationsController = NotificationsController(
@@ -257,6 +277,8 @@ Future<void> main() async {
       communityHomeController: communityHomeController,
       memberCapabilitiesController: memberCapabilitiesController,
       notificationsController: notificationsController,
+      newsController: newsController,
+      newsCommentsController: newsCommentsController,
     ),
   );
 }

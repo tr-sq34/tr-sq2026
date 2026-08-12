@@ -16,6 +16,7 @@ import '../features/messaging/domain/repositories/direct_message_repository.dart
 import '../features/community/domain/repositories/content_moderation_repository.dart';
 import '../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../features/home/application/community_home_controller.dart';
+import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
@@ -43,6 +44,8 @@ class AmericaHubApp extends StatelessWidget {
     required this.communityHomeController,
     required this.memberCapabilitiesController,
     required this.notificationsController,
+    required this.newsController,
+    required this.newsCommentsController,
   });
 
   final AuthController authController;
@@ -76,6 +79,11 @@ class AmericaHubApp extends StatelessWidget {
   final CommunityHomeController communityHomeController;
   final MemberCapabilitiesController memberCapabilitiesController;
   final NotificationsController notificationsController;
+  final NewsController newsController;
+
+  /// News comments use the feed's controller class against a different
+  /// repository: the editor is shared, the threads are not.
+  final CommunityCommentsController newsCommentsController;
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +111,8 @@ class AmericaHubApp extends StatelessWidget {
         communityHomeController: communityHomeController,
         memberCapabilitiesController: memberCapabilitiesController,
         notificationsController: notificationsController,
+        newsController: newsController,
+        newsCommentsController: newsCommentsController,
       ).onGenerateRoute,
     );
   }
