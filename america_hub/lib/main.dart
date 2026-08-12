@@ -101,8 +101,12 @@ Future<void> main() async {
     onSessionExpired: () => authController.expireSession(),
   );
 
+  // One mock auth object for the whole app: it is the only thing that knows who
+  // signed in and what they answered during setup, and the mock profile reads
+  // that instead of inventing a member of its own.
+  final mockAuthRepository = MockAuthRepository(cacheStore: cacheStore);
   final AuthRepository authRepository = useMockServices
-      ? MockAuthRepository()
+      ? mockAuthRepository
       : ApiAuthRepository(client: apiClient);
 
   final passkeyService = useMockServices
@@ -156,8 +160,11 @@ Future<void> main() async {
     repository: MockCommunityCommentsRepository(),
   );
 
+  // Shared with the profile repository, which needs it to turn an upload id
+  // back into the file the member picked.
+  final mockMediaUploadRepository = MockMediaUploadRepository();
   final MediaUploadRepository mediaUploadRepository = useMockServices
-      ? MockMediaUploadRepository()
+      ? mockMediaUploadRepository
       : ApiMediaUploadRepository(client: communityApiClient);
   final mediaUploadController = MediaUploadController(
     repository: mediaUploadRepository,
@@ -186,7 +193,11 @@ Future<void> main() async {
   );
 
   final ProfileRepository profileRepository = useMockServices
-      ? MockProfileRepository()
+      ? MockProfileRepository(
+          auth: mockAuthRepository,
+          cacheStore: cacheStore,
+          media: mockMediaUploadRepository,
+        )
       : ApiProfileRepository(client: communityApiClient);
   final profileController = ProfileController(repository: profileRepository);
 

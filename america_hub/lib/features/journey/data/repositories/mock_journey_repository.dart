@@ -153,6 +153,8 @@ class MockJourneyRepository implements JourneyRepository {
   }) async => const [
     LeaderboardEntry(userId: 'peer-1', displayName: 'Elif D.', score: 700, level: 5, rank: 1, city: 'Paterson', regionCode: 'NJ'),
     LeaderboardEntry(userId: 'peer-2', displayName: 'Mert K.', score: 350, level: 4, rank: 2, city: 'Paterson', regionCode: 'NJ'),
-    LeaderboardEntry(userId: 'local-user', displayName: 'Demo Kullanıcı', score: 50, level: 2, rank: 3, city: 'Paterson', regionCode: 'NJ', isSelf: true),
+    // "Sen" rather than a name: the mock has no idea who is signed in, and the
+    // one thing a self row must not do is call the member somebody else.
+    LeaderboardEntry(userId: 'local-user', displayName: 'Sen', score: 50, level: 2, rank: 3, city: 'Paterson', regionCode: 'NJ', isSelf: true),
   ];
 }

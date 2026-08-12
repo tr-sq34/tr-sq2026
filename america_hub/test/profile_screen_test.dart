@@ -6,6 +6,7 @@ import 'package:america_hub/features/community/data/repositories/mock_community_
 import 'package:america_hub/features/community/data/repositories/mock_media_upload_repository.dart';
 import 'package:america_hub/features/journey/application/journey_controller.dart';
 import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
+import 'package:america_hub/features/journey/presentation/screens/journey_screen.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/domain/entities/user_profile.dart';
 import 'package:america_hub/features/profile/domain/repositories/profile_repository.dart';
@@ -143,7 +144,57 @@ void main() {
     await _pumpProfile(tester, _base);
 
     expect(find.textContaining('İzmir'), findsNothing);
-    expect(find.textContaining('Nereden geldiğini eklemedin'), findsOneWidget);
+    expect(find.textContaining('kurulum ekranından ekleyebilirsin'), findsOneWidget);
+  });
+
+  testWidgets('the facts are lines on one surface, not a card each', (tester) async {
+    await _pumpProfile(
+      tester,
+      _base.copyWith(
+        originCity: 'İzmir',
+        originCountry: 'TR',
+        interests: const ['yemek', 'futbol', 'göçmenlik'],
+      ),
+    );
+
+    // Every fact used to open its own padded card, so three short answers ate
+    // most of the screen. Labelled rows now, and the interests are one line
+    // instead of a pile of chips.
+    expect(find.text('Nerelisin'), findsOneWidget);
+    expect(find.text('İlgi alanları'), findsOneWidget);
+    expect(find.text('yemek, futbol, göçmenlik'), findsOneWidget);
+    expect(find.byType(Chip), findsNothing);
+  });
+
+  testWidgets('the avatar draws the photo it was given', (tester) async {
+    await _pumpProfile(
+      tester,
+      _base.copyWith(avatarUrl: 'https://cdn.example.com/avatar.png'),
+    );
+
+    expect(find.byType(Image), findsWidgets);
+    expect(find.text('AA'), findsNothing);
+  });
+
+  testWidgets('an address nothing can draw keeps the initials', (tester) async {
+    // A bare upload id is neither a URL nor a path. It used to be handed to
+    // Image.network, which failed silently while the non-empty value hid the
+    // initials — the circle simply went blank and the photo looked unsaved.
+    await _pumpProfile(tester, _base.copyWith(avatarUrl: 'media-abc123'));
+
+    expect(find.text('AA'), findsOneWidget);
+  });
+
+  testWidgets('the badge counter is a way in, not a decoration', (tester) async {
+    await _pumpProfile(tester, _base);
+
+    await tester.tap(find.text('Rozet'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+
+    expect(find.byType(JourneyScreen), findsOneWidget);
+    expect(find.widgetWithText(Tab, 'Rozetler'), findsOneWidget);
   });
 
   testWidgets('long-pressing a post in the grid offers archive and delete', (tester) async {

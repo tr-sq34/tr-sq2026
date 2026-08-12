@@ -27,14 +27,21 @@ class _PartlyBrokenRepository implements JourneyRepository {
   }) async => throw StateError('down');
 }
 
-Future<void> _pumpJourney(WidgetTester tester, JourneyRepository repository) async {
+Future<void> _pumpJourney(
+  WidgetTester tester,
+  JourneyRepository repository, {
+  JourneyTab initialTab = JourneyTab.tasks,
+}) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
 
   await tester.pumpWidget(
     MaterialApp(
-      home: JourneyScreen(controller: JourneyController(repository: repository)),
+      home: JourneyScreen(
+        controller: JourneyController(repository: repository),
+        initialTab: initialTab,
+      ),
     ),
   );
   for (var i = 0; i < 6; i++) {
@@ -115,6 +122,18 @@ void main() {
     expect(find.text('Kazanılanlar · 1'), findsOneWidget);
     expect(find.text('Devam edenler · 1'), findsOneWidget);
     expect(find.text('Kilitli · 4'), findsOneWidget);
+  });
+
+  testWidgets('a badge entry point opens on the badge tab, not on the tasks', (tester) async {
+    // The profile's Rozet counter and the home screen's badge card both come
+    // in this way; landing on Görevler made them look like dead links.
+    await _pumpJourney(
+      tester,
+      const MockJourneyRepository(),
+      initialTab: JourneyTab.badges,
+    );
+
+    expect(find.text('Kazanılanlar · 1'), findsOneWidget);
   });
 
   testWidgets('a secret badge keeps its criteria to itself', (tester) async {

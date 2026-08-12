@@ -55,7 +55,67 @@ class MockCommunityRepository
       comments: 4,
     ),
   ];
-  final List<StoryItem> _stories = [];
+  /// Story rayı boş bir listeyle açıldığında ne ray ne de görüntüleyici
+  /// gezilebiliyordu; demo modda sistemin çalıştığını göstermenin tek yolu
+  /// birkaç hazır Story. Yalnızca bu mock dosyasında duruyorlar — gerçek
+  /// `StoryController` hiçbir zaman örnek içeriğe düşmez.
+  final List<StoryItem> _stories = [
+    _demoStory(
+      id: 'story-1',
+      authorId: 'user-elif',
+      authorName: 'Elif Demir',
+      imageUrl:
+          'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800',
+      ageMinutes: 42,
+      likeCount: 9,
+      viewCount: 31,
+    ),
+    _demoStory(
+      id: 'story-2',
+      authorId: 'user-mert',
+      authorName: 'Mert Kaya',
+      imageUrl:
+          'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800',
+      ageMinutes: 180,
+      likeCount: 4,
+      viewCount: 18,
+    ),
+    _demoStory(
+      id: 'story-3',
+      authorId: 'user-zeynep',
+      authorName: 'Zeynep Arslan',
+      imageUrl:
+          'https://images.unsplash.com/photo-1521017432531-fbd92d768814?w=800',
+      ageMinutes: 400,
+      likeCount: 12,
+      viewCount: 54,
+    ),
+  ];
+
+  /// Story'ler 24 saat sonra düşer, dolayısıyla tarihleri sabit olamaz:
+  /// uygulamanın açıldığı ana göre kurulurlar.
+  static StoryItem _demoStory({
+    required String id,
+    required String authorId,
+    required String authorName,
+    required String imageUrl,
+    required int ageMinutes,
+    required int likeCount,
+    required int viewCount,
+  }) {
+    final createdAt = DateTime.now().subtract(Duration(minutes: ageMinutes));
+    return StoryItem(
+      id: id,
+      authorId: authorId,
+      authorName: authorName,
+      media: PostMedia(id: '$id-media', type: PostMediaType.image, url: imageUrl),
+      createdAt: createdAt,
+      expiresAt: createdAt.add(const Duration(hours: 24)),
+      visibility: StoryVisibility.network,
+      likeCount: likeCount,
+      viewCount: viewCount,
+    );
+  }
 
   @override
   Future<CursorPage<CommunityPost>> fetchPage({
