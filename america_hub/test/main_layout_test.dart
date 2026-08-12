@@ -92,6 +92,20 @@ void main() {
     );
   });
 
+  // "Rozet kısmına giriyorum hiçbir şey çalışmıyor": the home screen's badge
+  // card was drawn with an empty onTap, so it looked live and did nothing.
+  testWidgets('the badge card on the home tab opens the badge cabinet', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+
+    await tester.tap(find.text('Topluluk Rozetini Al!'));
+    await settle(tester);
+
+    expect(find.text('Gurbet Yolculuğu'), findsOneWidget);
+    expect(find.widgetWithText(Tab, 'Rozetler'), findsOneWidget);
+  });
+
   // The composer used to introduce every member as "Ahmet Yılmaz", the demo
   // persona the screens were designed against. Signing a post with someone
   // else's name is the one thing a composer must never do.

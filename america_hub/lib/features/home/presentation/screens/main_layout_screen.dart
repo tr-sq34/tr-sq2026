@@ -11,6 +11,7 @@ import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../journey/application/journey_controller.dart';
+import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
 import '../../../community/presentation/screens/create_post_flow_screen.dart';
@@ -76,7 +77,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   late List<Widget> _pages;
 
   List<Widget> _buildPages() => [
-    DiscoverScreen(controller: widget.homeController),
+    DiscoverScreen(
+      controller: widget.homeController,
+      onOpenBadges: _openBadges,
+    ),
     // The pages are built once, but the composer inside the feed names the
     // member, and that name can still arrive on a token refresh. Listening
     // here keeps it current without rebuilding the whole stack.
@@ -106,6 +110,19 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       postCommands: widget.postCommands,
     ),
   ];
+
+  /// The home screen's badge card promised a destination and never had one.
+  /// It leads where the profile's badge counter leads: the Journey cabinet,
+  /// opened on its Rozetler tab. The route lives here because DiscoverScreen
+  /// only takes a callback.
+  void _openBadges() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => JourneyScreen(
+        controller: widget.journeyController,
+        initialTab: JourneyTab.badges,
+      ),
+    ),
+  );
 
   @override
   void initState() {
@@ -203,6 +220,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ]),
                     builder: (_, _) {
                       final user = widget.authController.user;
+                      debugPrint(
+                        'TOPBAR index=$_currentIndex user=${user?.email} '
+                        'name=${user?.displayName} short=${user?.shortName}',
+                      );
                       return AppTopBar(
                         title: _titleFor(_currentIndex, user?.displayName),
                         greetingName: _currentIndex == 0

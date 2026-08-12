@@ -11,22 +11,43 @@ import '../../domain/entities/journey.dart';
 /// Three tabs rather than one long scroll, because they answer three different
 /// questions: what do I do next, what have I collected, and where do I stand.
 class JourneyScreen extends StatefulWidget {
-  const JourneyScreen({super.key, required this.controller});
+  const JourneyScreen({
+    super.key,
+    required this.controller,
+    this.initialTab = JourneyTab.tasks,
+  });
 
   final JourneyController controller;
+
+  /// Which question the member arrived with. Opening from the profile's
+  /// "Rozet" counter means they came to look at badges, so landing them on
+  /// Görevler and making them find the tab is one step too many.
+  final JourneyTab initialTab;
 
   @override
   State<JourneyScreen> createState() => _JourneyScreenState();
 }
 
+/// The three tabs, in the order they are drawn.
+enum JourneyTab { tasks, badges, leaderboard }
+
 class _JourneyScreenState extends State<JourneyScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 3, vsync: this);
+  late final TabController _tabs = TabController(
+    length: 3,
+    initialIndex: widget.initialTab.index,
+    vsync: this,
+  );
 
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
+    // After the frame, not during it: the profile header listens to this same
+    // controller, and `load()` notifies straight away. Calling it here would
+    // dirty a widget outside this route while the route is still building.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.controller.load();
+    });
   }
 
   @override

@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/state/async_state.dart';
+import '../../../../core/widgets/app_image_source.dart';
 import '../../../community/application/media_upload_controller.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/domain/entities/community_post.dart';
@@ -52,6 +53,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   late final TabController _tabs = TabController(length: 3, vsync: this);
   final _picker = ImagePicker();
   bool _showArchive = false;
+  bool _uploadingAvatar = false;
 
   @override
   void initState() {
@@ -87,9 +89,11 @@ class _ProfileScreenState extends State<ProfileScreen>
             SliverToBoxAdapter(child: _Header(
               profile: profile,
               journeyController: widget.journeyController,
+              uploadingAvatar: _uploadingAvatar,
               onTapAvatar: profile.isSelf ? _changeAvatar : null,
               onEditBio: profile.isSelf ? () => _editBio(profile) : null,
-              onOpenJourney: _openJourney,
+              onOpenJourney: () => _openJourney(),
+              onOpenBadges: () => _openJourney(tab: JourneyTab.badges),
               onSignOut: profile.isSelf ? _confirmSignOut : null,
             )),
             SliverPersistentHeader(
@@ -123,11 +127,15 @@ class _ProfileScreenState extends State<ProfileScreen>
     },
   );
 
-  void _openJourney() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => JourneyScreen(controller: widget.journeyController),
-    ),
-  );
+  void _openJourney({JourneyTab tab = JourneyTab.tasks}) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => JourneyScreen(
+            controller: widget.journeyController,
+            initialTab: tab,
+          ),
+        ),
+      );
 
   Future<void> _editBio(UserProfile profile) async {
     final controller = TextEditingController(text: profile.bio);
@@ -199,30 +207,42 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (image == null) return;
     final bytes = await image.readAsBytes();
     final localId = '${DateTime.now().microsecondsSinceEpoch}-${image.name}';
-    await widget.mediaUploadController.upload(
-      MediaUploadRequest(
-        localUri: image.path,
-        media: PostMediaUpload(
-          localId: localId,
-          type: PostMediaType.image,
-          fileName: image.name,
-          mimeType: image.mimeType ?? 'image/jpeg',
-          sizeBytes: bytes.lengthInBytes,
+    // Uploading and saving take a moment each. Without a sign that anything is
+    // happening the member taps, waits, sees the old circle and concludes the
+    // feature is broken.
+    if (mounted) setState(() => _uploadingAvatar = true);
+    try {
+      await widget.mediaUploadController.upload(
+        MediaUploadRequest(
+          localUri: image.path,
+          media: PostMediaUpload(
+            localId: localId,
+            type: PostMediaType.image,
+            fileName: image.name,
+            mimeType: image.mimeType ?? 'image/jpeg',
+            sizeBytes: bytes.lengthInBytes,
+          ),
         ),
-      ),
-    );
-    final uploaded = widget.mediaUploadController.progressById[localId]?.media;
-    // The composer reads `readyMedia` off the same controller, so an avatar left
-    // behind here would ride along on the member's next post.
-    widget.mediaUploadController.remove(localId);
-    if (uploaded == null) {
+      );
+      final uploaded = widget.mediaUploadController.progressById[localId]?.media;
+      // The composer reads `readyMedia` off the same controller, so an avatar
+      // left behind here would ride along on the member's next post.
+      widget.mediaUploadController.remove(localId);
+      if (uploaded == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Fotoğraf yüklenemedi. Tekrar dene.')),
+        );
+        return;
+      }
+      await widget.controller.updateAvatar(uploaded.id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Fotoğraf yüklenemedi. Tekrar dene.')),
+        const SnackBar(content: Text('Profil fotoğrafın güncellendi.')),
       );
-      return;
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
     }
-    await widget.controller.updateAvatar(uploaded.id);
   }
 
   Future<void> _deletePost(ProfilePost post) async {
@@ -260,11 +280,18 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 }
 
+/// Name, photo, counters and the journey strip in one compact block.
+///
+/// It is deliberately short. Everything that used to sit here in its own padded
+/// card now lives as a single row further down: the header's job is to say who
+/// this is, not to fill a screen.
 class _Header extends StatelessWidget {
   const _Header({
     required this.profile,
     required this.journeyController,
     required this.onOpenJourney,
+    required this.onOpenBadges,
+    this.uploadingAvatar = false,
     this.onTapAvatar,
     this.onEditBio,
     this.onSignOut,
@@ -272,7 +299,9 @@ class _Header extends StatelessWidget {
 
   final UserProfile profile;
   final JourneyController journeyController;
+  final bool uploadingAvatar;
   final VoidCallback onOpenJourney;
+  final VoidCallback onOpenBadges;
   final VoidCallback? onTapAvatar;
   final VoidCallback? onEditBio;
   final VoidCallback? onSignOut;
@@ -286,20 +315,28 @@ class _Header extends StatelessWidget {
         colors: [AppColors.profileTint, AppColors.background],
       ),
     ),
-    padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+    padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            _Avatar(profile: profile, onTap: onTapAvatar),
-            const SizedBox(width: 16),
+            _Avatar(profile: profile, onTap: onTapAvatar, uploading: uploadingAvatar),
+            const SizedBox(width: 14),
             Expanded(
               child: Row(
                 children: [
                   Expanded(child: _Stat(value: profile.postCount, label: 'Paylaşım')),
                   Expanded(child: _Stat(value: profile.friendCount, label: 'Arkadaş')),
-                  Expanded(child: _Stat(value: profile.badgeCount, label: 'Rozet')),
+                  // The badge cabinet lives on the journey screen, so the
+                  // counter that names it is the way in.
+                  Expanded(
+                    child: _Stat(
+                      value: profile.badgeCount,
+                      label: 'Rozet',
+                      onTap: onOpenBadges,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -311,7 +348,7 @@ class _Header extends StatelessWidget {
               ),
           ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         Row(
           children: [
             Flexible(
@@ -329,18 +366,20 @@ class _Header extends StatelessWidget {
           ],
         ),
         if (profile.journeyLine != null) ...[
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             profile.journeyLine!,
-            style: const TextStyle(color: AppColors.textSecondary),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
         ],
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         _Bio(profile: profile, onEdit: onEditBio),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         _JourneyCard(controller: journeyController, onTap: onOpenJourney),
         if (profile.showcasedBadges.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -350,21 +389,35 @@ class _Header extends StatelessWidget {
             ],
           ),
         ],
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
       ],
     ),
   );
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar({required this.profile, this.onTap});
+  const _Avatar({required this.profile, this.onTap, this.uploading = false});
 
   final UserProfile profile;
   final VoidCallback? onTap;
+  final bool uploading;
+
+  static const _size = 64.0;
 
   @override
   Widget build(BuildContext context) {
-    final url = profile.avatarUrl;
+    final image = appImageProvider(profile.avatarUrl);
+    // Initials until there is a photo, and again if the photo will not load. A
+    // stock face would tell the member the app already knows what they look
+    // like; a silently blank circle tells them their upload failed.
+    final initials = Text(
+      _initials(profile.displayName),
+      style: const TextStyle(
+        fontSize: 21,
+        fontWeight: FontWeight.w800,
+        color: AppColors.profileAccent,
+      ),
+    );
     return Semantics(
       button: onTap != null,
       label: onTap != null ? 'Profil fotoğrafını değiştir' : 'Profil fotoğrafı',
@@ -373,31 +426,33 @@ class _Avatar extends StatelessWidget {
         child: Stack(
           children: [
             Container(
-              height: 78,
-              width: 78,
+              height: _size,
+              width: _size,
+              clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: AppColors.profileTint,
                 border: Border.all(color: AppColors.profileBorder, width: 2),
-                image: url != null && url.isNotEmpty
-                    ? DecorationImage(image: NetworkImage(url), fit: BoxFit.cover)
-                    : null,
               ),
               alignment: Alignment.center,
-              // Initials until there is a photo. A stock face would tell the
-              // member the app already knows what they look like.
-              child: url != null && url.isNotEmpty
-                  ? null
-                  : Text(
-                      _initials(profile.displayName),
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.profileAccent,
-                      ),
-                    ),
+              child: uploading
+                  ? const SizedBox(
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    )
+                  : image == null
+                      ? initials
+                      : Image(
+                          image: image,
+                          height: _size,
+                          width: _size,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stack) =>
+                              Center(child: initials),
+                        ),
             ),
-            if (onTap != null)
+            if (onTap != null && !uploading)
               Positioned(
                 right: 0,
                 bottom: 0,
@@ -425,22 +480,37 @@ class _Avatar extends StatelessWidget {
 }
 
 class _Stat extends StatelessWidget {
-  const _Stat({required this.value, required this.label});
+  const _Stat({required this.value, required this.label, this.onTap});
 
   final int value;
   final String label;
+  final VoidCallback? onTap;
 
   // Long labels shrink rather than clip: at a large text scale "Paylaşım" is
   // wider than a third of the header, and a truncated count means nothing.
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Text('$value', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-      FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(12),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        children: [
+          Text('$value', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: onTap == null ? AppColors.textSecondary : AppColors.profileAccent,
+                fontWeight: onTap == null ? FontWeight.w400 : FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
-    ],
+    ),
   );
 }
 
@@ -603,46 +673,47 @@ class _AboutTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
     children: [
-      _Section(
-        icon: Icons.place_outlined,
-        title: 'Nerelisin',
-        child: profile.originCity != null
-            ? Text(profile.journeyLine!, style: const TextStyle(fontWeight: FontWeight.w700))
-            : profile.bornInUs
-                ? const Text('Amerika doğumlu')
-                // The prompt only appears for the member themselves, and it
-                // sends them to onboarding rather than editing here: the answer
-                // belongs to identity, and two writers would fight over it.
-                : profile.isSelf
-                    ? const Text('Nereden geldiğini eklemedin. Kurulum ekranından ekleyebilirsin.')
-                    : const Text('Belirtilmemiş', style: TextStyle(color: AppColors.textMuted)),
-      ),
-      if (profile.arrivedYear != null)
-        _Section(
-          icon: Icons.flight_land_outlined,
-          title: 'Amerika\'daki yolculuğum',
-          child: Text(_arrival(profile)),
-        ),
-      if (profile.interests.isNotEmpty)
-        _Section(
-          icon: Icons.interests_outlined,
-          title: 'İlgi alanları',
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final interest in profile.interests)
-                Chip(
-                  label: Text(interest),
-                  backgroundColor: AppColors.profileTint,
-                  side: const BorderSide(color: AppColors.profileBorder),
-                ),
-            ],
+      // One line per fact, separated by a hairline. Each of these used to be a
+      // padded card of its own, which turned "Nereden geldin" — three words of
+      // answer — into a sixth of the screen.
+      _InfoGroup(
+        rows: [
+          _InfoRow(
+            icon: Icons.place_outlined,
+            label: 'Nerelisin',
+            value: profile.originCity != null
+                ? profile.journeyLine!
+                : profile.bornInUs
+                    ? 'Amerika doğumlu'
+                    // The prompt only appears for the member themselves, and it
+                    // sends them to onboarding rather than editing here: the
+                    // answer belongs to identity, and two writers would fight
+                    // over it.
+                    : profile.isSelf
+                        ? 'Eklenmedi · kurulum ekranından ekleyebilirsin'
+                        : 'Belirtilmemiş',
+            muted: profile.originCity == null && !profile.bornInUs,
           ),
-        ),
-      _VerifiedAccountCard(controller: capabilities),
+          if (profile.arrivedYear != null)
+            _InfoRow(
+              icon: Icons.flight_land_outlined,
+              label: 'Geliş',
+              value: _arrival(profile),
+            ),
+          if (profile.interests.isNotEmpty)
+            _InfoRow(
+              icon: Icons.interests_outlined,
+              label: 'İlgi alanları',
+              // A chip pile wrapped onto three rows for six words. The same
+              // words on one line say exactly as much.
+              value: profile.interests.join(', '),
+            ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      _VerifiedAccountRow(controller: capabilities),
       _StoryHighlights(controller: story),
     ],
   );
@@ -662,34 +733,74 @@ class _AboutTab extends StatelessWidget {
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.icon, required this.title, required this.child});
+/// One surface holding the facts, hairline-separated. A single border around
+/// the group instead of one around every line.
+class _InfoGroup extends StatelessWidget {
+  const _InfoGroup({required this.rows});
 
-  final IconData icon;
-  final String title;
-  final Widget child;
+  final List<_InfoRow> rows;
 
   @override
   Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
       color: AppColors.surface,
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(16),
       border: Border.all(color: AppColors.profileBorder),
     ),
     child: Column(
+      children: [
+        for (var index = 0; index < rows.length; index++) ...[
+          if (index > 0)
+            const Divider(height: 1, thickness: 1, indent: 44, color: AppColors.profileBorder),
+          rows[index],
+        ],
+      ],
+    ),
+  );
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.muted = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  /// Set when the value is an absence rather than an answer, so a missing fact
+  /// does not read with the same weight as a given one.
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+    child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(icon, size: 18, color: AppColors.profileAccent),
-            const SizedBox(width: 8),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-          ],
+        Icon(icon, size: 18, color: AppColors.profileAccent),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 92,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
         ),
-        const SizedBox(height: 10),
-        child,
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.3,
+              fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
+              color: muted ? AppColors.textMuted : null,
+            ),
+          ),
+        ),
       ],
     ),
   );
@@ -810,7 +921,7 @@ class _PostTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final thumbnail = post.thumbnailUrl;
+    final thumbnail = appImageProvider(post.thumbnailUrl);
     return GestureDetector(
       onLongPress: enabled ? onLongPress : null,
       child: Container(
@@ -818,15 +929,15 @@ class _PostTile extends StatelessWidget {
           color: AppColors.profileTint,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: AppColors.profileBorder),
-          image: thumbnail != null && thumbnail.isNotEmpty
-              ? DecorationImage(image: NetworkImage(thumbnail), fit: BoxFit.cover)
-              : null,
+          image: thumbnail == null
+              ? null
+              : DecorationImage(image: thumbnail, fit: BoxFit.cover),
         ),
         padding: const EdgeInsets.all(8),
         alignment: Alignment.center,
         // A text-only post still needs a tile. Rendering the opening words as a
         // typographic card keeps the grid from turning into a row of grey boxes.
-        child: thumbnail != null && thumbnail.isNotEmpty
+        child: thumbnail != null
             ? null
             : Text(
                 post.message,
@@ -931,63 +1042,72 @@ class _StoryHighlights extends StatelessWidget {
     animation: controller,
     builder: (context, _) {
       final highlights = controller.highlights;
-      return _Section(
-        icon: Icons.auto_awesome_outlined,
-        title: 'Öne çıkanlar',
-        child: SizedBox(
-          height: 78,
-          child: highlights.isEmpty
-              ? const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Henüz öne çıkarılmış bir Story yok.',
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                )
-              : ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: highlights.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
-                  itemBuilder: (_, index) {
-                    final highlight = highlights[index];
-                    final first = highlight.items.first;
-                    return SizedBox(
-                      width: 68,
-                      child: Column(
-                        children: [
-                          Container(
-                            height: 51,
-                            width: 51,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.profileAccent, width: 2),
-                              image: DecorationImage(
-                                image: NetworkImage(first.media.thumbnailUrl ?? first.media.url),
-                                fit: BoxFit.cover,
-                              ),
-                            ),
+      // Nothing to show means nothing to draw: an empty card announcing its own
+      // emptiness is the kind of filler this screen had too much of.
+      if (highlights.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Öne çıkanlar',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+              ),
+            ),
+            SizedBox(
+              height: 74,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: highlights.length,
+                separatorBuilder: (context, index) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  final highlight = highlights[index];
+                  final first = highlight.items.first;
+                  final image = appImageProvider(
+                    first.media.thumbnailUrl ?? first.media.url,
+                  );
+                  return SizedBox(
+                    width: 68,
+                    child: Column(
+                      children: [
+                        Container(
+                          height: 51,
+                          width: 51,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppColors.profileTint,
+                            border: Border.all(color: AppColors.profileAccent, width: 2),
+                            image: image == null
+                                ? null
+                                : DecorationImage(image: image, fit: BoxFit.cover),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            highlight.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          highlight.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       );
     },
   );
 }
 
-class _VerifiedAccountCard extends StatelessWidget {
-  const _VerifiedAccountCard({required this.controller});
+class _VerifiedAccountRow extends StatelessWidget {
+  const _VerifiedAccountRow({required this.controller});
 
   final MemberCapabilitiesController controller;
 
@@ -997,11 +1117,10 @@ class _VerifiedAccountCard extends StatelessWidget {
     builder: (context, _) {
       final verified = controller.value.identityVerified;
       return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
         decoration: BoxDecoration(
           color: verified ? const Color(0xFFEAFBF3) : AppColors.profileTint,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: verified ? const Color(0xFF86E2B3) : AppColors.profileBorder,
           ),
@@ -1010,17 +1129,25 @@ class _VerifiedAccountCard extends StatelessWidget {
           children: [
             Icon(
               verified ? Icons.verified_rounded : Icons.verified_user_outlined,
+              size: 18,
               color: verified ? const Color(0xFF059669) : AppColors.profileAccent,
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 verified ? 'Onaylı Hesap rozeti aktif' : 'Onaylı Hesap rozeti gerekli',
-                style: const TextStyle(fontWeight: FontWeight.w800),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
             ),
             if (controller.isLoading)
-              const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
             else
               TextButton(
                 onPressed: verified ? controller.load : () => _startVerification(context),

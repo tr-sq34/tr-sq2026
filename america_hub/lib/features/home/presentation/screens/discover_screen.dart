@@ -4,9 +4,17 @@ import 'package:flutter/material.dart';
 import '../../application/community_home_controller.dart';
 
 class DiscoverScreen extends StatefulWidget {
-  const DiscoverScreen({super.key, required this.controller});
+  const DiscoverScreen({
+    super.key,
+    required this.controller,
+    required this.onOpenBadges,
+  });
 
   final CommunityHomeController controller;
+
+  /// The badge card's destination is owned by the shell; this screen only
+  /// calls it.
+  final VoidCallback onOpenBadges;
 
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
@@ -36,7 +44,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             _StoriesSection(),
             _CommunityPulse(),
             SizedBox(height: 20),
-            _HighlightsSection(),
+            _HighlightsSection(onOpenBadges: widget.onOpenBadges),
             _LiveBiddingSection(),
             _LocalContextSection(),
             _NewsSection(),
@@ -474,7 +482,9 @@ class _PulseCard extends StatelessWidget {
 
 // 4. Highlights Section
 class _HighlightsSection extends StatelessWidget {
-  const _HighlightsSection();
+  const _HighlightsSection({required this.onOpenBadges});
+
+  final VoidCallback onOpenBadges;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -529,7 +539,7 @@ class _HighlightsSection extends StatelessWidget {
               badge: 'Güvenli Profil',
               progress: '⚡ %85 Dolu',
               gradient: const [Color(0xFF1E1A47), Color(0xFF3B3383)],
-              onTap: () {},
+              onTap: onOpenBadges,
             ),
             _HighlightCard(
               title: "New York'ta İlk Yıl",
