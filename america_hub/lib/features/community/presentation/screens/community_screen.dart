@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../../../auth/domain/entities/app_user.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/state/async_state.dart';
 import '../../../../core/pagination/paged_controller.dart';
@@ -36,12 +37,17 @@ class CommunityScreen extends StatefulWidget {
     required this.mediaUploadController,
     required this.specialRequestController,
     required this.moderationRepository,
+    this.viewer,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+
+  /// The signed-in member, so the composer can say who is about to post. Null
+  /// only in builds with no session, where the composer names nobody at all.
+  final AppUser? viewer;
 
   /// Every post, comment and story below this point needs a way to be reported,
   /// so the repository is handed down rather than looked up: the widgets that
@@ -231,6 +237,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
         moderationRepository: widget.moderationRepository,
+        viewer: widget.viewer,
       );
     },
   );
@@ -244,6 +251,7 @@ class _Feed extends StatefulWidget {
     required this.mediaUploadController,
     required this.specialRequestController,
     required this.moderationRepository,
+    this.viewer,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -251,6 +259,7 @@ class _Feed extends StatefulWidget {
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
   final ContentModerationRepository moderationRepository;
+  final AppUser? viewer;
 
   @override
   State<_Feed> createState() => _FeedState();
@@ -267,6 +276,7 @@ class _FeedState extends State<_Feed> {
     builder: (_) => _ReferenceCreatePostSheet(
       controller: widget.controller,
       mediaUploadController: widget.mediaUploadController,
+      viewer: widget.viewer,
     ),
   );
 
@@ -670,9 +680,11 @@ class _ReferenceCreatePostSheet extends StatefulWidget {
   const _ReferenceCreatePostSheet({
     required this.controller,
     required this.mediaUploadController,
+    this.viewer,
   });
   final CommunityFeedController controller;
   final MediaUploadController mediaUploadController;
+  final AppUser? viewer;
   @override
   State<_ReferenceCreatePostSheet> createState() =>
       _ReferenceCreatePostSheetState();
@@ -913,26 +925,50 @@ class _ReferenceCreatePostSheetState extends State<_ReferenceCreatePostSheet> {
           ],
         ),
         const SizedBox(height: 28),
-        const Row(
+        Row(
           children: [
             CircleAvatar(
               radius: 18,
-              backgroundColor: Color(0xFFEDEAFF),
-              child: Icon(Icons.person_rounded, color: Color(0xFF705BE9)),
+              backgroundColor: const Color(0xFFEDEAFF),
+              child: widget.viewer == null
+                  ? const Icon(Icons.person_rounded, color: Color(0xFF705BE9))
+                  : Text(
+                      widget.viewer!.initials,
+                      style: const TextStyle(
+                        color: Color(0xFF705BE9),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
             ),
-            SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ahmet Yılmaz',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
-                ),
-                Text(
-                  '@ahmet_ny',
-                  style: TextStyle(fontSize: 10, color: Color(0xFF8B9AB3)),
-                ),
-              ],
+            const SizedBox(width: 10),
+            // The member's own name and audience. There is no handle in the
+            // domain, so the second line says where the post goes instead of
+            // showing a username nobody actually has.
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.viewer?.fullName ?? 'Sen',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    _visibility == PostVisibility.public
+                        ? 'Herkese açık'
+                        : 'Sadece arkadaşlar',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF8B9AB3),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
