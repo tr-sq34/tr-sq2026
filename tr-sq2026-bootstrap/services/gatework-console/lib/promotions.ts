@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { delegation } from './gatework';
+import type { PromotionSummary } from './promotion-labels';
 import { getSession } from './session';
 
 /**
@@ -35,37 +36,13 @@ async function communityFetch(path: string, init: RequestInit = {}) {
   return response.json();
 }
 
-export const PROMOTION_PLACEMENT_LABELS: Record<string, string> = {
-  story_slot: 'Story alanı (sponsorlu)',
-  app_banner: 'Uygulama içi banner',
-  featured_card: 'Sana Özel Öne Çıkanlar',
-};
-export const PROMOTION_STATUS_LABELS: Record<string, string> = {
-  pending: 'Onay bekliyor',
-  approved: 'Onaylandı',
-  rejected: 'Reddedildi',
-  ended: 'Sonlandırıldı',
-};
-
-export type PromotionSummary = {
-  id: string;
-  placement: string;
-  title: string;
-  subtitle: string | null;
-  imageUrl: string | null;
-  targetKind: string | null;
-  targetValue: string | null;
-  regionCode: string | null;
-  city: string | null;
-  startsAt: string;
-  endsAt: string;
-  status: string;
-  decisionReason: string | null;
-  createdAt: string;
-  ownerId: string;
-  ownerName: string;
-  requestNote: string | null;
-};
+// The labels and the row shape live in the browser-safe module; the queue is a
+// client component and cannot pull this file's session read into its bundle.
+export {
+  PROMOTION_PLACEMENT_LABELS,
+  PROMOTION_STATUS_LABELS,
+  type PromotionSummary,
+} from './promotion-labels';
 
 export const promotionDecisionSchema = z.object({
   action: z.enum(['approve', 'reject', 'end']),

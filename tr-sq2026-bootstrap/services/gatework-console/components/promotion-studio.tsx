@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { PROMOTION_PLACEMENT_LABELS, PROMOTION_STATUS_LABELS, type PromotionSummary } from '@/lib/promotions';
+import { PROMOTION_PLACEMENT_LABELS, PROMOTION_STATUS_LABELS, type PromotionSummary } from '@/lib/promotion-labels';
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
