@@ -72,7 +72,7 @@ void main() {
         messageModerationRepository: MockMessageModerationRepository(),
         contentModerationRepository: MockContentModerationRepository(),
         communityHomeController: CommunityHomeController(
-          CommunityHomeRepository(apiClient),
+          ApiCommunityHomeRepository(apiClient),
         ),
         memberCapabilitiesController: MemberCapabilitiesController(
           apiClient,

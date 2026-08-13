@@ -830,14 +830,10 @@ class _PostsTab extends StatelessWidget {
         children: [
           if (profile.isSelf)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: false, label: Text('Paylaşımlar')),
-                  ButtonSegment(value: true, label: Text('Arşiv')),
-                ],
-                selected: {showArchive},
-                onSelectionChanged: (value) => onToggleArchive(value.first),
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+              child: _ArchiveSwitch(
+                showArchive: showArchive,
+                onChanged: onToggleArchive,
               ),
             ),
           Expanded(
@@ -910,6 +906,60 @@ class _PostsTab extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Izgaranın üstündeki iki kelime.
+///
+/// Yerinde duran `SegmentedButton` her iki kutuyu da çerçeveleyip seçiliye tik
+/// koyuyordu: ekranın en sessiz denetimi, sayfadaki en gürültülü öge olmuştu.
+/// Burada yalnızca seçili olan doluyor, çerçeve yok, tik yok.
+class _ArchiveSwitch extends StatelessWidget {
+  const _ArchiveSwitch({required this.showArchive, required this.onChanged});
+
+  final bool showArchive;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.profileTint,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _segment('Paylaşımlar', selected: !showArchive, value: false),
+          _segment('Arşiv', selected: showArchive, value: true),
+        ],
+      ),
+    ),
+  );
+
+  Widget _segment(String label, {required bool selected, required bool value}) =>
+      Material(
+        color: selected ? Colors.white : Colors.transparent,
+        borderRadius: BorderRadius.circular(17),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(17),
+          onTap: selected ? null : () => onChanged(value),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected
+                    ? AppColors.profileAccent
+                    : AppColors.textSecondary,
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _PostTile extends StatelessWidget {

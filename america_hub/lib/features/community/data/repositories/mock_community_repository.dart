@@ -3,6 +3,7 @@ import '../../domain/entities/create_post_draft.dart';
 import '../../domain/repositories/community_repository.dart';
 import '../../../../core/pagination/cursor_page.dart';
 import '../../domain/entities/feed_extensions.dart';
+import '../../../auth/domain/entities/app_user.dart';
 
 class MockCommunityRepository
     implements
@@ -13,9 +14,25 @@ class MockCommunityRepository
         PostInteractionRepository,
         PollRepository,
         StoryRepository {
+  /// Kim paylaşıyorsa paylaşım onun adına yazılsın diye. Sunucu tarafında yazarı
+  /// zaten jeton belirliyor; burada bir kişi adı sabitlemek, üyenin kendi
+  /// paylaşımını başkasının imzasıyla görmesi demekti — "Ahmet Yılmaz" tam
+  /// olarak buydu. Testler ve önizlemeler bunu hiç vermeden de kurabilsin diye
+  /// isteğe bağlı.
+  MockCommunityRepository({AppUser? Function()? viewer}) : _viewer = viewer;
+
+  final AppUser? Function()? _viewer;
+
+  static const _fallbackOwnerId = 'local-user';
+
+  /// Profil ızgarası paylaşımları sahibine göre süzüyor: giriş yapılmamışken de
+  /// iki taraf aynı kimliği görsün diye tek bir yerden okunuyor.
+  String get viewerId => _viewer?.call()?.id ?? _fallbackOwnerId;
+
   final List<CommunityPost> _posts = [
     CommunityPost(
       id: 'post-1',
+      ownerId: 'demo-elif',
       authorName: 'Elif Demir',
       location: 'New York, NY',
       timeLabel: '18 dk önce',
@@ -26,6 +43,7 @@ class MockCommunityRepository
     ),
     CommunityPost(
       id: 'post-2',
+      ownerId: 'demo-mert',
       authorName: 'Mert Kaya',
       location: 'Austin, TX',
       timeLabel: '2 sa önce',
@@ -37,6 +55,7 @@ class MockCommunityRepository
     ),
     CommunityPost(
       id: 'post-3',
+      ownerId: 'demo-zeynep',
       authorName: 'Zeynep Arslan',
       location: 'Chicago, IL',
       timeLabel: '3 sa önce',
@@ -47,6 +66,7 @@ class MockCommunityRepository
     ),
     CommunityPost(
       id: 'post-4',
+      ownerId: 'demo-can',
       authorName: 'Can Yılmaz',
       location: 'Seattle, WA',
       timeLabel: 'Dün',
@@ -237,8 +257,8 @@ class MockCommunityRepository
       throw ArgumentError.value(draft, 'draft', error);
     final story = StoryItem(
       id: 'story-${DateTime.now().microsecondsSinceEpoch}',
-      authorId: 'local-user',
-      authorName: 'Ahmet Yılmaz',
+      authorId: viewerId,
+      authorName: _viewer?.call()?.fullName ?? 'Sen',
       media: draft.media,
       createdAt: DateTime.now(),
       expiresAt: DateTime.now().add(draft.ttl),
@@ -332,10 +352,10 @@ class MockCommunityRepository
 
     final post = CommunityPost(
       id: 'post-${DateTime.now().microsecondsSinceEpoch}',
-      ownerId: 'local-user',
+      ownerId: viewerId,
       authorName: draft.purpose == CommunityPostPurpose.anonymousAdvice
           ? 'Anonim üye'
-          : 'Ahmet Yılmaz',
+          : (_viewer?.call()?.fullName ?? 'Sen'),
       location: draft.location?.displayName ?? 'New York, NY',
       timeLabel: 'Şimdi',
       message: draft.normalizedMessage,
