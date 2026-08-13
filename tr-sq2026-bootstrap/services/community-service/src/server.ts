@@ -620,6 +620,16 @@ const contentDecisionBody = z.object({
   idempotencyKey: z.string().uuid(),
 });
 const contentReasonBody = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
+// Reading the operation trail. Identity keeps the same shape for its own log, so
+// the console can put the two side by side without a translation layer.
+const AUDIT_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'auditor'];
+const gateworkAuditQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  action: z.string().trim().min(2).max(80).optional(),
+  actorId: z.string().uuid().optional(),
+  outcome: z.enum(['succeeded', 'denied', 'failed']).optional(),
+});
 
 // The reported object, frozen. Selected inside the same transaction that writes
 // the report so a delete racing the report cannot empty the case file.
@@ -1020,6 +1030,38 @@ app.get('/v1/internal/gatework/community/overview', async (request, reply) => {
     };
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'OVERVIEW_UNAVAILABLE', message: 'Özet okunamadı.' } });
+  }
+});
+
+// Two trails, not one. gatework_operation_audit_events records what an operator
+// asked this service to do - a category opened, a capability set, a topic pinned
+// - while content_moderation_actions records decisions taken about a member's
+// content. Merging them here would lose which is which; the console shows both
+// under one screen and keeps the distinction in the row.
+app.get('/v1/internal/gatework/audit', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, AUDIT_READ_ROLES);
+    const input = gateworkAuditQuery.parse(request.query);
+    const rows = await db.query<{ id: string; actor_id: string; actor_name: string | null; actor_roles: string[]; action: string; target_type: string; target_id: string; reason: string | null; outcome: string; created_at: Date; source: string }>(
+      `SELECT e.id,e.actor_id,p.display_name actor_name,e.actor_roles,e.action,e.target_type,e.target_id,e.reason,e.outcome,e.created_at,'operation' source
+         FROM gatework_operation_audit_events e LEFT JOIN community_profile_projection p ON p.user_id=e.actor_id
+        WHERE ($3::text IS NULL OR e.action LIKE $3||'%') AND ($4::uuid IS NULL OR e.actor_id=$4) AND ($5::text IS NULL OR e.outcome=$5)
+       UNION ALL
+       -- A moderation decision has no outcome column: it is written only after
+       -- the decision has been applied, so it is a succeeded row by construction.
+       SELECT m.id,m.actor_id,p.display_name,m.actor_roles,m.action,m.target_type,m.target_id,m.reason,'succeeded',m.created_at,'moderation'
+         FROM content_moderation_actions m LEFT JOIN community_profile_projection p ON p.user_id=m.actor_id
+        WHERE ($3::text IS NULL OR m.action LIKE $3||'%') AND ($4::uuid IS NULL OR m.actor_id=$4) AND ($5::text IS NULL OR $5='succeeded')
+       ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2`,
+      [input.limit, input.offset, input.action ?? null, input.actorId ?? null, input.outcome ?? null],
+    );
+    return {
+      data: rows.rows.map((row) => ({ id: row.id, actorId: row.actor_id, actorName: row.actor_name, actorRoles: row.actor_roles, action: row.action, targetType: row.target_type, targetId: row.target_id, reason: row.reason, outcome: row.outcome, source: row.source, createdAt: row.created_at.toISOString() })),
+      meta: { nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'AUDIT_UNAVAILABLE', message: 'Denetim kaydı okunamadı.' } });
   }
 });
 
