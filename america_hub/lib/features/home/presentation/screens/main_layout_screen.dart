@@ -16,7 +16,8 @@ import '../../../journey/application/journey_controller.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
-import '../../../community/presentation/screens/create_post_flow_screen.dart';
+import '../../../community/domain/entities/community_post.dart';
+import '../../../community/presentation/screens/post_composer_screen.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
 import '../../../news/application/news_controller.dart';
 import '../../../news/presentation/screens/news_article_screen.dart';
@@ -291,10 +292,15 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   void _openComposer() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       fullscreenDialog: true,
-      builder: (_) => CreatePostFlowScreen(
+      builder: (_) => PostComposerScreen(
         feedController: widget.communityController,
         mediaUploadController: widget.mediaUploadController,
         viewer: widget.authController.user,
+        loadTaggablePeople: () async => [
+          for (final contact
+              in await widget.storyController.loadAudienceContacts())
+            TaggedUser(id: contact.id, displayName: contact.displayName),
+        ],
       ),
     ),
   );

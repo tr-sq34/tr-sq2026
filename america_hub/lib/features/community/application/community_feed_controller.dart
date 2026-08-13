@@ -8,14 +8,17 @@ class CommunityFeedController extends PagedController<CommunityPost> {
     required CommunityRepository repository,
     required CommunityPostCommands commands,
     required PostInteractionRepository interactions,
+    required PollRepository polls,
     Future<void> Function()? onMutationCommitted,
   })  : _commands = commands,
         _interactions = interactions,
+        _polls = polls,
         _onMutationCommitted = onMutationCommitted,
         super(dataSource: repository, pageSize: 2);
 
   final CommunityPostCommands _commands;
   final PostInteractionRepository _interactions;
+  final PollRepository _polls;
   final Future<void> Function()? _onMutationCommitted;
 
   Future<void> load() => loadInitial();
@@ -47,6 +50,25 @@ class CommunityFeedController extends PagedController<CommunityPost> {
         for (final post in items) if (post.id == postId) previous else post,
       ]);
     }
+  }
+
+  /// Ankete oy vermek. Sonuç sunucudan dönen sayaçlarla değişiyor: iyimser bir
+  /// güncelleme yapıp yanılmaktansa, oy verildikten sonra gerçek dağılımı
+  /// göstermek daha doğru — anketin tek işi zaten doğru sayıyı göstermek.
+  Future<void> voteOnPoll({
+    required String postId,
+    required String pollId,
+    required Set<String> optionIds,
+  }) async {
+    final updated = await _polls.vote(
+      postId: postId,
+      pollId: pollId,
+      optionIds: optionIds,
+    );
+    replaceItems([
+      for (final post in items)
+        if (post.id == postId) post.copyWith(poll: updated) else post,
+    ]);
   }
 
   Future<CommunityPost> createPost(CreatePostDraft draft) async {

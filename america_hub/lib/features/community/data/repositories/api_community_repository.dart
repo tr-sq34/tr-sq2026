@@ -16,6 +16,7 @@ class ApiCommunityRepository
         FeedRepository,
         PostInteractionRepository,
         CommunityPostCommands,
+        PollRepository,
         StoryRepository {
   ApiCommunityRepository({required ApiClient client}) : _client = client;
   final ApiClient _client;
@@ -115,13 +116,47 @@ class ApiCommunityRepository
         'visibility': draft.visibility == PostVisibility.public
             ? 'public'
             : 'friends_only',
-        'locationLabel': draft.location?.displayName,
-        'marketplaceListingId': draft.marketplaceListingId,
+        // Boş alanlar hiç gönderilmiyor: sunucudaki şema bunları "optional"
+        // sayıyor, ama `null` optional demek değil — konumsuz bir paylaşım
+        // `locationLabel: null` yüzünden 400 alıyordu.
+        if (draft.location?.displayName case final label?)
+          'locationLabel': label,
+        if (draft.marketplaceListingId case final listingId?)
+          'marketplaceListingId': listingId,
+        // Anketin sorusu ayrı gitmiyor; sunucuda da ayrı bir alan yok, gövde
+        // metninin kendisi soru. Seçenekler sırasıyla kaydediliyor.
+        if (draft.poll case final poll?)
+          'poll': {
+            'question': poll.question,
+            'selectionMode': poll.selectionMode.name,
+            'options': [
+              for (final option in poll.options) option.label,
+            ],
+            if (poll.endsAt case final endsAt?)
+              'closesAt': endsAt.toUtc().toIso8601String(),
+          },
         'idempotencyKey': _key(),
       },
     );
     final id = ((response.data?['data'] as Map?)?['id'] as String?)!;
     return _post(id);
+  }
+
+  /// Oy 204 dönüyor, gövde yok: güncel dağılımı akıştan tekrar okuyup
+  /// döndürüyoruz — sayacı burada tahmin etmek yanlış sonucu göstermek olurdu.
+  @override
+  Future<CommunityPoll> vote({
+    required String postId,
+    required String pollId,
+    required Set<String> optionIds,
+  }) async {
+    await _client.post<void>(
+      '/community/posts/$postId/poll/votes',
+      data: {'optionIds': optionIds.toList(growable: false)},
+    );
+    final poll = (await _post(postId)).poll;
+    if (poll == null) throw StateError('Anket bulunamadı.');
+    return poll;
   }
 
   @override
