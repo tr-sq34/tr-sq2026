@@ -30,7 +30,7 @@ depoya girmez - yalnızca argon2id özeti secret store'a konur. Adımlar:
 | Sistem ve Denetim | canlı | Kimlik + Community + Messaging gateway (yalnızca okuma) |
 | Doğrulama | canlı | Verification vault (yalnızca okuma; belge içeriği yok) |
 | Analitik ve Konum | canlı | Kimlik (hesap büyümesi) + Community (içerik ve toplulaştırılmış konum) |
-| Güvenlik ve SOS | bağlanmadı | — |
+| Güvenlik ve SOS | canlı | Community (SOS kuyruğu; konum süreli yetkiyle açılır) |
 
 Bağlanmamış bölümler sahte veri göstermez; ilgili API ve audit sözleşmesi
 etkinleşene kadar açıkça "bağlanmadı" der.
