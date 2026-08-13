@@ -11,6 +11,7 @@ import { closeServiceBus, isMessagingProjectionConfigured, sendMessagingProjecti
 import { generateMediaUploadSasUrl, generateMediaReadSasUrl, headMediaBlob } from './infrastructure/azureBlob.js';
 import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js';
 import { advanceProgress, awardBadge, recomputeScore, reporterTrust, touchStreak } from './journey.js';
+import { LOCALITY_MIN_BUCKET, emptyLocalityBucket, suppressSmallBuckets, type LocalityBucket } from './locality.js';
 
 const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Missing ${key}`); return value; };
 const db = createDatabasePool();
@@ -2900,6 +2901,146 @@ app.get('/v1/internal/gatework/marketplace/overview', async (request, reply) => 
     };
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'MARKETPLACE_OVERVIEW_UNAVAILABLE', message: 'Çarşı özeti okunamadı.' } });
+  }
+});
+
+// --- Analytics and locality ----------------------------------------------
+// The console's Analitik ve Konum screen. Two rules shape everything below,
+// and both come from how locality was designed in migration 008: locality is a
+// chosen city/state preference, never a continuous exact trail. So:
+//
+// 1. viewer_location_projection.approximate_cell and community_posts.location_cell
+//    are per-member coordinates. Nothing here reads them. What an operator gets
+//    is the city and state a member chose to publish, never where they were.
+// 2. A count is aggregate only if the bucket is big enough to hide in. One
+//    member in a city, next to the Uyeler screen's city filter, names a person.
+//    So buckets under ANALYTICS_MIN_BUCKET are not shown one by one; they are
+//    folded into a single "esik alti" total, which keeps the sum honest without
+//    handing back the small bucket.
+//
+// Read-only, and no audit row: these are counts of nobody in particular, and
+// auditing a dashboard load would bury the acts that matter under page views.
+// content_editor and moderator are not on the list - neither role needs
+// population figures to do its job.
+const ANALYTICS_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'analyst', 'auditor'];
+const ANALYTICS_MIN_BUCKET = LOCALITY_MIN_BUCKET;
+
+// Weeks, not days: a daily curve over a community this size is mostly noise,
+// and generate_series is here so an empty week is a zero on the chart instead
+// of a gap that reads as "no data".
+const ANALYTICS_WEEKS = 12;
+const analyticsSeriesSql = (source: string, extra = '') => `
+  SELECT w.week_start, count(s.id)::int total
+  FROM generate_series(date_trunc('week', now()) - interval '${ANALYTICS_WEEKS - 1} weeks', date_trunc('week', now()), interval '1 week') w(week_start)
+  LEFT JOIN ${source} s ON date_trunc('week', s.created_at) = w.week_start ${extra}
+  GROUP BY w.week_start ORDER BY w.week_start`;
+
+app.get('/v1/internal/gatework/analytics/overview', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ANALYTICS_READ_ROLES);
+    const totals = await db.query<{ members: string; located_members: string; posts: string; posts_7d: string; comments_7d: string; topics: string; replies_7d: string; active_listings: string; live_stories: string }>(
+      `SELECT (SELECT count(*) FROM community_profile_projection) members,
+              (SELECT count(*) FROM community_profile_projection WHERE region_code IS NOT NULL) located_members,
+              (SELECT count(*) FROM community_posts WHERE deleted_at IS NULL AND moderation_state='active') posts,
+              (SELECT count(*) FROM community_posts WHERE created_at>now()-interval '7 days' AND deleted_at IS NULL) posts_7d,
+              (SELECT count(*) FROM community_comments WHERE created_at>now()-interval '7 days' AND deleted_at IS NULL) comments_7d,
+              (SELECT count(*) FROM forum_topics WHERE deleted_at IS NULL AND moderation_state='active') topics,
+              (SELECT count(*) FROM forum_replies WHERE created_at>now()-interval '7 days' AND deleted_at IS NULL) replies_7d,
+              (SELECT count(*) FROM marketplace_listings WHERE status='active') active_listings,
+              (SELECT count(*) FROM stories WHERE expires_at>now()) live_stories`,
+    );
+    const [posts, topics, listings] = await Promise.all([
+      db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('community_posts', 'AND s.deleted_at IS NULL')),
+      db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('forum_topics', 'AND s.deleted_at IS NULL')),
+      db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('marketplace_listings')),
+    ]);
+    const row = totals.rows[0]!;
+    return {
+      data: {
+        members: Number(row.members),
+        locatedMembers: Number(row.located_members),
+        posts: Number(row.posts),
+        postsLast7Days: Number(row.posts_7d),
+        commentsLast7Days: Number(row.comments_7d),
+        forumTopics: Number(row.topics),
+        forumRepliesLast7Days: Number(row.replies_7d),
+        activeListings: Number(row.active_listings),
+        liveStories: Number(row.live_stories),
+        // Three series, one week axis: the console draws them together, so they
+        // are built from the same generate_series and are guaranteed aligned.
+        weeks: posts.rows.map((week, index) => ({
+          weekStart: week.week_start.toISOString(),
+          posts: week.total,
+          forumTopics: topics.rows[index]?.total ?? 0,
+          listings: listings.rows[index]?.total ?? 0,
+        })),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'ANALYTICS_OVERVIEW_UNAVAILABLE', message: 'Analitik özeti okunamadı.' } });
+  }
+});
+
+// Where the community actually is. Members come from the profile projection,
+// posts and listings from their own region_code, and they are merged per bucket
+// rather than joined in SQL - a state with listings and no resident profile has
+// to still appear, and an inner join would hide exactly that.
+app.get('/v1/internal/gatework/analytics/locations', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ANALYTICS_READ_ROLES);
+    const [members, posts, listings, cityMembers, cityListings] = await Promise.all([
+      db.query<{ region_code: string; total: number }>("SELECT region_code,count(*)::int total FROM community_profile_projection WHERE region_code IS NOT NULL GROUP BY 1"),
+      db.query<{ region_code: string; total: number }>("SELECT region_code,count(*)::int total FROM community_posts WHERE region_code IS NOT NULL AND deleted_at IS NULL AND moderation_state='active' GROUP BY 1"),
+      db.query<{ region_code: string; total: number }>("SELECT region_code,count(*)::int total FROM marketplace_listings WHERE region_code IS NOT NULL AND status='active' GROUP BY 1"),
+      db.query<{ region_code: string; city: string; total: number }>("SELECT region_code,city,count(*)::int total FROM community_profile_projection WHERE region_code IS NOT NULL AND city IS NOT NULL GROUP BY 1,2"),
+      db.query<{ region_code: string; city: string; total: number }>("SELECT region_code,city,count(*)::int total FROM marketplace_listings WHERE region_code IS NOT NULL AND city IS NOT NULL AND status='active' GROUP BY 1,2"),
+    ]);
+    const regions = new Map<string, LocalityBucket>();
+    const take = (key: string, field: keyof LocalityBucket, total: number) => {
+      const bucket = regions.get(key) ?? emptyLocalityBucket();
+      bucket[field] += total;
+      regions.set(key, bucket);
+    };
+    for (const row of members.rows) take(row.region_code, 'members', row.total);
+    for (const row of posts.rows) take(row.region_code, 'posts', row.total);
+    for (const row of listings.rows) take(row.region_code, 'listings', row.total);
+    // Cities are keyed case-insensitively: "Paterson" and "paterson" are one
+    // place, and two rows of two members each must not slip past a threshold
+    // that four members would not have.
+    const cities = new Map<string, LocalityBucket & { city: string; regionCode: string }>();
+    const takeCity = (regionCode: string, city: string, field: keyof LocalityBucket, total: number) => {
+      const key = `${regionCode}/${city.toLocaleLowerCase('tr-TR')}`;
+      const bucket = cities.get(key) ?? { ...emptyLocalityBucket(), city, regionCode };
+      bucket[field] += total;
+      cities.set(key, bucket);
+    };
+    for (const row of cityMembers.rows) takeCity(row.region_code, row.city, 'members', row.total);
+    for (const row of cityListings.rows) takeCity(row.region_code, row.city, 'listings', row.total);
+
+    const regionResult = suppressSmallBuckets([...regions].map(([regionCode, bucket]) => ({ regionCode, ...bucket })), ANALYTICS_MIN_BUCKET);
+    const cityResult = suppressSmallBuckets([...cities.values()], ANALYTICS_MIN_BUCKET);
+    const unplaced = await db.query<{ members: string; posts: string; listings: string }>(
+      `SELECT (SELECT count(*) FROM community_profile_projection WHERE region_code IS NULL) members,
+              (SELECT count(*) FROM community_posts WHERE region_code IS NULL AND deleted_at IS NULL AND moderation_state='active') posts,
+              (SELECT count(*) FROM marketplace_listings WHERE region_code IS NULL AND status='active') listings`,
+    );
+    const missing = unplaced.rows[0]!;
+    return {
+      data: {
+        threshold: ANALYTICS_MIN_BUCKET,
+        regions: regionResult.shown,
+        cities: cityResult.shown.map((row) => ({ city: row.city, regionCode: row.regionCode, members: row.members, listings: row.listings })),
+        suppressedRegions: regionResult.suppressed,
+        suppressedCities: { buckets: cityResult.suppressed.buckets, members: cityResult.suppressed.members, listings: cityResult.suppressed.listings },
+        // Not a privacy number, a data quality one: how much of the community
+        // has told us nothing about where it is.
+        unplaced: { members: Number(missing.members), posts: Number(missing.posts), listings: Number(missing.listings) },
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'ANALYTICS_LOCATIONS_UNAVAILABLE', message: 'Konum dağılımı okunamadı.' } });
   }
 });
 

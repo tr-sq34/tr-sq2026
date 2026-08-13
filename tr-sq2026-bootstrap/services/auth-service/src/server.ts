@@ -1173,6 +1173,51 @@ app.get('/v1/auth/gatework/audit', { config: { rateLimit: { max: 60, timeWindow:
   }
 });
 
+// The account half of the console's Analitik screen. Community can count
+// profiles but not accounts: community_profile_projection has no created_at,
+// only updated_at, so growth read from there would count profile edits as
+// signups. Account creation and email verification live here, with the rest of
+// the account, so this is where they are counted.
+//
+// Aggregate only - no email, no id, no row a person can be picked out of - and
+// not audited for the same reason the audit read is not: a dashboard load is
+// not an act on anybody.
+app.get('/v1/auth/gatework/analytics', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    await requireGateworkRole(request, ['owner', 'security_admin', 'operations_admin', 'analyst', 'auditor']);
+    const totals = await db.query<{ accounts: string; verified: string; new_7d: string; new_30d: string; operators: string }>(
+      `SELECT (SELECT count(*) FROM users) accounts,
+              (SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL) verified,
+              (SELECT count(*) FROM users WHERE created_at>now()-interval '7 days') new_7d,
+              (SELECT count(*) FROM users WHERE created_at>now()-interval '30 days') new_30d,
+              (SELECT count(DISTINCT user_id) FROM admin_roles WHERE revoked_at IS NULL) operators`,
+    );
+    // Same 12-week window and same week boundary as the Community series, so
+    // the two halves of the screen can be read side by side.
+    const weeks = await db.query<{ week_start: Date; signups: number; verified: number }>(
+      `SELECT w.week_start,
+              count(u.id)::int signups,
+              count(u.email_verified_at)::int verified
+       FROM generate_series(date_trunc('week', now()) - interval '11 weeks', date_trunc('week', now()), interval '1 week') w(week_start)
+       LEFT JOIN users u ON date_trunc('week', u.created_at) = w.week_start
+       GROUP BY w.week_start ORDER BY w.week_start`,
+    );
+    const row = totals.rows[0]!;
+    return {
+      data: {
+        accounts: Number(row.accounts),
+        verifiedAccounts: Number(row.verified),
+        newLast7Days: Number(row.new_7d),
+        newLast30Days: Number(row.new_30d),
+        operators: Number(row.operators),
+        weeks: weeks.rows.map((week) => ({ weekStart: week.week_start.toISOString(), signups: week.signups, verified: week.verified })),
+      },
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_FORBIDDEN' } });
+  }
+});
+
 // A short-lived delegation is minted only after Identity has checked the
 // operator role in its own database. Community never receives an Identity DB
 // credential and never trusts a client-supplied role claim.
