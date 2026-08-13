@@ -10,7 +10,7 @@ export default async function CommunicationsPage() {
   const roles = session.member.roles;
 
   if (!canReviewReports(roles)) {
-    return <main><h1 className="text-3xl font-semibold">Mesajlar ve Forum</h1><p className="mt-4 max-w-xl text-zinc-400">Bu alan moderasyon yetkisi gerektirir. Mevcut rollerin: {roles.join(', ')}.</p></main>;
+    return <main><h1 className="text-3xl font-semibold">Mesajlar</h1><p className="mt-4 max-w-xl text-zinc-400">Bu alan moderasyon yetkisi gerektirir. Mevcut rollerin: {roles.join(', ')}.</p></main>;
   }
 
   let groups: ModeratedGroup[] = [];
@@ -27,7 +27,7 @@ export default async function CommunicationsPage() {
     <main>
       <div className="mb-8">
         <p className="text-sm text-emerald-400">Mesajlaşma operasyonu</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Mesajlar ve Forum</h1>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Mesajlar</h1>
         <p className="mt-2 max-w-2xl text-zinc-400">
           Gruplar, etkin kısıtlamalar ve moderasyon denetim kaydı. Konuşma içerikleri burada da görünmez; içerik yalnızca bir şikâyete bağlı kanıt kopyası olarak Moderasyon Merkezi&apos;nde okunur.
         </p>

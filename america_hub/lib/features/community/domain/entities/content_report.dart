@@ -11,7 +11,11 @@ export '../../../../core/moderation/report_category.dart';
 enum ContentReportTarget {
   post('post', 'Paylaşım'),
   comment('comment', 'Yorum'),
-  story('story', 'Story');
+  story('story', 'Story'),
+  // Forum akıştan ayrı bir yerde duruyor ama şikâyet kuyruğu tek: moderasyon
+  // ekibi konuyu da yanıtı da paylaşımla aynı listede görüyor.
+  forumTopic('forum_topic', 'Forum konusu'),
+  forumReply('forum_reply', 'Forum yanıtı');
 
   const ContentReportTarget(this.wireValue, this.label);
 

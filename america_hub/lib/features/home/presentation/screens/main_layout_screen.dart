@@ -19,6 +19,10 @@ import '../../../community/presentation/screens/community_screen.dart';
 import '../../../community/domain/entities/community_post.dart';
 import '../../../community/presentation/screens/post_composer_screen.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
+import '../../../forum/application/forum_controller.dart';
+import '../../../forum/domain/entities/forum.dart';
+import '../../../forum/presentation/screens/forum_screen.dart';
+import '../../../forum/presentation/screens/forum_topic_screen.dart';
 import '../../../news/application/news_controller.dart';
 import '../../../news/presentation/screens/news_article_screen.dart';
 import '../../../news/presentation/screens/news_center_screen.dart';
@@ -59,6 +63,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.newsController,
     required this.newsCommentsController,
     required this.promotionsController,
+    required this.forumController,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
@@ -84,6 +89,10 @@ class MainLayoutScreen extends StatefulWidget {
 
   /// Sponsorlu Story yuvası ve "Sana Özel Öne Çıkanlar" kartları.
   final PromotionsController promotionsController;
+
+  /// Çeker menüdeki Forum ile ana sayfadaki trend şeridi aynı denetleyiciyi
+  /// okur; bir konuyu şeritten açıp beğenmek listede de görünür.
+  final ForumController forumController;
 
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
@@ -111,6 +120,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       onOpenStory: _openStory,
       onOpenPromotion: _openPromotion,
       onOpenMarketplace: () => setState(() => _currentIndex = 2),
+      forumController: widget.forumController,
+      onOpenForum: (categoryId) => _openForum(categoryId: categoryId),
+      onOpenForumTopic: _openForumTopic,
     ),
     // The pages are built once, but the composer inside the feed names the
     // member, and that name can still arrive on a token refresh. Listening
@@ -278,6 +290,30 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
   );
 
+  void _openForum({String? categoryId}) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ForumScreen(
+        controller: widget.forumController,
+        moderationRepository: widget.contentModerationRepository,
+        viewerId: widget.authController.user?.id ?? 'local-user',
+        initialCategoryId: categoryId,
+      ),
+    ),
+  );
+
+  /// Ana sayfadaki şeritten doğrudan konuya; forum listesinden geçmeye gerek
+  /// yok. Aynı denetleyici okunduğu için okunma sayacı iki yerde de artıyor.
+  void _openForumTopic(ForumTopic topic) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ForumTopicScreen(
+        topicId: topic.id,
+        controller: widget.forumController,
+        moderationRepository: widget.contentModerationRepository,
+        viewerId: widget.authController.user?.id ?? 'local-user',
+      ),
+    ),
+  );
+
   void _openNotifications() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) =>
@@ -304,6 +340,16 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       ),
     ),
   );
+
+  /// Sayfalar bir kez kuruluyor ve `IndexedStack` içinde canlı kalıyor: profil
+  /// sekmesi kendini yalnızca ilk açılışta yüklüyordu, dolayısıyla yeni paylaşım
+  /// ızgaraya ancak uygulama yeniden açılınca düşüyordu. Sekmeye her dönüşte
+  /// tazeleniyor.
+  void _selectPage(int index) {
+    setState(() => _currentIndex = index);
+    if (index == 3) widget.profileController.load();
+    if (index == 0) widget.homeController.load();
+  }
 
   /// The location line under the greeting, or null while the summary is still
   /// loading. A member with no locality yet gets no line rather than a blank one.
@@ -367,8 +413,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
             bottom: 16,
             child: _FloatingNav(
               pageIndex: _currentIndex,
-              onSelectPage: (index) =>
-                  setState(() => _currentIndex = index),
+              onSelectPage: _selectPage,
               onCompose: _openComposer,
             ),
           ),
@@ -629,12 +674,14 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                   // 3. FORUM
                   _buildDrawerItem(
                     title: 'Forum',
-                    subtitle: 'Topluluk tartışmaları',
-                    icon: Icons.chat_bubble_outline_rounded,
-                    iconBg: Colors.white.withValues(alpha: 0.05),
-                    iconColor: const Color(0xFF94A3B8),
-                    comingSoon: true,
-                    onTap: () {},
+                    subtitle: 'Vize, emlak, iş kurma: aranıp bulunan cevaplar',
+                    icon: Icons.forum_rounded,
+                    iconBg: AppColors.primary.withValues(alpha: 0.15),
+                    iconColor: const Color(0xFF818CF8),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openForum();
+                    },
                   ),
 
                   const SizedBox(height: 4),

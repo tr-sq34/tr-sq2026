@@ -15,6 +15,8 @@ import 'package:america_hub/features/community/data/repositories/mock_content_mo
 import 'package:america_hub/features/community/data/repositories/mock_media_upload_repository.dart';
 import 'package:america_hub/features/events/application/events_controller.dart';
 import 'package:america_hub/features/events/data/repositories/mock_events_repository.dart';
+import 'package:america_hub/features/forum/application/forum_controller.dart';
+import 'package:america_hub/features/forum/data/repositories/mock_forum_repository.dart';
 import 'package:america_hub/features/home/application/community_home_controller.dart';
 import 'package:america_hub/features/home/data/community_home_repository.dart';
 import 'package:america_hub/features/home/presentation/screens/main_layout_screen.dart';
@@ -73,8 +75,12 @@ Future<AuthController> pumpShell(
   installFakeImageHttp();
   _ignoreOverflowReports();
 
+  // Uygulamadaki gibi tek bir kimlik: akış paylaşımı imzalayan, profil ızgarası
+  // "benim" diye süzen ve kabuk adıyla selamlayan taraf aynı üye olsun diye
+  // depo da denetleyici de aynı nesneyi paylaşıyor.
+  final authRepository = MockAuthRepository();
   final authController = AuthController(
-    repository: MockAuthRepository(),
+    repository: authRepository,
     sessionStore: InMemorySessionStore(),
     tokenStore: InMemoryTokenStore(),
   );
@@ -83,7 +89,9 @@ Future<AuthController> pumpShell(
   }
   await authController.signIn('uye@turksquare.app', 'Gurbet!2026x');
 
-  final communityRepository = MockCommunityRepository();
+  final communityRepository = MockCommunityRepository(
+    viewer: () => authController.user,
+  );
   // Never actually used: both controllers that take an ApiClient are stubbed
   // below, because their real `load()` leaves Dio's timeout timer pending past
   // the end of the test.
@@ -114,12 +122,17 @@ Future<AuthController> pumpShell(
         marketplaceController: MarketplaceController(
           repository: MockMarketplaceRepository(),
         ),
-        profileController: ProfileController(repository: MockProfileRepository()),
+        profileController: ProfileController(
+          repository: MockProfileRepository(
+            auth: authRepository,
+            posts: communityRepository,
+          ),
+        ),
         journeyController: JourneyController(
           repository: const MockJourneyRepository(),
         ),
         homeController: CommunityHomeController(
-          _StubHomeRepository(apiClient),
+          _StubHomeRepository(),
         ),
         memberCapabilitiesController: _StubCapabilitiesController(apiClient),
         authController: authController,
@@ -134,6 +147,9 @@ Future<AuthController> pumpShell(
         ),
         promotionsController: PromotionsController(
           repository: MockPromotionRepository(),
+        ),
+        forumController: ForumController(
+          repository: MockForumRepository(viewer: () => authController.user),
         ),
         onSignOut: () async {},
       ),
@@ -158,9 +174,7 @@ Future<void> tapTab(WidgetTester tester, String label) async {
 /// The real repository would leave Dio's timeout timer pending past the end of
 /// the test, and the locality it returns is what the top bar's subtitle is
 /// built from — so it is worth being deliberate about.
-class _StubHomeRepository extends CommunityHomeRepository {
-  _StubHomeRepository(super.client);
-
+class _StubHomeRepository implements CommunityHomeRepository {
   @override
   Future<CommunityHomeSummary> fetch() async => const CommunityHomeSummary(
     city: 'Paterson',

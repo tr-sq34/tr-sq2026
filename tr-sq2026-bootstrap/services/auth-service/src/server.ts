@@ -74,7 +74,10 @@ const onboardingSchema = z.object({
   // region_code is a US state code everywhere it is consumed downstream, so it
   // is required exactly when the member says they live in the US.
 }).refine((value) => value.countryCode !== 'US' || !!value.regionCode, { path: ['regionCode'], message: 'regionCode is required when countryCode is US' });
-const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
+// `query` matches an email or a display name. Paging alone was enough while the
+// console only listed operators; the moment it has to answer "find this member",
+// walking the cursor to the end of the user table is not a search.
+const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().min(1).max(100).default(50), query: z.string().trim().min(2).max(120).optional(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']).optional() });
 const gateworkRevokeSchema = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const gateworkRoleSchema = z.object({ userId: z.string().uuid(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const systemPrincipalSchema = z.object({ displayName: z.string().trim().min(2).max(100), handle: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{2,39}$/), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
@@ -594,7 +597,33 @@ async function auditGatework(input: { actorId: string; roles: GateworkRole[]; ac
 async function seedGateworkOwner() {
   const email = process.env.GATEWORK_BOOTSTRAP_OWNER_EMAIL?.trim().toLowerCase();
   if (!email) return;
-  const owner = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1 AND email_verified_at IS NOT NULL', [email]);
+  let owner = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1 AND email_verified_at IS NOT NULL', [email]);
+  // The operations account has no way in through the app: registering it would
+  // mean sending a verification mail to a shared inbox and typing a code, and
+  // until that happens nobody can open the console at all. So the account can be
+  // created here - but only from a hash. The plaintext password is never an
+  // environment variable, never a build argument and never in this repository;
+  // GATEWORK_BOOTSTRAP_OWNER_PASSWORD_HASH holds an argon2id digest produced
+  // out of band and kept in the same secret store as every other credential.
+  const passwordHash = process.env.GATEWORK_BOOTSTRAP_OWNER_PASSWORD_HASH?.trim();
+  if (!owner.rows[0] && passwordHash) {
+    if (!passwordHash.startsWith('$argon2id$')) {
+      app.log.error('GATEWORK_BOOTSTRAP_OWNER_PASSWORD_HASH is not an argon2id digest; owner bootstrap skipped');
+      return;
+    }
+    const displayName = process.env.GATEWORK_BOOTSTRAP_OWNER_DISPLAY_NAME?.trim() || 'TurkSquare Operasyon';
+    // Verified at creation because there is nobody to verify it: this address is
+    // proven by whoever holds the secret store, not by a mail round trip. The
+    // insert is conditional so a restart cannot reset the password of an account
+    // whose owner has since changed it.
+    owner = await db.query<{ id: string }>(
+      `INSERT INTO users(email,display_name,password_hash,email_verified_at) VALUES($1,$2,$3,now())
+       ON CONFLICT (email) DO NOTHING RETURNING id`,
+      [email, displayName, passwordHash],
+    );
+    if (owner.rows[0]) app.log.info({ ownerId: owner.rows[0].id }, 'Gatework bootstrap owner account created');
+    else owner = await db.query<{ id: string }>('SELECT id FROM users WHERE email=$1 AND email_verified_at IS NOT NULL', [email]);
+  }
   if (!owner.rows[0]) {
     app.log.warn({ bootstrapOwnerEmailConfigured: true }, 'Gatework owner bootstrap skipped because the verified account does not exist');
     return;
@@ -1036,7 +1065,13 @@ app.get('/v1/auth/gatework/members', { config: { rateLimit: { max: 60, timeWindo
     const rows = await db.query<{ id: string; email: string; display_name: string; email_verified_at: Date | null; created_at: Date; roles: string[] }>(
       `SELECT u.id,u.email,u.display_name,u.email_verified_at,u.created_at,COALESCE(array_remove(array_agg(r.role) FILTER (WHERE r.revoked_at IS NULL), NULL), '{}') roles
        FROM users u LEFT JOIN admin_roles r ON r.user_id=u.id
-       WHERE ($1::uuid IS NULL OR u.id > $1) GROUP BY u.id ORDER BY u.id ASC LIMIT $2`, [input.cursor ?? null, input.limit],
+       WHERE ($1::uuid IS NULL OR u.id > $1)
+         AND ($3::text IS NULL OR u.email ILIKE '%'||$3||'%' OR u.display_name ILIKE '%'||$3||'%')
+       GROUP BY u.id
+       -- Filtering on the aggregate rather than the join: a member holding two
+       -- roles has to come back once, with both of them.
+       HAVING ($4::text IS NULL OR $4 = ANY(array_agg(r.role) FILTER (WHERE r.revoked_at IS NULL)))
+       ORDER BY u.id ASC LIMIT $2`, [input.cursor ?? null, input.limit, input.query ?? null, input.role ?? null],
     );
     await auditGatework({ actorId: user.id, roles, action: 'members.list', targetType: 'member_query', targetId: input.cursor ?? 'initial', requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return { data: rows.rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name, emailVerified: Boolean(row.email_verified_at), createdAt: row.created_at.toISOString(), roles: row.roles })), nextCursor: rows.rows.length === input.limit ? rows.rows.at(-1)?.id : null };
@@ -1065,6 +1100,26 @@ app.post('/v1/auth/gatework/roles', { config: { rateLimit: { max: 6, timeWindow:
     const input = gateworkRoleSchema.parse(request.body);
     await db.query('INSERT INTO admin_roles(user_id,role,granted_by,revoked_at) VALUES($1,$2,$3,NULL) ON CONFLICT(user_id,role) DO UPDATE SET granted_by=EXCLUDED.granted_by,granted_at=now(),revoked_at=NULL', [input.userId, input.role, user.id]);
     await auditGatework({ actorId: user.id, roles, action: 'role.grant', targetType: 'member', targetId: input.userId, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'ROLE_CHANGE_REJECTED' } });
+  }
+});
+
+// Granting had a door and taking back did not, so the only way to undo a role
+// was a hand-written UPDATE against the identity database. Revoked rather than
+// deleted: `revoked_at` is what proves later that the role was held and when it
+// stopped, which a missing row cannot.
+app.post('/v1/auth/gatework/roles/revoke', { config: { rateLimit: { max: 6, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const { user, roles } = await requireGateworkRole(request, ['owner']);
+    const input = gateworkRoleSchema.parse(request.body);
+    // An owner who can drop their own owner role can lock everyone out of the
+    // console, and the way back in is a database console.
+    if (input.userId === user.id && input.role === 'owner') return reply.code(400).send({ error: { code: 'SELF_OWNER_REVOKE_NOT_ALLOWED', message: 'Kendi owner rolünüzü kaldıramazsınız.' } });
+    const revoked = await db.query('UPDATE admin_roles SET revoked_at=now() WHERE user_id=$1 AND role=$2 AND revoked_at IS NULL', [input.userId, input.role]);
+    if (!revoked.rowCount) return reply.code(404).send({ error: { code: 'ROLE_NOT_HELD', message: 'Bu rol zaten atanmış değil.' } });
+    await auditGatework({ actorId: user.id, roles, action: 'role.revoke', targetType: 'member', targetId: input.userId, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(204).send();
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'ROLE_CHANGE_REJECTED' } });

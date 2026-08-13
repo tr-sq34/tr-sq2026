@@ -594,7 +594,10 @@ const CONTENT_REVIEW_ROLES: GateworkRole[] = ['owner', 'security_admin', 'modera
 const CONTENT_ACT_ROLES: GateworkRole[] = ['owner', 'security_admin', 'moderator'];
 
 const contentReportBody = z.object({
-  targetType: z.enum(['post', 'comment', 'story']),
+  // Forum content is in this list rather than in a queue of its own: a reported
+  // topic is the same job as a reported post, and splitting the queue would mean
+  // a moderator has to remember to look in two places.
+  targetType: z.enum(['post', 'comment', 'story', 'forum_topic', 'forum_reply']),
   targetId: z.string().uuid(),
   category: z.enum(REPORT_CATEGORIES),
   note: z.string().trim().max(500).optional(),
@@ -620,7 +623,9 @@ const contentReasonBody = z.object({ reason: z.string().trim().min(5).max(500), 
 
 // The reported object, frozen. Selected inside the same transaction that writes
 // the report so a delete racing the report cannot empty the case file.
-async function captureContentEvidence(client: pg.PoolClient, targetType: 'post' | 'comment' | 'story', targetId: string) {
+type ContentTargetType = 'post' | 'comment' | 'story' | 'forum_topic' | 'forum_reply';
+
+async function captureContentEvidence(client: pg.PoolClient, targetType: ContentTargetType, targetId: string) {
   if (targetType === 'post') {
     const row = await client.query<{ author_id: string; body: string; created_at: Date; media_ids: string[] | null }>(
       `SELECT p.author_id,p.body,p.created_at,
@@ -640,6 +645,26 @@ async function captureContentEvidence(client: pg.PoolClient, targetType: 'post' 
     if (!row.rows[0]) return null;
     const comment = row.rows[0];
     return { authorId: comment.author_id, evidence: { targetType, body: comment.body, createdAt: comment.created_at.toISOString(), postId: comment.post_id } };
+  }
+  if (targetType === 'forum_topic') {
+    // Title and body together: a topic can be reported for its title alone, and
+    // a reviewer opening the case has to see what was actually written.
+    const row = await client.query<{ author_id: string; title: string; body: string; created_at: Date; category_id: string }>(
+      'SELECT author_id,title,body,created_at,category_id FROM forum_topics WHERE id=$1 AND deleted_at IS NULL',
+      [targetId],
+    );
+    if (!row.rows[0]) return null;
+    const topic = row.rows[0];
+    return { authorId: topic.author_id, evidence: { targetType, title: topic.title, body: topic.body, createdAt: topic.created_at.toISOString(), categoryId: topic.category_id } };
+  }
+  if (targetType === 'forum_reply') {
+    const row = await client.query<{ author_id: string; body: string; created_at: Date; topic_id: string }>(
+      'SELECT author_id,body,created_at,topic_id FROM forum_replies WHERE id=$1 AND deleted_at IS NULL',
+      [targetId],
+    );
+    if (!row.rows[0]) return null;
+    const forumReply = row.rows[0];
+    return { authorId: forumReply.author_id, evidence: { targetType, body: forumReply.body, createdAt: forumReply.created_at.toISOString(), topicId: forumReply.topic_id } };
   }
   const row = await client.query<{ author_id: string; created_at: Date; media_id: string; safe_url: string | null }>(
     'SELECT s.author_id,s.created_at,s.media_id,m.safe_url FROM stories s JOIN media_assets m ON m.id=s.media_id WHERE s.id=$1',
@@ -745,7 +770,7 @@ const CONTENT_REPORT_SELECT = `
 
 type ContentReportRow = {
   id: string; reporter_id: string; reporter_name: string; reported_user_id: string; reported_name: string;
-  target_type: 'post' | 'comment' | 'story'; target_id: string; category: string; note: string | null;
+  target_type: ContentTargetType; target_id: string; category: string; note: string | null;
   evidence: Record<string, unknown>; priority: 'urgent' | 'standard'; status: string; due_at: Date;
   assigned_to: string | null; resolution: string | null; resolved_by: string | null; resolved_at: Date | null;
   created_at: Date; active_restriction: string | null; reporter_trust: 'standard' | 'high' | null;
@@ -884,7 +909,7 @@ app.post('/v1/internal/gatework/community/reports/:id/decision', async (request,
     );
     if (prior.rows[0]) { await client.query('COMMIT'); return { data: { id: prior.rows[0].result_id, duplicate: true } }; }
 
-    const report = await client.query<{ id: string; status: string; target_type: 'post' | 'comment' | 'story'; target_id: string; reported_user_id: string; reporter_id: string }>(
+    const report = await client.query<{ id: string; status: string; target_type: ContentTargetType; target_id: string; reported_user_id: string; reporter_id: string }>(
       'SELECT id,status,target_type,target_id,reported_user_id,reporter_id FROM content_reports WHERE id=$1 FOR UPDATE',
       [id],
     );
@@ -898,6 +923,13 @@ app.post('/v1/internal/gatework/community/reports/:id/decision', async (request,
       // wrongly removed post has to be restorable.
       if (row.target_type === 'post') await client.query("UPDATE community_posts SET moderation_state='removed' WHERE id=$1", [row.target_id]);
       else if (row.target_type === 'comment') await client.query("UPDATE community_comments SET moderation_state='removed' WHERE id=$1", [row.target_id]);
+      else if (row.target_type === 'forum_topic') await client.query("UPDATE forum_topics SET moderation_state='removed' WHERE id=$1", [row.target_id]);
+      else if (row.target_type === 'forum_reply') {
+        // Removing a reply gives the topic its count back too, otherwise the
+        // list keeps advertising an answer nobody can read.
+        const removed = await client.query<{ topic_id: string }>("UPDATE forum_replies SET moderation_state='removed' WHERE id=$1 AND moderation_state='active' RETURNING topic_id", [row.target_id]);
+        if (removed.rows[0]) await client.query('UPDATE forum_topics SET reply_count=greatest(reply_count-1,0) WHERE id=$1', [removed.rows[0].topic_id]);
+      }
       else await client.query('UPDATE stories SET expires_at=now() WHERE id=$1 AND expires_at>now()', [row.target_id]);
       await client.query(
         'INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES($1,$2,$3,$4,$5,$6,$7)',
@@ -2097,6 +2129,656 @@ app.post('/v1/internal/gatework/promotions', { config: { rateLimit: { max: 30, t
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_PROMOTION_REJECTED' } });
+  } finally {
+    client.release();
+  }
+});
+
+// --- Forum ---------------------------------------------------------------
+// Separate endpoints from the feed because they are separate tables, for the
+// reason migration 019 gives: the feed is today, the forum is the archive.
+//
+// The ordering lives here rather than in the client. "Son hareket" and "en cok
+// yanit" differ, and if each client recomputed them, two app versions in the
+// wild would show two different forums.
+const forumTopicsQuery = z.object({
+  categoryId: z.string().uuid().optional(),
+  cursor: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  sort: z.enum(['latestActivity', 'newest', 'mostReplies']).default('latestActivity'),
+});
+const forumTopicBody = z.object({ categoryId: z.string().uuid(), title: z.string().trim().min(8).max(160), body: z.string().trim().min(20).max(8000) });
+const forumReplyBody = z.object({ body: z.string().trim().min(1).max(4000) });
+const forumLikeBody = z.object({ value: z.boolean() });
+const forumRepliesQuery = z.object({ cursor: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(100).default(30) });
+const forumTrendingQuery = z.object({ limit: z.coerce.number().int().min(1).max(20).default(5) });
+const forumSort = {
+  latestActivity: { expr: 'COALESCE(t.last_reply_at,t.created_at)', cast: 'timestamptz' },
+  newest: { expr: 't.created_at', cast: 'timestamptz' },
+  mostReplies: { expr: 't.reply_count', cast: 'int' },
+} as const;
+
+type ForumTopicRow = {
+  id: string; category_id: string; category_title: string; title: string; body: string;
+  author_id: string; author_name: string; created_at: Date; reply_count: number; view_count: string;
+  like_count: string; is_liked: boolean; is_pinned: boolean; is_locked: boolean;
+  last_reply_at: Date | null; last_reply_author_name: string | null; sort_value: Date | number;
+};
+type ForumReplyRow = {
+  id: string; topic_id: string; author_id: string; author_name: string; body: string;
+  created_at: Date; like_count: string; is_liked: boolean; is_accepted_answer: boolean;
+};
+
+// The cursor carries the pinned flag as well as the sort value. The ordering
+// starts with `is_pinned DESC`, so a cursor that left it out would show the
+// pinned topic again at the top of page two.
+const forumCursorEncode = (row: { is_pinned: boolean; sort_value: Date | number; id: string }) =>
+  Buffer.from(`${row.is_pinned ? 1 : 0}|${row.sort_value instanceof Date ? row.sort_value.toISOString() : row.sort_value}|${row.id}`).toString('base64url');
+const forumCursorDecode = (cursor?: string) => {
+  if (!cursor) return null;
+  try {
+    const [pinned, value, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    if (pinned === undefined || !value || !id) throw Error();
+    return { pinned: pinned === '1', value, id };
+  } catch { throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 }); }
+};
+
+const forumTopicSelect = (bodyExpr: string, sortExpr: string) => `
+  SELECT t.id,t.category_id,c.title category_title,t.title,${bodyExpr} body,t.author_id,
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name,t.created_at,t.reply_count,t.view_count,
+         (SELECT count(*) FROM forum_reactions x WHERE x.target_type='topic' AND x.target_id=t.id) like_count,
+         EXISTS(SELECT 1 FROM forum_reactions x WHERE x.target_type='topic' AND x.target_id=t.id AND x.actor_id=$1) is_liked,
+         t.is_pinned,t.is_locked,t.last_reply_at,
+         (SELECT display_name FROM community_profile_projection WHERE user_id=t.last_reply_author_id) last_reply_author_name,
+         ${sortExpr} sort_value
+    FROM forum_topics t
+    JOIN forum_categories c ON c.id=t.category_id
+    LEFT JOIN community_profile_projection p ON p.user_id=t.author_id
+   WHERE t.deleted_at IS NULL AND t.moderation_state='active'`;
+
+const forumReplySelect = `
+  SELECT r.id,r.topic_id,r.author_id,COALESCE(p.display_name,'TurkSquare üyesi') author_name,r.body,r.created_at,
+         (SELECT count(*) FROM forum_reactions x WHERE x.target_type='reply' AND x.target_id=r.id) like_count,
+         EXISTS(SELECT 1 FROM forum_reactions x WHERE x.target_type='reply' AND x.target_id=r.id AND x.actor_id=$1) is_liked,
+         r.is_accepted_answer
+    FROM forum_replies r
+    LEFT JOIN community_profile_projection p ON p.user_id=r.author_id
+   WHERE r.deleted_at IS NULL AND r.moderation_state='active'`;
+
+const forumTopicJson = (row: ForumTopicRow) => ({
+  id: row.id,
+  categoryId: row.category_id,
+  categoryTitle: row.category_title,
+  title: row.title,
+  body: row.body,
+  authorId: row.author_id,
+  authorName: row.author_name,
+  createdAt: row.created_at.toISOString(),
+  replyCount: Number(row.reply_count),
+  viewCount: Number(row.view_count),
+  likeCount: Number(row.like_count),
+  isLiked: row.is_liked,
+  isPinned: row.is_pinned,
+  isLocked: row.is_locked,
+  lastReplyAt: row.last_reply_at ? row.last_reply_at.toISOString() : null,
+  lastReplyAuthorName: row.last_reply_author_name,
+});
+
+const forumReplyJson = (row: ForumReplyRow) => ({
+  id: row.id,
+  topicId: row.topic_id,
+  authorId: row.author_id,
+  authorName: row.author_name,
+  body: row.body,
+  createdAt: row.created_at.toISOString(),
+  likeCount: Number(row.like_count),
+  isLiked: row.is_liked,
+  isAcceptedAnswer: row.is_accepted_answer,
+});
+
+app.get('/v1/community/forum/categories', async (request, reply) => {
+  try {
+    await viewer(request.headers);
+    // Counted on read rather than denormalised like reply_count: the category
+    // bar is drawn once per visit, and a stale "0 konu" on a category somebody
+    // just wrote in is the one error that would make the forum look empty.
+    const rows = await db.query<{ id: string; slug: string; title: string; emoji: string; description: string; topic_count: string; reply_count: string; last_activity_at: Date | null }>(
+      `SELECT c.id,c.slug,c.title,c.emoji,c.description,
+              count(t.id) topic_count,COALESCE(sum(t.reply_count),0) reply_count,
+              max(COALESCE(t.last_reply_at,t.created_at)) last_activity_at
+         FROM forum_categories c
+         LEFT JOIN forum_topics t ON t.category_id=c.id AND t.deleted_at IS NULL AND t.moderation_state='active'
+        WHERE c.is_active
+        GROUP BY c.id
+        ORDER BY c.ordinal,c.title`,
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id, slug: row.slug, title: row.title, emoji: row.emoji, description: row.description,
+        topicCount: Number(row.topic_count), replyCount: Number(row.reply_count),
+        lastActivityAt: row.last_activity_at ? row.last_activity_at.toISOString() : null,
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_CATEGORIES_UNAVAILABLE', message: 'Forum kategorileri yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/forum/topics', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = forumTopicsQuery.parse(request.query);
+    const cursor = forumCursorDecode(input.cursor);
+    const sort = forumSort[input.sort];
+    const params: unknown[] = [userId];
+    let where = '';
+    if (input.categoryId) { params.push(input.categoryId); where += ` AND t.category_id=$${params.length}::uuid`; }
+    if (cursor) {
+      params.push(cursor.pinned, cursor.value, cursor.id);
+      where += ` AND (t.is_pinned,${sort.expr},t.id) < ($${params.length - 2}::boolean,$${params.length - 1}::${sort.cast},$${params.length}::uuid)`;
+    }
+    params.push(input.limit + 1);
+    // Only the first 240 characters of the body on a list: the card shows two
+    // lines of it, and sending 8000 for each of twenty topics to draw them is
+    // the kind of waste that is invisible on wifi and obvious on a train.
+    const rows = await db.query<ForumTopicRow>(
+      `${forumTopicSelect('left(t.body,240)', sort.expr)}${where} ORDER BY t.is_pinned DESC,${sort.expr} DESC,t.id DESC LIMIT $${params.length}`,
+      params,
+    );
+    const page = rows.rows.slice(0, input.limit);
+    const last = page[page.length - 1];
+    return { data: page.map(forumTopicJson), meta: { nextCursor: rows.rows.length > input.limit && last ? forumCursorEncode(last) : null } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+      .send({ error: { code: 'FORUM_TOPICS_UNAVAILABLE', message: 'Konular yüklenemedi.' } });
+  }
+});
+
+// What the home screen's strip is. Not "son hareket": trending is how much a
+// topic is being talked about, so it is reply count among topics that moved in
+// the last week. Pinned topics stay out - they are at the top because a
+// moderator put them there, which says nothing about interest.
+app.get('/v1/community/forum/topics/trending', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = forumTrendingQuery.parse(request.query);
+    const rows = await db.query<ForumTopicRow>(
+      `${forumTopicSelect('left(t.body,240)', 't.created_at')}
+         AND NOT t.is_pinned AND COALESCE(t.last_reply_at,t.created_at)>now()-interval '7 days'
+       ORDER BY t.reply_count DESC,COALESCE(t.last_reply_at,t.created_at) DESC LIMIT $2`,
+      [userId, input.limit],
+    );
+    return { data: rows.rows.map(forumTopicJson) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_TRENDING_UNAVAILABLE', message: 'Trend tartışmalar yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/forum/topics/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    // The insert is the dedupe: it succeeds once per member, and only then does
+    // the counter move. Reopening a topic does not make it look more read.
+    const seen = await db.query(
+      'INSERT INTO forum_topic_views(topic_id,viewer_id) SELECT $1,$2 WHERE EXISTS(SELECT 1 FROM forum_topics WHERE id=$1 AND deleted_at IS NULL) ON CONFLICT DO NOTHING',
+      [id, userId],
+    );
+    if (seen.rowCount) await db.query('UPDATE forum_topics SET view_count=view_count+1 WHERE id=$1', [id]);
+    const rows = await db.query<ForumTopicRow>(`${forumTopicSelect('t.body', 't.created_at')} AND t.id=$2`, [userId, id]);
+    if (!rows.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_TOPIC_NOT_FOUND', message: 'Konu bulunamadı.' } });
+    return { data: forumTopicJson(rows.rows[0]) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_TOPIC_UNAVAILABLE', message: 'Konu yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/forum/topics', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const input = forumTopicBody.parse(request.body);
+    // The category check is inside the insert rather than a read before it: a
+    // category deactivated between the two would otherwise still take a topic.
+    const created = await db.query<{ id: string }>(
+      'INSERT INTO forum_topics(category_id,author_id,title,body) SELECT $1,$2,$3,$4 WHERE EXISTS(SELECT 1 FROM forum_categories WHERE id=$1 AND is_active) RETURNING id',
+      [input.categoryId, userId, input.title, input.body],
+    );
+    if (!created.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_CATEGORY_NOT_FOUND', message: 'Kategori bulunamadı.' } });
+    const rows = await db.query<ForumTopicRow>(`${forumTopicSelect('t.body', 't.created_at')} AND t.id=$2`, [userId, created.rows[0].id]);
+    return reply.code(201).send({ data: forumTopicJson(rows.rows[0]!) });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_TOPIC_CREATE_FAILED', message: 'Konu açılamadı.' } });
+  }
+});
+
+app.get('/v1/community/forum/topics/:id/replies', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = forumRepliesQuery.parse(request.query);
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [userId, id];
+    let where = '';
+    // Oldest first, and the cursor walks forward: a thread is read downwards,
+    // which is the opposite of every other list in this service.
+    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (r.created_at,r.id) > ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    params.push(input.limit + 1);
+    const rows = await db.query<ForumReplyRow>(`${forumReplySelect} AND r.topic_id=$2${where} ORDER BY r.created_at,r.id LIMIT $${params.length}`, params);
+    const page = rows.rows.slice(0, input.limit);
+    const last = page[page.length - 1];
+    return { data: page.map(forumReplyJson), meta: { nextCursor: rows.rows.length > input.limit && last ? encodeCursor(last) : null } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+      .send({ error: { code: 'FORUM_REPLIES_UNAVAILABLE', message: 'Yanıtlar yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/forum/topics/:id/replies', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = forumReplyBody.parse(request.body);
+    await client.query('BEGIN');
+    // The lock check and the counter update are one transaction under FOR
+    // UPDATE: a topic closed at this exact moment has to refuse the reply, and
+    // two replies arriving together have to count as two.
+    const topic = await client.query<{ is_locked: boolean }>(
+      "SELECT is_locked FROM forum_topics WHERE id=$1 AND deleted_at IS NULL AND moderation_state='active' FOR UPDATE",
+      [id],
+    );
+    if (!topic.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'FORUM_TOPIC_NOT_FOUND', message: 'Konu bulunamadı.' } }); }
+    if (topic.rows[0].is_locked) { await client.query('ROLLBACK'); return reply.code(403).send({ error: { code: 'FORUM_TOPIC_LOCKED', message: 'Bu konu kapatıldı, yeni yanıt yazılamıyor.' } }); }
+    const created = await client.query<{ id: string }>('INSERT INTO forum_replies(topic_id,author_id,body) VALUES($1,$2,$3) RETURNING id', [id, userId, input.body]);
+    await client.query('UPDATE forum_topics SET reply_count=reply_count+1,last_reply_at=now(),last_reply_author_id=$2 WHERE id=$1', [id, userId]);
+    await client.query('COMMIT');
+    const rows = await db.query<ForumReplyRow>(`${forumReplySelect} AND r.id=$2`, [userId, created.rows[0]!.id]);
+    return reply.code(201).send({ data: forumReplyJson(rows.rows[0]!) });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_REPLY_FAILED', message: 'Yanıt gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+// PUT with the value rather than POST toggling: sending the same request twice
+// leaves the same one row, so a retry on a bad connection cannot double a count.
+app.put('/v1/community/forum/topics/:id/like', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = forumLikeBody.parse(request.body);
+    if (input.value) {
+      await db.query(
+        "INSERT INTO forum_reactions(target_type,target_id,actor_id) SELECT 'topic',$1,$2 WHERE EXISTS(SELECT 1 FROM forum_topics WHERE id=$1 AND deleted_at IS NULL AND moderation_state='active') ON CONFLICT DO NOTHING",
+        [id, userId],
+      );
+    } else {
+      await db.query("DELETE FROM forum_reactions WHERE target_type='topic' AND target_id=$1 AND actor_id=$2", [id, userId]);
+    }
+    // The whole topic comes back, not just the count: the strip on the home
+    // screen and the list behind it both hold this record, and returning the
+    // full row is what lets them agree without a second request.
+    const rows = await db.query<ForumTopicRow>(`${forumTopicSelect('t.body', 't.created_at')} AND t.id=$2`, [userId, id]);
+    if (!rows.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_TOPIC_NOT_FOUND', message: 'Konu bulunamadı.' } });
+    return { data: forumTopicJson(rows.rows[0]) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_LIKE_FAILED', message: 'Beğeni kaydedilemedi.' } });
+  }
+});
+
+app.put('/v1/community/forum/replies/:id/like', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = forumLikeBody.parse(request.body);
+    if (input.value) {
+      await db.query(
+        "INSERT INTO forum_reactions(target_type,target_id,actor_id) SELECT 'reply',$1,$2 WHERE EXISTS(SELECT 1 FROM forum_replies WHERE id=$1 AND deleted_at IS NULL AND moderation_state='active') ON CONFLICT DO NOTHING",
+        [id, userId],
+      );
+    } else {
+      await db.query("DELETE FROM forum_reactions WHERE target_type='reply' AND target_id=$1 AND actor_id=$2", [id, userId]);
+    }
+    const rows = await db.query<ForumReplyRow>(`${forumReplySelect} AND r.id=$2`, [userId, id]);
+    if (!rows.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_REPLY_NOT_FOUND', message: 'Yanıt bulunamadı.' } });
+    return { data: forumReplyJson(rows.rows[0]) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FORUM_LIKE_FAILED', message: 'Beğeni kaydedilemedi.' } });
+  }
+});
+
+// --- Forum administration -----------------------------------------------
+// The categories in migration 019 are seeded, not fixed. A forum whose sections
+// can only change by shipping a migration is a forum that stops matching what
+// people actually ask about, so opening, renaming and retiring one is an
+// operator action with an audit line behind it.
+const FORUM_EDIT_ROLES: GateworkRole[] = ['owner', 'operations_admin', 'content_editor'];
+const FORUM_MODERATE_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'moderator'];
+
+const gateworkForumCategoryBody = z.object({
+  slug: z.string().trim().toLowerCase().regex(/^[a-z0-9-]{2,48}$/),
+  title: z.string().trim().min(2).max(80),
+  emoji: z.string().trim().min(1).max(8).default('💬'),
+  description: z.string().trim().max(240).default(''),
+  ordinal: z.coerce.number().int().min(0).max(999).default(0),
+  reason: z.string().trim().min(5).max(500),
+  idempotencyKey: z.string().uuid(),
+});
+// Every field optional but at least one present: a PATCH that changes nothing is
+// a mistake worth refusing rather than an audit line saying nothing happened.
+const gateworkForumCategoryPatch = z.object({
+  title: z.string().trim().min(2).max(80).optional(),
+  emoji: z.string().trim().min(1).max(8).optional(),
+  description: z.string().trim().max(240).optional(),
+  ordinal: z.coerce.number().int().min(0).max(999).optional(),
+  isActive: z.boolean().optional(),
+  reason: z.string().trim().min(5).max(500),
+}).refine((value) => value.title !== undefined || value.emoji !== undefined || value.description !== undefined || value.ordinal !== undefined || value.isActive !== undefined);
+
+const gateworkForumTopicState = z.object({
+  isPinned: z.boolean().optional(),
+  isLocked: z.boolean().optional(),
+  reason: z.string().trim().min(5).max(500),
+}).refine((value) => value.isPinned !== undefined || value.isLocked !== undefined);
+
+app.get('/v1/internal/gatework/forum/categories', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, [...FORUM_EDIT_ROLES, 'moderator', 'analyst', 'auditor']);
+    // Inactive ones included, unlike the member-facing list: retiring a category
+    // is reversible, and the operator who has to reverse it needs to see it.
+    const rows = await db.query<{ id: string; slug: string; title: string; emoji: string; description: string; ordinal: number; is_active: boolean; topic_count: string; reply_count: string; last_activity_at: Date | null }>(
+      `SELECT c.id,c.slug,c.title,c.emoji,c.description,c.ordinal,c.is_active,
+              count(t.id) topic_count,COALESCE(sum(t.reply_count),0) reply_count,
+              max(COALESCE(t.last_reply_at,t.created_at)) last_activity_at
+         FROM forum_categories c
+         LEFT JOIN forum_topics t ON t.category_id=c.id AND t.deleted_at IS NULL AND t.moderation_state='active'
+        GROUP BY c.id
+        ORDER BY c.ordinal,c.title`,
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id, slug: row.slug, title: row.title, emoji: row.emoji, description: row.description,
+        ordinal: row.ordinal, isActive: row.is_active, topicCount: Number(row.topic_count), replyCount: Number(row.reply_count),
+        lastActivityAt: row.last_activity_at ? row.last_activity_at.toISOString() : null,
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'FORUM_CATEGORIES_UNAVAILABLE', message: 'Kategoriler okunamadı.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/forum/categories', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, FORUM_EDIT_ROLES);
+    const input = gateworkForumCategoryBody.parse(request.body);
+    // Same dedup table every other Gatework command uses: a double-submitted
+    // form opens one category, not two with the same name.
+    const prior = await db.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='forum_category.create'",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]) return { data: { id: prior.rows[0].result_id, duplicate: true } };
+    const created = await db.query<{ id: string }>(
+      'INSERT INTO forum_categories(slug,title,emoji,description,ordinal) VALUES($1,$2,$3,$4,$5) ON CONFLICT (slug) DO NOTHING RETURNING id',
+      [input.slug, input.title, input.emoji, input.description, input.ordinal],
+    );
+    if (!created.rows[0]) return reply.code(409).send({ error: { code: 'FORUM_CATEGORY_SLUG_TAKEN', message: 'Bu kısa ad zaten kullanılıyor.' } });
+    await db.query(
+      "INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'forum_category.create',$3)",
+      [actor.actorId, input.idempotencyKey, created.rows[0].id],
+    );
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'forum_category.create', targetType: 'forum_category',
+      targetId: created.rows[0].id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return reply.code(201).send({ data: { id: created.rows[0].id, duplicate: false } });
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_CATEGORY_CREATE_REJECTED', message: 'Kategori açılamadı.' } });
+  }
+});
+
+app.patch('/v1/internal/gatework/forum/categories/:id', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, FORUM_EDIT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkForumCategoryPatch.parse(request.body);
+    // The slug is not in the patch on purpose: it is the stable name a saved
+    // filter and a link hang off, and renaming it silently breaks both.
+    const updated = await db.query<{ id: string }>(
+      `UPDATE forum_categories
+          SET title=COALESCE($2,title),emoji=COALESCE($3,emoji),description=COALESCE($4,description),
+              ordinal=COALESCE($5,ordinal),is_active=COALESCE($6,is_active)
+        WHERE id=$1 RETURNING id`,
+      [id, input.title ?? null, input.emoji ?? null, input.description ?? null, input.ordinal ?? null, input.isActive ?? null],
+    );
+    if (!updated.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_CATEGORY_NOT_FOUND', message: 'Kategori bulunamadı.' } });
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: input.isActive === false ? 'forum_category.deactivate' : 'forum_category.update',
+      targetType: 'forum_category', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return { data: { id } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_CATEGORY_UPDATE_REJECTED', message: 'Kategori güncellenemedi.' } });
+  }
+});
+
+// The member-facing topic list is not reusable here: it filters to active rows
+// and answers a member token. An operator has to be able to reach the topic that
+// is already hidden, which is usually the one they are looking for.
+const gateworkForumTopicsQuery = z.object({
+  categoryId: z.string().uuid().optional(),
+  state: z.enum(['active', 'hidden', 'removed', 'all']).default('active'),
+  query: z.string().trim().min(2).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+app.get('/v1/internal/gatework/forum/topics', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, [...FORUM_MODERATE_ROLES, 'content_editor', 'analyst', 'auditor']);
+    const input = gateworkForumTopicsQuery.parse(request.query);
+    const rows = await db.query<{ id: string; title: string; category_title: string; author_id: string; author_name: string | null; reply_count: number; view_count: string; is_pinned: boolean; is_locked: boolean; moderation_state: string; created_at: Date; last_activity_at: Date }>(
+      `SELECT t.id,t.title,c.title category_title,t.author_id,p.display_name author_name,
+              t.reply_count,t.view_count,t.is_pinned,t.is_locked,t.moderation_state,
+              t.created_at,COALESCE(t.last_reply_at,t.created_at) last_activity_at
+         FROM forum_topics t
+         JOIN forum_categories c ON c.id=t.category_id
+         LEFT JOIN community_profile_projection p ON p.user_id=t.author_id
+        WHERE t.deleted_at IS NULL
+          AND ($1::uuid IS NULL OR t.category_id=$1)
+          AND ($2::text = 'all' OR t.moderation_state=$2)
+          AND ($3::text IS NULL OR t.title ILIKE '%'||$3||'%')
+        ORDER BY t.is_pinned DESC,COALESCE(t.last_reply_at,t.created_at) DESC
+        LIMIT $4`,
+      [input.categoryId ?? null, input.state, input.query ?? null, input.limit],
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id, title: row.title, categoryTitle: row.category_title, authorId: row.author_id,
+        authorName: row.author_name, replyCount: row.reply_count, viewCount: Number(row.view_count),
+        isPinned: row.is_pinned, isLocked: row.is_locked, moderationState: row.moderation_state,
+        createdAt: row.created_at.toISOString(), lastActivityAt: row.last_activity_at.toISOString(),
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_TOPICS_UNAVAILABLE', message: 'Konular okunamadı.' } });
+  }
+});
+
+// Pinning and locking are moderation, not editing: the rules topic sits at the
+// top and takes no replies because someone decided that, and the decision has to
+// be as reversible and as recorded as a takedown.
+app.post('/v1/internal/gatework/forum/topics/:id/state', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, FORUM_MODERATE_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkForumTopicState.parse(request.body);
+    const updated = await db.query<{ is_pinned: boolean; is_locked: boolean }>(
+      'UPDATE forum_topics SET is_pinned=COALESCE($2,is_pinned),is_locked=COALESCE($3,is_locked) WHERE id=$1 AND deleted_at IS NULL RETURNING is_pinned,is_locked',
+      [id, input.isPinned ?? null, input.isLocked ?? null],
+    );
+    if (!updated.rows[0]) return reply.code(404).send({ error: { code: 'FORUM_TOPIC_NOT_FOUND', message: 'Konu bulunamadı.' } });
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'forum_topic.state', targetType: 'forum_topic', targetId: id,
+      reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return { data: { id, isPinned: updated.rows[0].is_pinned, isLocked: updated.rows[0].is_locked } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_TOPIC_STATE_REJECTED', message: 'Konu durumu değiştirilemedi.' } });
+  }
+});
+
+// --- Member operations ---------------------------------------------------
+// What the console's Uyeler screen needs from Community. Identity owns the
+// account - email, roles, sessions - and is asked separately; this is only what
+// the member has done here and what has been decided about them.
+app.get('/v1/internal/gatework/community/members/:userId', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_REVIEW_ROLES);
+    const userId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const profile = await db.query<{ display_name: string | null; city: string | null; region_code: string | null; origin_country: string | null; created_at: Date | null }>(
+      'SELECT p.display_name,p.city,p.region_code,p.origin_country,p.updated_at created_at FROM community_profile_projection p WHERE p.user_id=$1',
+      [userId],
+    );
+    const activity = await db.query<{ posts: string; comments: string; topics: string; replies: string; listings: string }>(
+      `SELECT (SELECT count(*) FROM community_posts WHERE author_id=$1 AND deleted_at IS NULL) posts,
+              (SELECT count(*) FROM community_comments WHERE author_id=$1 AND deleted_at IS NULL) comments,
+              (SELECT count(*) FROM forum_topics WHERE author_id=$1 AND deleted_at IS NULL) topics,
+              (SELECT count(*) FROM forum_replies WHERE author_id=$1 AND deleted_at IS NULL) replies,
+              (SELECT count(*) FROM marketplace_listings WHERE owner_id=$1) listings`,
+      [userId],
+    );
+    // "Reported how often, upheld how often" is the number that decides whether
+    // a restriction is proportionate; one report says almost nothing.
+    const reports = await db.query<{ filed: string; upheld: string; open: string }>(
+      `SELECT count(*) filed,
+              count(*) FILTER (WHERE status='actioned') upheld,
+              count(*) FILTER (WHERE status IN ('open','in_review')) open
+         FROM content_reports WHERE reported_user_id=$1`,
+      [userId],
+    );
+    const restriction = await activeRestriction(userId);
+    const capability = await db.query<{ identity_verified: boolean; auction_seller_eligible: boolean }>(
+      'SELECT identity_verified,auction_seller_eligible FROM member_capabilities WHERE user_id=$1',
+      [userId],
+    );
+    const row = activity.rows[0]!;
+    const reported = reports.rows[0]!;
+    return {
+      data: {
+        userId,
+        displayName: profile.rows[0]?.display_name ?? null,
+        city: profile.rows[0]?.city ?? null,
+        regionCode: profile.rows[0]?.region_code ?? null,
+        originCountry: profile.rows[0]?.origin_country ?? null,
+        identityVerified: capability.rows[0]?.identity_verified ?? false,
+        auctionSellerEligible: capability.rows[0]?.auction_seller_eligible ?? false,
+        activity: { posts: Number(row.posts), comments: Number(row.comments), forumTopics: Number(row.topics), forumReplies: Number(row.replies), listings: Number(row.listings) },
+        reports: { filedAgainst: Number(reported.filed), upheld: Number(reported.upheld), open: Number(reported.open) },
+        restriction: restriction ? { kind: restriction.kind, reason: restriction.reason, expiresAt: restriction.expires_at?.toISOString() ?? null } : null,
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'MEMBER_UNAVAILABLE', message: 'Üye bilgisi okunamadı.' } });
+  }
+});
+
+// The Onayli Hesap badge and what it unlocks. `identityVerified` is what the
+// verification provider found and is not settable here - the console must not be
+// able to declare a document checked that nobody checked. `auctionSellerEligible`
+// is the decision made on top of it, which is exactly an operator's call.
+const gateworkCapabilityBody = z.object({
+  auctionSellerEligible: z.boolean(),
+  reason: z.string().trim().min(5).max(500),
+});
+
+app.put('/v1/internal/gatework/community/members/:userId/capabilities', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin']);
+    const userId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const input = gateworkCapabilityBody.parse(request.body);
+    await db.query(
+      `INSERT INTO member_capabilities(user_id,auction_seller_eligible) VALUES($1,$2)
+       ON CONFLICT (user_id) DO UPDATE SET auction_seller_eligible=EXCLUDED.auction_seller_eligible,updated_at=now()`,
+      [userId, input.auctionSellerEligible],
+    );
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: input.auctionSellerEligible ? 'member.capability.grant' : 'member.capability.revoke',
+      targetType: 'user', targetId: userId, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return { data: { userId, auctionSellerEligible: input.auctionSellerEligible } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'MEMBER_CAPABILITY_REJECTED', message: 'Yetki güncellenemedi.' } });
+  }
+});
+
+// Restricting straight from the member screen rather than only from a report.
+// Some accounts are dealt with before anyone files anything - a spam run seen in
+// the feed - and making a moderator invent a report first would put a fictional
+// case in the audit trail.
+const gateworkRestrictionBody = z.object({
+  kind: z.enum(['muted', 'suspended']),
+  reason: z.string().trim().min(5).max(500),
+  durationHours: z.coerce.number().int().min(1).max(8760).optional(),
+  idempotencyKey: z.string().uuid(),
+});
+
+app.post('/v1/internal/gatework/community/restrictions/:userId', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, CONTENT_ACT_ROLES);
+    const userId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const input = gateworkRestrictionBody.parse(request.body);
+    if (userId === actor.actorId) return reply.code(400).send({ error: { code: 'SELF_RESTRICTION_NOT_ALLOWED', message: 'Kendi hesabınızı kısıtlayamazsınız.' } });
+    await client.query('BEGIN');
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='member.restrict' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]) { await client.query('COMMIT'); return { data: { userId, duplicate: true } }; }
+    await client.query(
+      `INSERT INTO content_author_restrictions(user_id,kind,reason,expires_at,created_by)
+       VALUES($1,$2,$3,CASE WHEN $4::text IS NULL THEN NULL ELSE now()+($4::text||' hours')::interval END,$5)
+       ON CONFLICT (user_id) DO UPDATE SET kind=EXCLUDED.kind,reason=EXCLUDED.reason,expires_at=EXCLUDED.expires_at,created_by=EXCLUDED.created_by,created_at=now()`,
+      [userId, input.kind, input.reason, input.durationHours ? String(input.durationHours) : null, actor.actorId],
+    );
+    await client.query(
+      "INSERT INTO content_moderation_actions(report_id,actor_id,actor_roles,action,target_type,target_id,reason) VALUES(NULL,$1,$2,'restrict_author','user',$3,$4)",
+      [actor.actorId, actor.roles, userId, input.reason],
+    );
+    await client.query(
+      "INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'member.restrict',$3)",
+      [actor.actorId, input.idempotencyKey, userId],
+    );
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: `member.restrict.${input.kind}`, targetType: 'user', targetId: userId,
+      reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return { data: { userId, duplicate: false } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'MEMBER_RESTRICTION_REJECTED', message: 'Kısıtlama uygulanamadı.' } });
   } finally {
     client.release();
   }

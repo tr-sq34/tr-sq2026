@@ -15,6 +15,7 @@ import '../features/messaging/application/messaging_controller.dart';
 import '../features/messaging/domain/repositories/direct_message_repository.dart';
 import '../features/community/domain/repositories/content_moderation_repository.dart';
 import '../features/messaging/domain/repositories/message_moderation_repository.dart';
+import '../features/forum/application/forum_controller.dart';
 import '../features/home/application/community_home_controller.dart';
 import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
@@ -48,6 +49,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.newsController,
     required this.newsCommentsController,
     required this.promotionsController,
+    required this.forumController,
   });
 
   final AuthController authController;
@@ -90,6 +92,10 @@ class AmericaHubApp extends StatelessWidget {
   /// Sponsorlu Story yuvası ve öne çıkan kartlar; ana sayfa bunu okur.
   final PromotionsController promotionsController;
 
+  /// Forum: menüdeki Forum ekranı ile ana sayfadaki trend şeridi aynı
+  /// denetleyiciyi okuyor, iki yerde iki farklı sayı görünmesin diye.
+  final ForumController forumController;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -119,6 +125,7 @@ class AmericaHubApp extends StatelessWidget {
         newsController: newsController,
         newsCommentsController: newsCommentsController,
         promotionsController: promotionsController,
+        forumController: forumController,
       ).onGenerateRoute,
     );
   }

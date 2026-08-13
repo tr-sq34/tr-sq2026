@@ -17,6 +17,7 @@ import '../../features/messaging/domain/repositories/direct_message_repository.d
 import '../../features/community/domain/repositories/content_moderation_repository.dart';
 import '../../features/messaging/domain/repositories/message_moderation_repository.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
+import '../../features/forum/application/forum_controller.dart';
 import '../../features/home/application/community_home_controller.dart';
 import '../../features/news/application/news_controller.dart';
 import '../../features/notifications/application/notifications_controller.dart';
@@ -55,6 +56,7 @@ class AppRouter {
     required this.newsController,
     required this.newsCommentsController,
     required this.promotionsController,
+    required this.forumController,
   });
 
   final AuthController authController;
@@ -78,6 +80,7 @@ class AppRouter {
   final NewsController newsController;
   final CommunityCommentsController newsCommentsController;
   final PromotionsController promotionsController;
+  final ForumController forumController;
 
   /// Where a member lands right after signing in.
   ///
@@ -117,6 +120,7 @@ class AppRouter {
             newsController: newsController,
             newsCommentsController: newsCommentsController,
             promotionsController: promotionsController,
+            forumController: forumController,
             onSignOut: () async {
               await authController.signOut();
               if (context.mounted) {
