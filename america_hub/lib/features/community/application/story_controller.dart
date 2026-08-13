@@ -112,6 +112,13 @@ class StoryController extends ChangeNotifier {
     return story;
   }
 
+  /// A reply belongs to the story's author, not to the rail, so nothing here
+  /// is cached: the controller only carries the request through.
+  Future<void> sendReply({
+    required String storyId,
+    required String message,
+  }) => _repository.sendReply(storyId: storyId, message: message);
+
   Future<List<StoryAudienceContact>> loadAudienceContacts() =>
       _repository.fetchAudienceContacts();
 

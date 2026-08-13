@@ -115,16 +115,19 @@ void main() {
     await tester.tap(find.text('Topluluğa bir şey sor veya paylaş...'));
     await settle(tester);
 
-    expect(find.text('Yeni Paylaşım Oluştur'), findsOneWidget);
+    expect(find.text('Yeni paylaşım'), findsOneWidget);
     expect(find.text('Zeynep Kaya'), findsOneWidget);
     expect(find.text('Ahmet Yılmaz'), findsNothing);
     // No handle exists in the domain, so the line under the name says where
     // the post is going rather than inventing a username.
     expect(find.text('@ahmet_ny'), findsNothing);
-    expect(find.text('Herkese açık'), findsOneWidget);
+    expect(find.text('Herkese Açık'), findsOneWidget);
   });
 
-  testWidgets('the compose shortcut previews the post under the real name', (
+  // İki ayrı düzenleyici vardı: ➕ tam ekran bir akış, akıştaki kutu kendi
+  // tabakasını açıyordu. Artık ikisi de aynı ekranı açıyor, o yüzden ➕ de
+  // üyenin kendi adıyla imzalıyor.
+  testWidgets('the compose shortcut opens the same editor, signed properly', (
     tester,
   ) async {
     await pumpShell(tester, signUpName: 'Zeynep Kaya');
@@ -132,15 +135,8 @@ void main() {
     await tester.tap(find.byIcon(Icons.add_rounded));
     await settle(tester);
 
-    // The byline lives on the review step, so the post has to be written and
-    // carried forward before there is anything to assert about.
-    await tester.enterText(find.byType(TextField).first, 'Merhaba komşular');
-    await tester.pump();
-    await tester.tap(find.text('İleri').first);
-    await settle(tester);
-    expect(find.text('Paylaşımı gözden geçir'), findsOneWidget);
-
-    expect(find.text('Zeynep Kaya paylaşım yapıyor'), findsOneWidget);
+    expect(find.text('Yeni paylaşım'), findsOneWidget);
+    expect(find.text('Zeynep Kaya'), findsOneWidget);
     expect(find.textContaining('Ahmet Yılmaz'), findsNothing);
     // The initials in the avatar come from the same name, so the demo's 'A'
     // would give a stale placeholder away on its own.

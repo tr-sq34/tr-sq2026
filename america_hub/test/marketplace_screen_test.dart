@@ -24,7 +24,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Çarşı'), findsOneWidget);
+    // Başlığı kabuk yazıyor. Ekran bir kez daha yazınca üstte iki "Çarşı"
+    // görünüyordu; o yüzden buradaki tek doğru sayı sıfır.
+    expect(find.text('Çarşı'), findsNothing);
     // The card prints the price and the title in one line ("$32 · …"), so the
     // title is matched as a substring rather than as a whole label.
     expect(find.textContaining('El yapımı çay seti'), findsOneWidget);

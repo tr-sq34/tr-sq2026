@@ -46,29 +46,11 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
           color: AppColors.background,
           child: Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-                child: Row(
-                  children: [
-                    const Text(
-                      'Çarşı',
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: () {},
-                      icon: const Icon(Icons.favorite_border_rounded),
-                    ),
-                    IconButton(
-                      onPressed: () {},
-                      icon: const Icon(Icons.notifications_none_rounded),
-                    ),
-                  ],
-                ),
-              ),
+              // Ekranın kendi "Çarşı" başlığı kaldırıldı: kabuk zaten üst
+              // barda sekmenin adını yazıyor, ikisi üst üste gelince başlık
+              // iki kere görünüyordu. Yanındaki iki düğme de hiçbir yere
+              // gitmiyordu.
+              const SizedBox(height: 8),
               _TopTabs(
                 index: _tab,
                 onChanged: (value) {
