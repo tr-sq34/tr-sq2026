@@ -144,6 +144,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         moderationRepository: widget.contentModerationRepository,
         promotionsController: widget.promotionsController,
         viewer: widget.authController.user,
+        viewerRegion: () => widget.homeController.summary?.regionCode,
       ),
     ),
     MarketplaceScreen(

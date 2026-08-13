@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../auth/domain/entities/app_user.dart';
@@ -38,6 +40,7 @@ class CommunityScreen extends StatefulWidget {
     required this.moderationRepository,
     required this.promotionsController,
     this.viewer,
+    this.viewerRegion,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -52,6 +55,11 @@ class CommunityScreen extends StatefulWidget {
   /// The signed-in member, so the composer can say who is about to post. Null
   /// only in builds with no session, where the composer names nobody at all.
   final AppUser? viewer;
+
+  /// Üyenin seçtiği eyalet, kabuktaki ana sayfa özetinden okunuyor. Yalnızca
+  /// boş "Yakınındakiler" sekmesinin doğru cümleyi kurabilmesi için: kimse
+  /// paylaşmadığı için mi boş, yoksa üye şehrini hiç eklemediği için mi?
+  final String? Function()? viewerRegion;
 
   /// Every post, comment and story below this point needs a way to be reported,
   /// so the repository is handed down rather than looked up: the widgets that
@@ -112,6 +120,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         moderationRepository: widget.moderationRepository,
         promotionsController: widget.promotionsController,
         viewer: widget.viewer,
+        viewerRegion: widget.viewerRegion,
       );
     },
   );
@@ -127,6 +136,7 @@ class _Feed extends StatefulWidget {
     required this.moderationRepository,
     required this.promotionsController,
     this.viewer,
+    this.viewerRegion,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -136,6 +146,7 @@ class _Feed extends StatefulWidget {
   final ContentModerationRepository moderationRepository;
   final PromotionsController promotionsController;
   final AppUser? viewer;
+  final String? Function()? viewerRegion;
 
   @override
   State<_Feed> createState() => _FeedState();
@@ -252,6 +263,7 @@ class _FeedState extends State<_Feed> {
   void _selectFilter(_FeedFilter value) {
     if (value == _filter) return;
     setState(() => _filter = value);
+    unawaited(widget.controller.setMode(value.mode));
     if (!_pageController.hasClients) return;
     _pageController.animateToPage(
       value.index,
@@ -307,8 +319,11 @@ class _FeedState extends State<_Feed> {
             ],
             body: PageView(
               controller: _pageController,
-              onPageChanged: (value) =>
-                  setState(() => _filter = _FeedFilter.values[value]),
+              onPageChanged: (value) {
+                final filter = _FeedFilter.values[value];
+                setState(() => _filter = filter);
+                unawaited(widget.controller.setMode(filter.mode));
+              },
               children: [
                 for (final filter in _FeedFilter.values) _feedPage(filter),
               ],
@@ -329,7 +344,10 @@ class _FeedState extends State<_Feed> {
         padding: const EdgeInsets.only(top: 12, bottom: 28),
         children: [
           if (posts.isEmpty && !widget.controller.isInitialLoading)
-            _FeedEmptyState(filter: filter),
+            _FeedEmptyState(
+              filter: filter,
+              hasLocality: widget.viewerRegion?.call() != null,
+            ),
           for (final post in posts)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -351,17 +369,11 @@ class _FeedState extends State<_Feed> {
     );
   }
 
-  List<CommunityPost> _postsFor(_FeedFilter filter) => switch (filter) {
-    _FeedFilter.forYou => widget.controller.items,
-    _FeedFilter.nearby =>
-      widget.controller.items
-          .where((post) => post.location.contains('New York'))
-          .toList(growable: false),
-    _FeedFilter.following =>
-      widget.controller.items
-          .where((post) => post.ownerId != _viewerId)
-          .toList(growable: false),
-  };
+  /// Süzme sunucuda yapılıyor; ekranın gösterdiği liste, açık olan sekme için
+  /// gelen liste. Sekme değişince denetleyici listeyi boşaltıp yeniden yüklüyor,
+  /// o yüzden kaydırma sırasında öteki sayfa boş duruyor.
+  List<CommunityPost> _postsFor(_FeedFilter filter) =>
+      filter == _filter ? widget.controller.items : const [];
 }
 
 /// Sekme şeridini akışın tepesine çiviler.
@@ -386,8 +398,13 @@ class _FeedFiltersHeader extends SliverPersistentHeaderDelegate {
 }
 
 class _FeedEmptyState extends StatelessWidget {
-  const _FeedEmptyState({required this.filter});
+  const _FeedEmptyState({required this.filter, this.hasLocality = true});
   final _FeedFilter filter;
+
+  /// Üye şehrini eklediyse boş "Yakınındakiler" gerçekten boş demek; eklemediyse
+  /// sekmenin sorabileceği bir soru yok. İkisine aynı cümleyi yazmak, ikincisini
+  /// bir yanlışlık gibi gösteriyor.
+  final bool hasLocality;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -407,7 +424,9 @@ class _FeedEmptyState extends StatelessWidget {
         Text(
           switch (filter) {
             _FeedFilter.forYou => 'Akışta henüz paylaşım yok.',
-            _FeedFilter.nearby => 'Yakınında henüz paylaşım yok.',
+            _FeedFilter.nearby => hasLocality
+                ? 'Bulunduğun eyalette henüz paylaşım yok.'
+                : 'Şehrini eklemedin, bu yüzden burası boş.',
             _FeedFilter.following =>
               'Takip ettiklerinden henüz paylaşım yok.',
           },
@@ -422,7 +441,14 @@ class _FeedEmptyState extends StatelessWidget {
   );
 }
 
-enum _FeedFilter { forYou, nearby, following }
+enum _FeedFilter {
+  forYou(FeedMode.forYou),
+  nearby(FeedMode.nearby),
+  following(FeedMode.following);
+
+  const _FeedFilter(this.mode);
+  final FeedMode mode;
+}
 
 /// Direct Flutter translation of the reference HTML's feed header.
 class _ReferenceFeedHeader extends StatelessWidget {

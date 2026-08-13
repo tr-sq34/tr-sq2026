@@ -104,6 +104,7 @@ Future<AuthController> pumpShell(
       home: MainLayoutScreen(
         communityController: CommunityFeedController(
           repository: communityRepository,
+          feed: communityRepository,
           commands: communityRepository,
           interactions: communityRepository,
           polls: communityRepository,

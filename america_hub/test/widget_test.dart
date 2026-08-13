@@ -59,6 +59,7 @@ void main() {
         ),
         communityController: CommunityFeedController(
           repository: communityRepository,
+          feed: communityRepository,
           commands: communityRepository,
           interactions: communityRepository,
           polls: communityRepository,
