@@ -2952,7 +2952,7 @@ app.post('/v1/safety/sos', { config: { rateLimit: { max: 30, timeWindow: '5 minu
     // ST_MakePoint is strict, so a missing coordinate yields NULL and the
     // no-location case needs no second statement. The casts are not decoration:
     // an unreferenced or untyped parameter is a bind error, not a NULL.
-    const row = await db.query<{ id: string; status: string; created_at: Date }>(
+    const row = await db.query<{ id: string; status: string; created_at: Date; has_location: boolean }>(
       `INSERT INTO sos_alerts(member_id,kind,note,location_cell,location_accuracy_m,location_captured_at,location_note)
        VALUES($1,$2,$3,
               ST_SetSRID(ST_MakePoint($5::float8,$4::float8),4326)::geography,
@@ -2966,11 +2966,14 @@ app.post('/v1/safety/sos', { config: { rateLimit: { max: 30, timeWindow: '5 minu
          location_accuracy_m=COALESCE(EXCLUDED.location_accuracy_m,sos_alerts.location_accuracy_m),
          location_captured_at=COALESCE(EXCLUDED.location_captured_at,sos_alerts.location_captured_at),
          location_note=COALESCE(EXCLUDED.location_note,sos_alerts.location_note)
-       RETURNING id,status,created_at`,
+       RETURNING id,status,created_at,location_cell IS NOT NULL has_location`,
       [userId, input.kind, input.note ?? null, point?.lat ?? null, point?.lon ?? null, input.accuracyMeters ?? null, input.locationNote ?? null],
     );
     const alert = row.rows[0]!;
-    return reply.code(201).send({ data: { id: alert.id, status: alert.status, createdAt: alert.created_at.toISOString(), locationShared: Boolean(point) } });
+    // The alert's state, not this request's payload: a second press that sends
+    // no point does not un-share the point already on the open alert, and a
+    // response saying otherwise would be read as "my location was dropped".
+    return reply.code(201).send({ data: { id: alert.id, status: alert.status, createdAt: alert.created_at.toISOString(), locationShared: alert.has_location } });
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'SOS_NOT_SENT', message: 'Yardım çağrısı gönderilemedi.' } });
   }
