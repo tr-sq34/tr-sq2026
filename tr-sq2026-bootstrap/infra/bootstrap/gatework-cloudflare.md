@@ -1,5 +1,14 @@
 # Gatework Cloudflare Access and Tunnel runbook
 
+> **Written against the AWS deployment.** Gatework now runs as the container app
+> `ca-gatework-console-prod` on Azure, with the cloudflared sidecar in the same
+> app and the tunnel token in Key Vault as `CLOUDFLARE-TUNNEL-TOKEN` - not in
+> ECS, and not in AWS Secrets Manager. The Cloudflare half below (tunnel, Access
+> application, policy, MFA) is unchanged and still correct; read every mention of
+> ECS or Secrets Manager as its Azure equivalent until this file is rewritten.
+> For the public API hostnames - a separate question from the console - see
+> `azure-public-dns-cutover.md`.
+
 Terraform creates the ECS service at zero tasks and creates the empty AWS
 runtime secret. It does **not** create a Cloudflare API token, Access policy,
 or tunnel token. Those objects are intentionally configured from the

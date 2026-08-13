@@ -28,3 +28,10 @@ output "managed_identity_principal_id" {
 output "container_app_environment_id" {
   value = local.container_app_environment_id
 }
+
+# The value that goes into the TXT record `asuid.<host>` before a hostname can
+# be bound. It is a property of the environment, not of one app, so every app
+# sharing an environment reports the same string.
+output "custom_domain_verification_id" {
+  value = azurerm_container_app.main.custom_domain_verification_id
+}

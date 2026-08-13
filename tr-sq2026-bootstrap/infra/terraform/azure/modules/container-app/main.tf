@@ -318,3 +318,28 @@ resource "azurerm_container_app" "main" {
 }
 
 
+
+# Custom domains are a resource of their own rather than an ingress block: the
+# ingress block would make every hostname part of the app's own lifecycle, and a
+# certificate that has not finished issuing would then hold up an unrelated
+# image deploy.
+#
+# No certificate is named here. Azure's managed certificate is requested once,
+# out of band, with `az containerapp hostname bind --validation-method CNAME`,
+# and renews itself afterwards; naming it in Terraform would mean carrying a
+# certificate resource whose id changes on every renewal. ignore_changes below
+# is what keeps that out-of-band binding from being reverted on the next apply -
+# without it, a deploy would silently strip the certificate off a live hostname.
+resource "azurerm_container_app_custom_domain" "public" {
+  for_each = toset(var.custom_domains)
+
+  name             = each.value
+  container_app_id = azurerm_container_app.main.id
+
+  lifecycle {
+    ignore_changes = [
+      certificate_binding_type,
+      container_app_environment_certificate_id,
+    ]
+  }
+}
