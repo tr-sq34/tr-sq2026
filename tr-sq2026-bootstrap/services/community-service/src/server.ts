@@ -496,7 +496,11 @@ app.delete('/v1/community/comments/:id',async(request,reply)=>{try{const userId=
 app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/listings/:id/auction',async(request,reply)=>{try{const userId=await viewer(request.headers);const listingId=z.string().uuid().parse((request.params as {id:string}).id);const input=auctionBody.parse(request.body);const eligible=await db.query('SELECT 1 FROM member_capabilities WHERE user_id=$1 AND auction_seller_eligible',[userId]);if(!eligible.rows[0])return reply.code(403).send({error:{code:'VERIFICATION_REQUIRED',message:'İhale açmak için Onaylı Hesap rozeti gerekir.'}});const row=await db.query<{id:string}>('INSERT INTO marketplace_auctions(listing_id,seller_id,starting_price,minimum_increment,starts_at,ends_at) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND owner_id=$2 AND status=\'active\') RETURNING id',[listingId,userId,input.startingPrice,input.minimumIncrement,input.startsAt,input.endsAt]);if(!row.rows[0])return reply.code(404).send({error:{code:'LISTING_NOT_AVAILABLE'}});return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'AUCTION_CREATE_FAILED'}});}});
-app.post('/v1/marketplace/auctions/:id/bids',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=bidBody.parse(request.body);await client.query('BEGIN');const auction=await client.query<{seller_id:string;starting_price:string;minimum_increment:string;starts_at:Date;ends_at:Date}>('SELECT seller_id,starting_price,minimum_increment,starts_at,ends_at FROM marketplace_auctions WHERE id=$1 FOR UPDATE',[id]);const a=auction.rows[0];if(!a||a.seller_id===userId||a.starts_at>new Date()||a.ends_at<=new Date())throw Error();const top=await client.query<{amount:string}>('SELECT amount FROM marketplace_auction_bids WHERE auction_id=$1 ORDER BY amount DESC,created_at ASC LIMIT 1',[id]);const minimum=Number(top.rows[0]?.amount??a.starting_price)+(top.rows[0]?Number(a.minimum_increment):0);if(input.amount<minimum)throw Error();const bid=await client.query<{id:string}>('INSERT INTO marketplace_auction_bids(auction_id,bidder_id,amount) VALUES($1,$2,$3) RETURNING id',[id,userId,input.amount]);await client.query('COMMIT');return reply.code(201).send({data:bid.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'BID_REJECTED',message:'Teklif kabul edilemedi.'}});}finally{client.release();}});
+app.post('/v1/marketplace/auctions/:id/bids',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=bidBody.parse(request.body);await client.query('BEGIN');const auction=await client.query<{seller_id:string;starting_price:string;minimum_increment:string;starts_at:Date;ends_at:Date;status:string}>('SELECT seller_id,starting_price,minimum_increment,starts_at,ends_at,status FROM marketplace_auctions WHERE id=$1 FOR UPDATE',[id]);const a=auction.rows[0];
+  // status is read for one reason: an operator cancelling an auction has to stop
+  // the bidding. Nothing else writes it - it is inserted 'scheduled' and stays
+  // there - so the open/closed window is still the clock, not the column.
+  if(!a||a.status==='cancelled'||a.seller_id===userId||a.starts_at>new Date()||a.ends_at<=new Date())throw Error();const top=await client.query<{amount:string}>('SELECT amount FROM marketplace_auction_bids WHERE auction_id=$1 ORDER BY amount DESC,created_at ASC LIMIT 1',[id]);const minimum=Number(top.rows[0]?.amount??a.starting_price)+(top.rows[0]?Number(a.minimum_increment):0);if(input.amount<minimum)throw Error();const bid=await client.query<{id:string}>('INSERT INTO marketplace_auction_bids(auction_id,bidder_id,amount) VALUES($1,$2,$3) RETURNING id',[id,userId,input.amount]);await client.query('COMMIT');return reply.code(201).send({data:bid.rows[0]});}catch{await client.query('ROLLBACK');return reply.code(400).send({error:{code:'BID_REJECTED',message:'Teklif kabul edilemedi.'}});}finally{client.release();}});
 // --- Blocking -----------------------------------------------------------
 // Community owns the block edge because it owns the social graph. Messaging
 // only ever sees a projection of it, published through the outbox below.
@@ -2681,6 +2685,221 @@ app.post('/v1/internal/gatework/forum/topics/:id/state', { config: { rateLimit: 
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
       .send({ error: { code: 'FORUM_TOPIC_STATE_REJECTED', message: 'Konu durumu değiştirilemedi.' } });
+  }
+});
+
+// --- Marketplace operations ----------------------------------------------
+// Listings and auctions are member-created and money-adjacent, and until now
+// nobody could see them from the outside: the public list shows active listings
+// only, and auctions have no read endpoint at all. A fraudulent listing could
+// only be found by scrolling the app as a member.
+//
+// Two things about the auction schema the reads here have to work around:
+// nothing ever advances marketplace_auctions.status - it is written 'scheduled'
+// and stays there - and bidding is gated on starts_at/ends_at instead. So the
+// state shown is derived from the clock, with the stored value carried
+// alongside rather than trusted, and cancelling is made real by teaching the bid
+// endpoint about it (see /v1/marketplace/auctions/:id/bids).
+const MARKETPLACE_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'moderator', 'analyst', 'auditor'];
+const MARKETPLACE_ACT_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'moderator'];
+
+const gateworkListingsQuery = z.object({
+  status: z.enum(['all', 'draft', 'active', 'reserved', 'sold', 'inactive']).default('all'),
+  query: z.string().trim().min(2).max(140).optional(),
+  regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+// Only these two. 'draft', 'reserved' and 'sold' describe what the seller is
+// doing with their own item; an operator marking somebody's listing sold would
+// be inventing a transaction that never happened. Taking it down is the whole
+// power this screen needs.
+const gateworkListingStatus = z.object({
+  status: z.enum(['active', 'inactive']),
+  reason: z.string().trim().min(5).max(500),
+});
+const gateworkAuctionsQuery = z.object({
+  state: z.enum(['all', 'scheduled', 'active', 'closed', 'cancelled']).default('all'),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+const gateworkAuctionCancel = z.object({ reason: z.string().trim().min(5).max(500) });
+
+// Written once, used by both the list and the overview so the two can never
+// disagree about what 'active' means.
+const AUCTION_STATE_SQL = `CASE WHEN a.status='cancelled' THEN 'cancelled' WHEN a.ends_at<=now() THEN 'closed' WHEN a.starts_at>now() THEN 'scheduled' ELSE 'active' END`;
+
+app.get('/v1/internal/gatework/marketplace/listings', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
+    const input = gateworkListingsQuery.parse(request.query);
+    const rows = await db.query<{ id: string; title: string; description: string; price: string; status: string; city: string | null; region_code: string | null; owner_id: string; owner_name: string | null; created_at: Date; updated_at: Date; auction_id: string | null; auction_state: string | null; bid_count: string }>(
+      `SELECT l.id,l.title,l.description,l.price,l.status,l.city,l.region_code,l.owner_id,
+              p.display_name owner_name,l.created_at,l.updated_at,
+              a.id auction_id,${AUCTION_STATE_SQL} auction_state,
+              (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count
+         FROM marketplace_listings l
+         LEFT JOIN community_profile_projection p ON p.user_id=l.owner_id
+         LEFT JOIN marketplace_auctions a ON a.listing_id=l.id
+        WHERE ($1::text = 'all' OR l.status=$1)
+          AND ($2::text IS NULL OR l.title ILIKE '%'||$2||'%')
+          AND ($3::text IS NULL OR l.region_code=$3)
+        ORDER BY l.created_at DESC,l.id DESC
+        LIMIT $4 OFFSET $5`,
+      [input.status, input.query ?? null, input.regionCode?.toUpperCase() ?? null, input.limit + 1, input.offset],
+    );
+    const page = rows.rows.slice(0, input.limit);
+    return {
+      data: page.map((row) => ({
+        id: row.id, title: row.title, description: row.description, price: Number(row.price), status: row.status,
+        city: row.city, regionCode: row.region_code, ownerId: row.owner_id, ownerName: row.owner_name,
+        createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
+        auction: row.auction_id ? { id: row.auction_id, state: row.auction_state!, bidCount: Number(row.bid_count) } : null,
+      })),
+      meta: { nextOffset: rows.rows.length > input.limit ? input.offset + input.limit : null },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'MARKETPLACE_LISTINGS_UNAVAILABLE', message: 'İlanlar okunamadı.' } });
+  }
+});
+
+// Taking a listing down takes its auction with it, in one transaction. An item
+// pulled for being counterfeit whose auction kept accepting bids would leave
+// people bidding real money on something the operator already decided does not
+// exist here.
+app.post('/v1/internal/gatework/marketplace/listings/:id/status', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, MARKETPLACE_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkListingStatus.parse(request.body);
+    await client.query('BEGIN');
+    const updated = await client.query<{ status: string }>(
+      'UPDATE marketplace_listings SET status=$2,updated_at=now() WHERE id=$1 RETURNING status',
+      [id, input.status],
+    );
+    if (!updated.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'LISTING_NOT_FOUND', message: 'İlan bulunamadı.' } }); }
+    const cancelled = input.status === 'inactive'
+      ? await client.query<{ id: string }>("UPDATE marketplace_auctions SET status='cancelled' WHERE listing_id=$1 AND status<>'cancelled' AND ends_at>now() RETURNING id", [id])
+      : { rows: [] as { id: string }[] };
+    await client.query('COMMIT');
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'marketplace_listing.status', targetType: 'marketplace_listing', targetId: id,
+      reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    // A separate line per auction: the reason it was cancelled is the listing
+    // decision, but somebody looking up that auction later has to find it under
+    // its own id rather than by knowing which listing it hung off.
+    for (const row of cancelled.rows) {
+      await auditGateworkOperation({
+        actorId: actor.actorId, roles: actor.roles, action: 'marketplace_auction.cancel', targetType: 'marketplace_auction', targetId: row.id,
+        reason: `İlan yayından kaldırıldı: ${input.reason}`, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+      });
+    }
+    return { data: { id, status: updated.rows[0].status, cancelledAuctions: cancelled.rows.length } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'LISTING_STATUS_REJECTED', message: 'İlan durumu değiştirilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/v1/internal/gatework/marketplace/auctions', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
+    const input = gateworkAuctionsQuery.parse(request.query);
+    const rows = await db.query<{ id: string; listing_id: string; listing_title: string; listing_status: string; seller_id: string; seller_name: string | null; starting_price: string; minimum_increment: string; starts_at: Date; ends_at: Date; stored_status: string; state: string; bid_count: string; top_bid: string | null; top_bidder_id: string | null; top_bidder_name: string | null; created_at: Date }>(
+      `SELECT a.id,a.listing_id,l.title listing_title,l.status listing_status,a.seller_id,p.display_name seller_name,
+              a.starting_price,a.minimum_increment,a.starts_at,a.ends_at,a.status stored_status,
+              ${AUCTION_STATE_SQL} state,a.created_at,
+              (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count,
+              top.amount top_bid,top.bidder_id top_bidder_id,bp.display_name top_bidder_name
+         FROM marketplace_auctions a
+         JOIN marketplace_listings l ON l.id=a.listing_id
+         LEFT JOIN community_profile_projection p ON p.user_id=a.seller_id
+         LEFT JOIN LATERAL (
+           SELECT b.amount,b.bidder_id FROM marketplace_auction_bids b
+            WHERE b.auction_id=a.id ORDER BY b.amount DESC,b.created_at ASC LIMIT 1
+         ) top ON true
+         LEFT JOIN community_profile_projection bp ON bp.user_id=top.bidder_id
+        WHERE ($1::text = 'all' OR ${AUCTION_STATE_SQL}=$1)
+        ORDER BY a.ends_at DESC,a.id DESC
+        LIMIT $2 OFFSET $3`,
+      [input.state, input.limit + 1, input.offset],
+    );
+    const page = rows.rows.slice(0, input.limit);
+    return {
+      data: page.map((row) => ({
+        id: row.id, listingId: row.listing_id, listingTitle: row.listing_title, listingStatus: row.listing_status,
+        sellerId: row.seller_id, sellerName: row.seller_name,
+        startingPrice: Number(row.starting_price), minimumIncrement: Number(row.minimum_increment),
+        startsAt: row.starts_at.toISOString(), endsAt: row.ends_at.toISOString(),
+        storedStatus: row.stored_status, state: row.state,
+        bidCount: Number(row.bid_count), topBid: row.top_bid === null ? null : Number(row.top_bid),
+        topBidderId: row.top_bidder_id, topBidderName: row.top_bidder_name,
+        createdAt: row.created_at.toISOString(),
+      })),
+      meta: { nextOffset: rows.rows.length > input.limit ? input.offset + input.limit : null },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'MARKETPLACE_AUCTIONS_UNAVAILABLE', message: 'İhaleler okunamadı.' } });
+  }
+});
+
+// Cancelling stops bids and nothing else: the bids already placed stay in the
+// table. Deleting them would erase the evidence of the very behaviour that
+// usually causes the cancellation.
+app.post('/v1/internal/gatework/marketplace/auctions/:id/cancel', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, MARKETPLACE_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkAuctionCancel.parse(request.body);
+    const updated = await db.query<{ id: string }>("UPDATE marketplace_auctions SET status='cancelled' WHERE id=$1 AND status<>'cancelled' RETURNING id", [id]);
+    if (!updated.rows[0]) return reply.code(404).send({ error: { code: 'AUCTION_NOT_CANCELLABLE', message: 'İhale bulunamadı veya zaten iptal edilmiş.' } });
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'marketplace_auction.cancel', targetType: 'marketplace_auction', targetId: id,
+      reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return { data: { id, state: 'cancelled' } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'AUCTION_CANCEL_REJECTED', message: 'İhale iptal edilemedi.' } });
+  }
+});
+
+app.get('/v1/internal/gatework/marketplace/overview', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
+    const listings = await db.query<{ status: string; total: string }>('SELECT status,count(*) total FROM marketplace_listings GROUP BY status');
+    const auctions = await db.query<{ state: string; total: string }>(`SELECT ${AUCTION_STATE_SQL} state,count(*) total FROM marketplace_auctions a GROUP BY 1`);
+    const activity = await db.query<{ new_listings: string; bids_last_7_days: string; ending_soon: string; eligible_sellers: string }>(
+      `SELECT (SELECT count(*) FROM marketplace_listings WHERE created_at>now()-interval '7 days') new_listings,
+              (SELECT count(*) FROM marketplace_auction_bids WHERE created_at>now()-interval '7 days') bids_last_7_days,
+              (SELECT count(*) FROM marketplace_auctions a WHERE a.status<>'cancelled' AND a.ends_at>now() AND a.ends_at<now()+interval '24 hours') ending_soon,
+              (SELECT count(*) FROM member_capabilities WHERE auction_seller_eligible) eligible_sellers`,
+    );
+    const row = activity.rows[0]!;
+    return {
+      data: {
+        listings: Object.fromEntries(listings.rows.map((r) => [r.status, Number(r.total)])),
+        auctions: Object.fromEntries(auctions.rows.map((r) => [r.state, Number(r.total)])),
+        newListingsLast7Days: Number(row.new_listings),
+        bidsLast7Days: Number(row.bids_last_7_days),
+        endingSoon: Number(row.ending_soon),
+        eligibleSellers: Number(row.eligible_sellers),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'MARKETPLACE_OVERVIEW_UNAVAILABLE', message: 'Çarşı özeti okunamadı.' } });
   }
 });
 

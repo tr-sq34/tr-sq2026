@@ -25,10 +25,11 @@ depoya girmez - yalnızca argon2id özeti secret store'a konur. Adımlar:
 | Üyeler | canlı | Identity (hesap, rol, oturum) + Community (davranış, kısıtlama) |
 | Moderasyon | canlı | Messaging gateway + Community |
 | Forum | canlı | Community |
+| Çarşı ve İhaleler | canlı | Community (ilan/ihale okuma, yayından kaldırma, ihale iptali) |
 | Mesajlar | canlı | Messaging gateway |
 | Sistem ve Denetim | canlı | Kimlik + Community + Messaging gateway (yalnızca okuma) |
 | Doğrulama | canlı | Verification vault (yalnızca okuma; belge içeriği yok) |
-| Çarşı, Güvenlik, Analitik | bağlanmadı | — |
+| Güvenlik, Analitik | bağlanmadı | — |
 
 Bağlanmamış bölümler sahte veri göstermez; ilgili API ve audit sözleşmesi
 etkinleşene kadar açıkça "bağlanmadı" der.
