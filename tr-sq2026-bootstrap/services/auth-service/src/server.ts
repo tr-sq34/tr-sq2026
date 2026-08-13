@@ -77,7 +77,12 @@ const onboardingSchema = z.object({
 // `query` matches an email or a display name. Paging alone was enough while the
 // console only listed operators; the moment it has to answer "find this member",
 // walking the cursor to the end of the user table is not a search.
-const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().min(1).max(100).default(50), query: z.string().trim().min(2).max(120).optional(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']).optional() });
+// `ids` exists so another screen can turn a page of user ids into names in one
+// call. Verification and audit rows carry ids and nothing else - the services
+// that hold them have no business storing a copy of somebody's name - and a
+// screen listing UUIDs answers no question. Capped at the page size, so it
+// cannot become a way to dump the member table one batch at a time.
+const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), limit: z.coerce.number().int().min(1).max(100).default(50), query: z.string().trim().min(2).max(120).optional(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']).optional(), ids: z.string().trim().min(36).max(3700).optional().transform((value) => (value ? z.array(z.string().uuid()).max(100).parse(value.split(',').map((id) => id.trim())) : undefined)) });
 const gateworkRevokeSchema = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const gateworkRoleSchema = z.object({ userId: z.string().uuid(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const systemPrincipalSchema = z.object({ displayName: z.string().trim().min(2).max(100), handle: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{2,39}$/), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
@@ -1077,11 +1082,12 @@ app.get('/v1/auth/gatework/members', { config: { rateLimit: { max: 60, timeWindo
        FROM users u LEFT JOIN admin_roles r ON r.user_id=u.id
        WHERE ($1::uuid IS NULL OR u.id > $1)
          AND ($3::text IS NULL OR u.email ILIKE '%'||$3||'%' OR u.display_name ILIKE '%'||$3||'%')
+         AND ($5::uuid[] IS NULL OR u.id = ANY($5))
        GROUP BY u.id
        -- Filtering on the aggregate rather than the join: a member holding two
        -- roles has to come back once, with both of them.
        HAVING ($4::text IS NULL OR $4 = ANY(array_agg(r.role) FILTER (WHERE r.revoked_at IS NULL)))
-       ORDER BY u.id ASC LIMIT $2`, [input.cursor ?? null, input.limit, input.query ?? null, input.role ?? null],
+       ORDER BY u.id ASC LIMIT $2`, [input.cursor ?? null, input.limit, input.query ?? null, input.role ?? null, input.ids ?? null],
     );
     await auditGatework({ actorId: user.id, roles, action: 'members.list', targetType: 'member_query', targetId: input.cursor ?? 'initial', requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return { data: rows.rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name, emailVerified: Boolean(row.email_verified_at), createdAt: row.created_at.toISOString(), roles: row.roles })), nextCursor: rows.rows.length === input.limit ? rows.rows.at(-1)?.id : null };

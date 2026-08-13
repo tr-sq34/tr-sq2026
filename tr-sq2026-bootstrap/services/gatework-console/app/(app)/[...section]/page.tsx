@@ -7,14 +7,13 @@ const sections: Record<string, { title: string; text: string }> = {
   content: { title: 'İçerik Stüdyosu', text: 'Resmî hesaplar, Akış postları ve Story yayınlama sözleşmesi Gatework API üzerinden etkinleştirilecek.' },
   news: { title: 'Haber Merkezi', text: 'Haberler resmî hesap adına yayınlanır; uygulamadaki Haber Merkezi ve ana sayfadaki manşetler aynı kayıttan beslenir.' },
   promotions: { title: 'Tanıtımlar', text: 'Üyelerin Story alanı ve banner talepleri burada onaylanır; "Sana Özel Öne Çıkanlar" kartları yalnızca panelden yerleştirilir. Bu fazda ödeme alınmaz.' },
-  // moderation, communications, members, forum and system now have their own
-  // routes backed by Identity, Community and the messaging gateway; a static
-  // segment wins over this catch-all, so leaving their placeholders here would
-  // only be dead copy.
+  // moderation, communications, members, forum, system and verification now
+  // have their own routes backed by Identity, Community, the messaging gateway
+  // and the verification vault; a static segment wins over this catch-all, so
+  // leaving their placeholders here would only be dead copy.
   marketplace: { title: 'Çarşı ve İhaleler', text: 'İlan ve ihale operasyonları Community API hazır olduğunda role bağlı açılır.' },
   safety: { title: 'Güvenlik ve SOS', text: 'SOS iş akışı, ayrı yetki ve süreli konum erişimi gerektirir.' },
   analytics: { title: 'Analitik ve Konum', text: 'Yalnızca toplulaştırılmış şehir/eyalet metrikleri gösterilecektir.' },
-  verification: { title: 'Doğrulama', text: 'Stripe Identity sonuçları ileride belge içeriği olmadan burada görünür.' },
 };
 // The two live sections render their own studio; everything else is still an
 // honest "not connected yet" placeholder.
