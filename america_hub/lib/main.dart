@@ -91,24 +91,33 @@ Future<void> main() async {
   );
 
   late final AuthController authController;
+  // Sahte servislerle çalışırken sunucuda bir oturum yok: jeton da sahte, o
+  // yüzden hâlâ API'ye giden birkaç okuma (ana sayfa özeti, üyelik yetkileri)
+  // 401 dönüyor ve üyeyi sessizce oturumdan atıyordu — giriş yapılmış olmasına
+  // rağmen kabuk "Üye" diyor, düzenleyici paylaşımı "Sen" diye imzalıyordu.
+  Future<void> handleSessionExpired() async {
+    if (useMockServices) return;
+    await authController.expireSession();
+  }
+
   final apiClient = ApiClient(
     tokenStore: tokenStore,
-    onSessionExpired: () => authController.expireSession(),
+    onSessionExpired: handleSessionExpired,
   );
   final communityApiClient = ApiClient(
     tokenStore: tokenStore,
     baseUrl: ApiConfig.communityBaseUrl,
-    onSessionExpired: () => authController.expireSession(),
+    onSessionExpired: handleSessionExpired,
   );
   final verificationApiClient = ApiClient(
     tokenStore: tokenStore,
     baseUrl: ApiConfig.verificationBaseUrl,
-    onSessionExpired: () => authController.expireSession(),
+    onSessionExpired: handleSessionExpired,
   );
   final messagingApiClient = ApiClient(
     tokenStore: tokenStore,
     baseUrl: ApiConfig.messagingBaseUrl,
-    onSessionExpired: () => authController.expireSession(),
+    onSessionExpired: handleSessionExpired,
   );
 
   // One mock auth object for the whole app: it is the only thing that knows who
@@ -143,6 +152,9 @@ Future<void> main() async {
   final StoryRepository storyRepository = useMockServices
       ? mockCommunityRemote
       : ApiCommunityRepository(client: communityApiClient);
+  final PollRepository communityPolls = useMockServices
+      ? mockCommunityRemote
+      : ApiCommunityRepository(client: communityApiClient);
 
   final communityRepository = CachedCommunityRepository(
     remote: communityRemote,
@@ -153,6 +165,7 @@ Future<void> main() async {
     repository: communityRepository,
     commands: communityCommands,
     interactions: communityInteractions,
+    polls: communityPolls,
     onMutationCommitted: () => communityRepository.invalidateFirstPage(),
   );
   final storyController = StoryController(repository: storyRepository);

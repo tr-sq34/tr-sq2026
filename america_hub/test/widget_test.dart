@@ -56,6 +56,7 @@ void main() {
           repository: communityRepository,
           commands: communityRepository,
           interactions: communityRepository,
+          polls: communityRepository,
         ),
         storyController: StoryController(repository: communityRepository),
         commentsController: CommunityCommentsController(repository: MockCommunityCommentsRepository()),

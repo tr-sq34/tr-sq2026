@@ -96,6 +96,7 @@ Future<AuthController> pumpShell(
           repository: communityRepository,
           commands: communityRepository,
           interactions: communityRepository,
+          polls: communityRepository,
         ),
         storyController: StoryController(repository: communityRepository),
         commentsController: CommunityCommentsController(

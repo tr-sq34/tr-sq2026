@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:geolocator/geolocator.dart';
 
 import '../../../auth/domain/entities/app_user.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_image_source.dart';
 import '../../../../core/widgets/app_remote_image.dart';
-import '../../../../core/widgets/app_button.dart';
 import '../../../../core/widgets/app_bottom_sheet.dart';
 import '../../../../core/widgets/app_screen_header.dart';
 import '../../../../core/widgets/app_state_views.dart';
@@ -23,11 +20,11 @@ import '../widgets/special_post_request_sheet.dart';
 import '../../domain/repositories/content_moderation_repository.dart';
 import '../widgets/content_report_sheet.dart';
 import '../widgets/story_composer_sheet.dart';
+import 'post_composer_screen.dart';
 import 'story_viewer_screen.dart';
 import '../../domain/entities/community_post.dart';
+import '../../domain/entities/feed_extensions.dart';
 import '../../domain/entities/content_report.dart';
-import '../../domain/entities/create_post_draft.dart';
-import '../../domain/entities/post_media_upload.dart';
 import '../../domain/services/post_access_policy.dart';
 
 class CommunityScreen extends StatefulWidget {
@@ -64,137 +61,6 @@ class CommunityScreen extends StatefulWidget {
 
   @override
   State<CommunityScreen> createState() => _CommunityScreenState();
-}
-
-class _CreatePostSheet extends StatefulWidget {
-  const _CreatePostSheet({required this.controller});
-  final CommunityFeedController controller;
-
-  @override
-  State<_CreatePostSheet> createState() => _CreatePostSheetState();
-}
-
-class _CreatePostSheetState extends State<_CreatePostSheet> {
-  final _textController = TextEditingController();
-  PostVisibility _visibility = PostVisibility.friendsOnly;
-  CommentsPolicy _commentsPolicy = CommentsPolicy.friendsOnly;
-  bool _isSubmitting = false;
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _publish() async {
-    final draft = CreatePostDraft(
-      message: _textController.text,
-      visibility: _visibility,
-      commentsPolicy: _commentsPolicy,
-    );
-    if (draft.validationError case final error?) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
-      return;
-    }
-    setState(() => _isSubmitting = true);
-    try {
-      await widget.controller.createPost(draft);
-      if (mounted) Navigator.of(context).pop();
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Paylaşım gönderilemedi. Lütfen tekrar deneyin.'),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSubmitting = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Center(
-          child: Text(
-            'Paylaşım oluştur',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ),
-        const SizedBox(height: 18),
-        TextField(
-          controller: _textController,
-          maxLength: CommunityPost.maxMessageLength,
-          minLines: 5,
-          maxLines: 8,
-          decoration: const InputDecoration(hintText: 'Ne düşünüyorsun?'),
-        ),
-        const Text(
-          'Kimler görebilir?',
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 8),
-        SegmentedButton<PostVisibility>(
-          segments: const [
-            ButtonSegment(
-              value: PostVisibility.friendsOnly,
-              icon: Icon(Icons.people_outline_rounded),
-              label: Text('Arkadaşlar'),
-            ),
-            ButtonSegment(
-              value: PostVisibility.public,
-              icon: Icon(Icons.public_rounded),
-              label: Text('Herkese açık'),
-            ),
-          ],
-          selected: {_visibility},
-          onSelectionChanged: (value) =>
-              setState(() => _visibility = value.first),
-        ),
-        const SizedBox(height: 14),
-        DropdownButtonFormField<CommentsPolicy>(
-          value: _commentsPolicy,
-          decoration: const InputDecoration(labelText: 'Yorumlar'),
-          items: const [
-            DropdownMenuItem(
-              value: CommentsPolicy.everyone,
-              child: Text('Herkes yorum yapabilir'),
-            ),
-            DropdownMenuItem(
-              value: CommentsPolicy.friendsOnly,
-              child: Text('Yalnız arkadaşlar'),
-            ),
-            DropdownMenuItem(
-              value: CommentsPolicy.disabled,
-              child: Text('Yorumlara kapalı'),
-            ),
-          ],
-          onChanged: (value) => setState(() => _commentsPolicy = value!),
-        ),
-        const SizedBox(height: 18),
-        AppButton(
-          label: 'Paylaş',
-          onPressed: _publish,
-          isLoading: _isSubmitting,
-          icon: Icons.send_rounded,
-        ),
-      ],
-    ),
-  );
 }
 
 class _CommunityScreenState extends State<CommunityScreen> {
@@ -280,17 +146,26 @@ class _FeedState extends State<_Feed> {
   /// sekmeye dokunmakla aynı şeyi yapıyor.
   final _pageController = PageController();
   _FeedFilter _filter = _FeedFilter.forYou;
-  Future<void> _openComposer() => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => _ReferenceCreatePostSheet(
-      controller: widget.controller,
-      mediaUploadController: widget.mediaUploadController,
-      viewer: widget.viewer,
-    ),
-  );
+  /// Akıştaki kutu da alt bardaki ➕ da artık aynı editörü açıyor: iki ayrı
+  /// düzenleyici, iki ayrı eksik demekti (tabakada anket sahteydi, tam ekran
+  /// akışta anket hiç yoktu).
+  Future<void> _openComposer(PostComposerPreset preset) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => PostComposerScreen(
+            feedController: widget.controller,
+            mediaUploadController: widget.mediaUploadController,
+            viewer: widget.viewer,
+            preset: preset,
+            loadTaggablePeople: () async => [
+              for (final contact
+                  in await widget.storyController.loadAudienceContacts())
+                TaggedUser(id: contact.id, displayName: contact.displayName),
+            ],
+          ),
+        ),
+      );
 
   /// Yorum tabakası artık paylaşılan bir bileşen; akışa özgü olan yalnızca
   /// erişim politikası, o da buradan geçiriliyor.
@@ -320,6 +195,25 @@ class _FeedState extends State<_Feed> {
       ),
     ),
   );
+
+  Future<void> _vote(
+    String postId,
+    String pollId,
+    Set<String> optionIds,
+  ) async {
+    try {
+      await widget.controller.voteOnPoll(
+        postId: postId,
+        pollId: pollId,
+        optionIds: optionIds,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Oyun kaydedilemedi. Tekrar dene.')),
+      );
+    }
+  }
 
   Future<void> _deletePost(CommunityPost post) async {
     final shouldDelete = await showDialog<bool>(
@@ -395,7 +289,7 @@ class _FeedState extends State<_Feed> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                  child: _ReferenceComposer(onTap: _openComposer),
+                  child: _ReferenceComposer(onCompose: _openComposer),
                 ),
               ),
               SliverPersistentHeader(
@@ -443,6 +337,7 @@ class _FeedState extends State<_Feed> {
                     ? () => _deletePost(post)
                     : null,
                 onOpenComments: () => _openComments(post),
+                onVote: _vote,
               ),
             ),
           PagedListFooter<CommunityPost>(controller: widget.controller),
@@ -812,592 +707,20 @@ class _StoryRail extends StatelessWidget {
   );
 }
 
-class _ReferenceCreatePostSheet extends StatefulWidget {
-  const _ReferenceCreatePostSheet({
-    required this.controller,
-    required this.mediaUploadController,
-    this.viewer,
-  });
-  final CommunityFeedController controller;
-  final MediaUploadController mediaUploadController;
-  final AppUser? viewer;
-  @override
-  State<_ReferenceCreatePostSheet> createState() =>
-      _ReferenceCreatePostSheetState();
-}
-
-class _ReferenceCreatePostSheetState extends State<_ReferenceCreatePostSheet> {
-  final _text = TextEditingController();
-  bool _sending = false;
-  PostVisibility _visibility = PostVisibility.public;
-  bool _hasPoll = false;
-  String? _location;
-  String? _price;
-  String? _tag;
-  final _picker = ImagePicker();
-  final List<XFile> _photos = [];
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  Future<void> _publish() async {
-    final extras = [
-      if (_hasPoll) 'Anket',
-      if (_location != null) _location!,
-      if (_price != null) 'Fiyat: $_price',
-      if (_tag != null) '#$_tag',
-    ];
-    final draft = CreatePostDraft(
-      message: [
-        _text.text.trim(),
-        ...extras.map((item) => '[$item]'),
-      ].where((item) => item.isNotEmpty).join(' '),
-      visibility: _visibility,
-      commentsPolicy: CommentsPolicy.friendsOnly,
-      media: widget.mediaUploadController.readyMedia,
-    );
-    if (draft.validationError case final error?) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
-      return;
-    }
-    setState(() => _sending = true);
-    try {
-      await widget.controller.createPost(draft);
-      if (mounted) Navigator.pop(context);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Paylaşım gönderilemedi. Lütfen tekrar deneyin.'),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  Future<void> _pickPhotos() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Galeriden seç'),
-              onTap: () => Navigator.pop(sheetContext, ImageSource.gallery),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Kamerayı aç'),
-              onTap: () => Navigator.pop(sheetContext, ImageSource.camera),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (source == null) return;
-    if (source == ImageSource.camera) {
-      await _capturePhoto();
-      return;
-    }
-    final files = await _picker.pickMultiImage(imageQuality: 85);
-    if (files.isEmpty || !mounted) return;
-    final selected = files.take(10 - _photos.length).toList(growable: false);
-    setState(() => _photos.addAll(selected));
-    for (final file in selected) {
-      final size = await file.length();
-      await widget.mediaUploadController.upload(
-        MediaUploadRequest(
-          localUri: file.path,
-          media: PostMediaUpload(
-            localId: file.name,
-            type: PostMediaType.image,
-            fileName: file.name,
-            mimeType: 'image/jpeg',
-            sizeBytes: size,
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _capturePhoto() async {
-    try {
-      final photo = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 85,
-      );
-      if (photo == null || !mounted) return;
-      final size = await photo.length();
-      setState(() => _photos.add(photo));
-      await widget.mediaUploadController.upload(
-        MediaUploadRequest(
-          localUri: photo.path,
-          media: PostMediaUpload(
-            localId: photo.name,
-            type: PostMediaType.image,
-            fileName: photo.name,
-            mimeType: 'image/jpeg',
-            sizeBytes: size,
-          ),
-        ),
-      );
-    } catch (_) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Kamera açılamadı. İzinleri kontrol edin.'),
-          ),
-        );
-    }
-  }
-
-  Future<void> _useCurrentLocation() async {
-    try {
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied)
-        permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever)
-        throw StateError('Konum izni verilmedi.');
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-        ),
-      );
-      if (!mounted) return;
-      setState(
-        () => _location =
-            'Yaklaşık konum · ${position.latitude.toStringAsFixed(2)}, ${position.longitude.toStringAsFixed(2)}',
-      );
-    } catch (_) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Konum alınamadı. Konumu yazarak ekleyebilirsiniz.'),
-          ),
-        );
-    }
-  }
-
-  Future<void> _setTextValue({
-    required String title,
-    required void Function(String value) onSaved,
-  }) async {
-    final controller = TextEditingController();
-    final value = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (value) => Navigator.pop(dialogContext, value),
-          decoration: const InputDecoration(hintText: 'Bilgiyi girin'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Vazgeç'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('Ekle'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (value != null && value.trim().isNotEmpty && mounted)
-      setState(() => onSaved(value.trim()));
-  }
-
-  @override
-  Widget build(BuildContext context) => Container(
-    height: MediaQuery.sizeOf(context).height * .91,
-    padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            IconButton(
-              onPressed: () => Navigator.pop(context),
-              style: IconButton.styleFrom(
-                backgroundColor: const Color(0xFFF3F6FA),
-              ),
-              icon: const Icon(Icons.close_rounded, size: 20),
-            ),
-            const Expanded(
-              child: Text(
-                'Yeni Paylaşım Oluştur',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-              ),
-            ),
-            FilledButton(
-              onPressed: _sending ? null : _publish,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(70, 36),
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                backgroundColor: const Color(0xFF5D43D6),
-              ),
-              child: const Text(
-                'Paylaş',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 28),
-        Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: const Color(0xFFEDEAFF),
-              child: widget.viewer == null
-                  ? const Icon(Icons.person_rounded, color: Color(0xFF705BE9))
-                  : Text(
-                      widget.viewer!.initials,
-                      style: const TextStyle(
-                        color: Color(0xFF705BE9),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-            ),
-            const SizedBox(width: 10),
-            // The member's own name and audience. There is no handle in the
-            // domain, so the second line says where the post goes instead of
-            // showing a username nobody actually has.
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.viewer?.fullName ?? 'Sen',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  Text(
-                    _visibility == PostVisibility.public
-                        ? 'Herkese açık'
-                        : 'Sadece arkadaşlar',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF8B9AB3),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.public, size: 15, color: Color(0xFF00A884)),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Herkese Açık',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF4B5563),
-                  ),
-                ),
-              ),
-              Icon(Icons.expand_more_rounded, color: Color(0xFF94A3B8)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        Expanded(
-          child: TextField(
-            controller: _text,
-            maxLength: CommunityPost.maxMessageLength,
-            maxLines: null,
-            expands: true,
-            textAlignVertical: TextAlignVertical.top,
-            decoration: const InputDecoration(
-              counterText: '',
-              hintText:
-                  'Toplulukla ne paylaşmak istersin? Detaylıca yazabilirsin...',
-              hintStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              filled: false,
-            ),
-          ),
-        ),
-        if (_photos.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Wrap(
-              spacing: 6,
-              children: [
-                for (final photo in _photos)
-                  InputChip(
-                    label: Text(photo.name, overflow: TextOverflow.ellipsis),
-                    onDeleted: () => setState(() {
-                      _photos.remove(photo);
-                      widget.mediaUploadController.remove(photo.name);
-                    }),
-                  ),
-              ],
-            ),
-          ),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'GÖNDERİNE EKLE',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFF8B9AB3),
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              SizedBox(height: 9),
-              Row(
-                children: [
-                  _SheetAction(
-                    Icons.image_outlined,
-                    'Fotoğraf',
-                    Color(0xFF10B981),
-                    onTap: _pickPhotos,
-                  ),
-                  SizedBox(width: 8),
-                  _SheetAction(
-                    Icons.location_on_outlined,
-                    'Konum',
-                    Color(0xFFF05269),
-                    onTap: () => showModalBottomSheet<void>(
-                      context: context,
-                      builder: (sheetContext) => SafeArea(
-                        child: Wrap(
-                          children: [
-                            ListTile(
-                              leading: const Icon(Icons.my_location_outlined),
-                              title: const Text(
-                                'Mevcut yaklaşık konumu kullan',
-                              ),
-                              onTap: () {
-                                Navigator.pop(sheetContext);
-                                _useCurrentLocation();
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.search_rounded),
-                              title: const Text('Konumu yazarak ekle'),
-                              onTap: () {
-                                Navigator.pop(sheetContext);
-                                _setTextValue(
-                                  title: 'Konum ekle',
-                                  onSaved: (value) => _location = value,
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: 8),
-                  _SheetAction(
-                    Icons.bar_chart_rounded,
-                    'Anket',
-                    const Color(0xFF5D43D6),
-                    onTap: () => setState(() => _hasPoll = !_hasPoll),
-                  ),
-                ],
-              ),
-              SizedBox(height: 8),
-              Row(
-                children: [
-                  _SheetAction(
-                    Icons.sell_outlined,
-                    'Fiyat Ekle',
-                    Color(0xFF5D43D6),
-                    onTap: () => _setTextValue(
-                      title: 'Fiyat ekle',
-                      onSaved: (value) => _price = value,
-                    ),
-                  ),
-                  SizedBox(width: 8),
-                  _SheetAction(
-                    Icons.tag_rounded,
-                    'Etiket',
-                    Color(0xFF5D43D6),
-                    onTap: () => _setTextValue(
-                      title: 'Etiket ekle',
-                      onSaved: (value) => _tag = value.replaceAll('#', ''),
-                    ),
-                  ),
-                  Spacer(),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _SheetAction extends StatelessWidget {
-  const _SheetAction(this.icon, this.label, this.color, {this.onTap});
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback? onTap;
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(12),
-    child: Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 15, color: color),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _ReferenceComposerLegacy extends StatelessWidget {
-  const _ReferenceComposerLegacy({required this.onTap});
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => Material(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(20),
-    child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        height: 76,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x08000000),
-              blurRadius: 5,
-              offset: Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: Color(0xFFF0EEFF),
-              ),
-              child: const Icon(
-                Icons.person_rounded,
-                size: 22,
-                color: Color(0xFF705BE9),
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Ne düşünüyorsun?',
-                style: TextStyle(
-                  color: Color(0xFF9B98A8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            const Icon(
-              Icons.image_outlined,
-              color: Color(0xFF705BE9),
-              size: 22,
-            ),
-            const SizedBox(width: 13),
-            Container(
-              height: 44,
-              padding: const EdgeInsets.symmetric(horizontal: 17),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xFF6B54E8),
-                borderRadius: BorderRadius.circular(23),
-              ),
-              child: const Text(
-                'Paylaş',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
 class _ReferenceComposer extends StatelessWidget {
-  const _ReferenceComposer({required this.onTap});
-  final VoidCallback onTap;
+  const _ReferenceComposer({required this.onCompose});
+
+  /// Kutunun kendisi de altındaki üç kısayol da aynı editörü açıyor; kısayollar
+  /// yalnızca editörü hangi ayarla açacağını söylüyor. Eskiden bu üç düğme
+  /// hiçbir şey yapmıyordu, kutuya dokunmakla aynı yere bile gitmiyorlardı.
+  final void Function(PostComposerPreset preset) onCompose;
 
   @override
   Widget build(BuildContext context) => Material(
     color: Colors.white,
     borderRadius: BorderRadius.circular(18),
     child: InkWell(
-      onTap: onTap,
+      onTap: () => onCompose(PostComposerPreset.standard),
       borderRadius: BorderRadius.circular(18),
       child: Container(
         height: 112,
@@ -1437,24 +760,27 @@ class _ReferenceComposer extends StatelessWidget {
             const SizedBox(height: 10),
             const Divider(height: 1, color: Color(0xFFE8EAF0)),
             const SizedBox(height: 8),
-            const Row(
+            Row(
               children: [
                 _ComposerAction(
                   icon: Icons.help_outline_rounded,
                   label: 'Soru Sor',
-                  color: Color(0xFF5D55DB),
+                  color: const Color(0xFF5D55DB),
+                  onTap: () => onCompose(PostComposerPreset.question),
                 ),
-                SizedBox(width: 7),
+                const SizedBox(width: 7),
                 _ComposerAction(
                   icon: Icons.storefront_outlined,
                   label: 'Çarşı İlanı',
-                  color: Color(0xFF5D55DB),
+                  color: const Color(0xFF5D55DB),
+                  onTap: () => onCompose(PostComposerPreset.marketplace),
                 ),
-                SizedBox(width: 7),
+                const SizedBox(width: 7),
                 _ComposerAction(
                   icon: Icons.bar_chart_rounded,
                   label: 'Anket',
-                  color: Color(0xFFF59E0B),
+                  color: const Color(0xFFF59E0B),
+                  onTap: () => onCompose(PostComposerPreset.poll),
                 ),
               ],
             ),
@@ -1470,822 +796,44 @@ class _ComposerAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.color,
+    required this.onTap,
   });
   final IconData icon;
   final String label;
   final Color color;
+  final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => Expanded(
-    child: Container(
-      height: 30,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: color == const Color(0xFFF59E0B)
-            ? const Color(0xFFFFFBEB)
-            : const Color(0xFFF5F4FF),
-        border: Border.all(color: color.withValues(alpha: .25)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              color: color,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _FeedHeader extends StatelessWidget {
-  const _FeedHeader({required this.onCreate});
-  final VoidCallback onCreate;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 11),
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      border: Border(bottom: BorderSide(color: Color(0xFFE8EAF0))),
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(11),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: .25),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: const Icon(
-            Icons.explore_rounded,
-            size: 19,
-            color: Colors.white,
-          ),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        height: 30,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color == const Color(0xFFF59E0B)
+              ? const Color(0xFFFFFBEB)
+              : const Color(0xFFF5F4FF),
+          border: Border.all(color: color.withValues(alpha: .25)),
+          borderRadius: BorderRadius.circular(10),
         ),
-        const SizedBox(width: 10),
-        const Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Topluluk AkÄ±ÅŸÄ±',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              SizedBox(height: 2),
-              Row(
-                children: [
-                  Icon(Icons.circle, size: 7, color: AppColors.accentEmerald),
-                  SizedBox(width: 5),
-                  Text(
-                    '28 yeni paylaÅŸÄ±m',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        IconButton(
-          onPressed: onCreate,
-          tooltip: 'PaylaÅŸÄ±m oluÅŸtur',
-          style: IconButton.styleFrom(
-            backgroundColor: const Color(0xFFF0EEFF),
-            foregroundColor: AppColors.primary,
-          ),
-          icon: const Icon(Icons.add_rounded, size: 19),
-        ),
-      ],
-    ),
-  );
-}
-
-class _PublicStories extends StatelessWidget {
-  const _PublicStories();
-
-  @override
-  Widget build(BuildContext context) {
-    const entries = [
-      (
-        'Elif',
-        'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=240&q=80',
-      ),
-      (
-        'Mert',
-        'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=240&q=80',
-      ),
-      (
-        'Zeynep',
-        'https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=240&q=80',
-      ),
-      (
-        'Can',
-        'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=240&q=80',
-      ),
-    ];
-    return SizedBox(
-      height: 132,
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-        scrollDirection: Axis.horizontal,
-        itemCount: entries.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (_, index) {
-          final item = entries[index];
-          return SizedBox(
-            width: 74,
-            child: Column(
-              children: [
-                Container(
-                  height: 106,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: AppColors.primary.withValues(alpha: .4),
-                      width: 2,
-                    ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: AppRemoteImage(
-                          imageUrl: item.$2,
-                          semanticLabel: '${item.$1} hikayesi',
-                        ),
-                      ),
-                      Positioned.fill(
-                        child: DecoratedBox(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Color(0x12000000), Color(0x77000000)],
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: 7,
-                        top: 7,
-                        child: CircleAvatar(
-                          radius: 11,
-                          backgroundColor: Colors.white,
-                          child: Text(
-                            item.$1.substring(0, 1),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: 8,
-                        right: 8,
-                        bottom: 7,
-                        child: Text(
-                          item.$1,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _OpenComposerCard extends StatelessWidget {
-  const _OpenComposerCard({required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(16),
-    child: Container(
-      height: 76,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x100E0B18),
-            blurRadius: 14,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          const CircleAvatar(
-            radius: 19,
-            backgroundColor: Color(0xFFEEF2FF),
-            child: Icon(Icons.person_rounded, color: AppColors.primary),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Ne düşünüyorsun?',
-              style: TextStyle(fontSize: 16, color: Color(0xFF9CA3AF)),
-            ),
-          ),
-          const Icon(Icons.image_outlined, color: AppColors.primary, size: 21),
-          const SizedBox(width: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: const BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.all(Radius.circular(22)),
-            ),
-            child: const Text(
-              'Paylaş',
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
               style: TextStyle(
-                color: Colors.white,
+                fontSize: 10,
+                color: color,
                 fontWeight: FontWeight.w800,
               ),
             ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _InlineComposer extends StatefulWidget {
-  const _InlineComposer({
-    required this.controller,
-    required this.mediaUploadController,
-    required this.expanded,
-    required this.onExpand,
-    required this.onCollapse,
-  });
-  final CommunityFeedController controller;
-  final MediaUploadController mediaUploadController;
-  final bool expanded;
-  final VoidCallback onExpand;
-  final VoidCallback onCollapse;
-
-  @override
-  State<_InlineComposer> createState() => _InlineComposerState();
-}
-
-class _InlineComposerState extends State<_InlineComposer> {
-  final _text = TextEditingController();
-  PostVisibility _visibility = PostVisibility.friendsOnly;
-  CommentsPolicy _comments = CommentsPolicy.friendsOnly;
-  final List<TaggedUser> _taggedUsers = [];
-  final List<XFile> _pickedMedia = [];
-  final Set<String> _videoMediaIds = {};
-  final _picker = ImagePicker();
-  PostLocation? _location;
-  bool _isSending = false;
-  bool _hasContent = false;
-  String? _mentionQuery;
-  bool _isChoosingLocation = false;
-  final _locationText = TextEditingController();
-  static const _mentionCandidates = [
-    TaggedUser(id: 'friend-elif', displayName: 'Elif Demir'),
-    TaggedUser(id: 'friend-mert', displayName: 'Mert Kaya'),
-    TaggedUser(id: 'friend-zeynep', displayName: 'Zeynep Arslan'),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _text.addListener(_onTextChanged);
-    widget.mediaUploadController.addListener(_onUploadChanged);
-  }
-
-  void _onUploadChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void _onTextChanged() {
-    final value = _text.value;
-    final prefix = value.text.substring(
-      0,
-      value.selection.baseOffset.clamp(0, value.text.length),
-    );
-    final match = RegExp(r'@([A-Za-z0-9_çÇğĞıİöÖşŞüÜ]*)$').firstMatch(prefix);
-    setState(() {
-      _hasContent = value.text.trim().isNotEmpty;
-      _mentionQuery = match?.group(1);
-    });
-  }
-
-  void _insertMention() {
-    final selection = _text.selection;
-    final position = selection.baseOffset < 0
-        ? _text.text.length
-        : selection.baseOffset;
-    _text.value = _text.value.copyWith(
-      text:
-          '${_text.text.substring(0, position)}@${_text.text.substring(position)}',
-      selection: TextSelection.collapsed(offset: position + 1),
-    );
-  }
-
-  void _selectMention(TaggedUser user) {
-    final value = _text.value;
-    final prefix = value.text.substring(
-      0,
-      value.selection.baseOffset.clamp(0, value.text.length),
-    );
-    final start = prefix.lastIndexOf('@');
-    _text.value = value.copyWith(
-      text:
-          '${value.text.substring(0, start)}@${user.displayName} ${value.text.substring(value.selection.baseOffset)}',
-      selection: TextSelection.collapsed(
-        offset: start + user.displayName.length + 2,
-      ),
-    );
-    setState(() {
-      if (!_taggedUsers.any((item) => item.id == user.id))
-        _taggedUsers.add(user);
-      _mentionQuery = null;
-    });
-  }
-
-  void dispose() {
-    widget.mediaUploadController.removeListener(_onUploadChanged);
-    _text.removeListener(_onTextChanged);
-    _text.dispose();
-    _locationText.dispose();
-    super.dispose();
-  }
-
-  Future<void> _send() async {
-    final draft = CreatePostDraft(
-      message: _text.text,
-      visibility: _visibility,
-      commentsPolicy: _comments,
-      taggedUsers: _taggedUsers,
-      location: _location,
-      media: widget.mediaUploadController.readyMedia,
-    );
-    if (draft.validationError case final error?) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
-      return;
-    }
-    setState(() => _isSending = true);
-    try {
-      await widget.controller.createPost(draft);
-      _text.clear();
-      _pickedMedia.clear();
-      _videoMediaIds.clear();
-      widget.mediaUploadController.clear();
-      widget.onCollapse();
-    } finally {
-      if (mounted) setState(() => _isSending = false);
-    }
-  }
-
-  Future<void> _pickMedia() async {
-    final isVideo = await showModalBottomSheet<bool>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Fotoğraf seç'),
-              onTap: () => Navigator.pop(context, false),
-            ),
-            ListTile(
-              leading: const Icon(Icons.videocam_outlined),
-              title: const Text('Video seç'),
-              onTap: () => Navigator.pop(context, true),
-            ),
           ],
         ),
       ),
-    );
-    if (isVideo == null || !mounted) return;
-    if (isVideo) {
-      if (_videoMediaIds.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Bir paylaşımda yalnızca bir video ekleyebilirsin.'),
-          ),
-        );
-        return;
-      }
-      final video = await _picker.pickVideo(
-        source: ImageSource.gallery,
-        maxDuration: const Duration(minutes: 2),
-      );
-      if (mounted && video != null) {
-        _pickedMedia.add(video);
-        _videoMediaIds.add(video.name);
-        await _upload(video, PostMediaType.video);
-      }
-      return;
-    }
-    final images = await _picker.pickMultiImage(imageQuality: 85);
-    if (mounted && images.isNotEmpty) {
-      final selected = images
-          .take(10 - _pickedMedia.length)
-          .toList(growable: false);
-      _pickedMedia.addAll(selected);
-      for (final image in selected) {
-        await _upload(image, PostMediaType.image);
-      }
-    }
-  }
-
-  Future<void> _upload(XFile file, PostMediaType type) async {
-    final byteCount = await file.length();
-    final mimeType = type == PostMediaType.video ? 'video/mp4' : 'image/jpeg';
-    final request = MediaUploadRequest(
-      localUri: file.path,
-      media: PostMediaUpload(
-        localId: file.name,
-        type: type,
-        fileName: file.name,
-        mimeType: mimeType,
-        sizeBytes: byteCount,
-      ),
-    );
-    await widget.mediaUploadController.upload(request);
-  }
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x120E0B18),
-          blurRadius: 18,
-          offset: Offset(0, 7),
-        ),
-      ],
     ),
-    child: Column(
-      children: [
-        Row(
-          children: [
-            const CircleAvatar(
-              radius: 19,
-              backgroundColor: Color(0xFFE9E5F7),
-              child: Icon(Icons.person_rounded, color: AppColors.primary),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: widget.expanded
-                  ? TextField(
-                      controller: _text,
-                      autofocus: true,
-                      minLines: 2,
-                      maxLines: 5,
-                      maxLength: CommunityPost.maxMessageLength,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        height: 1.45,
-                        color: AppColors.textPrimary,
-                      ),
-                      decoration: const InputDecoration(
-                        counterText: '',
-                        hintText: 'Ne düşünüyorsun?',
-                        hintStyle: TextStyle(
-                          color: Color(0xFF9CA3AF),
-                          fontSize: 17,
-                        ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    )
-                  : InkWell(
-                      onTap: widget.onExpand,
-                      borderRadius: BorderRadius.circular(22),
-                      child: Container(
-                        height: 40,
-                        alignment: Alignment.centerLeft,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: const BoxDecoration(),
-                        child: const Text(
-                          'Ne düşünüyorsun?',
-                          style: TextStyle(
-                            color: Color(0xFF9CA3AF),
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
-            if (!widget.expanded) ...[
-              const SizedBox(width: 6),
-              IconButton(
-                onPressed: widget.onExpand,
-                icon: const Icon(
-                  Icons.image_outlined,
-                  color: AppColors.primary,
-                ),
-              ),
-              const SizedBox(width: 2),
-              _shareButton(onPressed: widget.onExpand, enabled: true),
-            ],
-          ],
-        ),
-        if (widget.expanded) ...[
-          const Divider(height: 22),
-          if (_mentionQuery != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFAFAFC),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  children: [
-                    for (final user in _mentionCandidates.where(
-                      (user) => user.displayName.toLowerCase().contains(
-                        _mentionQuery!.toLowerCase(),
-                      ),
-                    ))
-                      ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          radius: 14,
-                          backgroundColor: const Color(0xFFEEF2FF),
-                          child: Text(
-                            user.displayName.substring(0, 1),
-                            style: const TextStyle(color: AppColors.primary),
-                          ),
-                        ),
-                        title: Text(
-                          user.displayName,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        onTap: () => _selectMention(user),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          if (_isChoosingLocation)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: TextField(
-                controller: _locationText,
-                autofocus: true,
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search_rounded, size: 18),
-                  hintText: 'Mekân veya adres ara',
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.my_location_outlined, size: 18),
-                    onPressed: () => setState(() {
-                      _location = const PostLocation(
-                        placeId: 'current-location',
-                        displayName: 'Mevcut konum',
-                      );
-                      _isChoosingLocation = false;
-                    }),
-                  ),
-                ),
-                onSubmitted: (value) => setState(() {
-                  if (value.trim().isNotEmpty)
-                    _location = PostLocation(
-                      placeId: value.trim().toLowerCase().replaceAll(' ', '-'),
-                      displayName: value.trim(),
-                    );
-                  _isChoosingLocation = false;
-                }),
-              ),
-            ),
-          if (_location != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  if (_location != null)
-                    InputChip(
-                      backgroundColor: const Color(0xFFEEF2FF),
-                      side: BorderSide.none,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      avatar: const Icon(Icons.location_on_outlined, size: 16),
-                      label: Text(_location!.displayName),
-                      onDeleted: () => setState(() => _location = null),
-                    ),
-                ],
-              ),
-            ),
-          if (_location != null) const SizedBox(height: 8),
-          if (_pickedMedia.isNotEmpty)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 6,
-                children: [for (final media in _pickedMedia) _mediaChip(media)],
-              ),
-            ),
-          if (_pickedMedia.isNotEmpty) const SizedBox(height: 8),
-          Row(
-            children: [
-              IconButton(
-                iconSize: 20,
-                visualDensity: VisualDensity.compact,
-                onPressed: _pickedMedia.length >= 10 ? null : _pickMedia,
-                icon: const Icon(
-                  Icons.image_outlined,
-                  color: Color(0xFF6B7280),
-                ),
-                tooltip: 'Görsel veya video ekle',
-              ),
-              IconButton(
-                iconSize: 20,
-                visualDensity: VisualDensity.compact,
-                onPressed: _insertMention,
-                icon: const Icon(
-                  Icons.alternate_email_rounded,
-                  color: Color(0xFF6B7280),
-                ),
-                tooltip: 'Kişi etiketle',
-              ),
-              IconButton(
-                iconSize: 20,
-                visualDensity: VisualDensity.compact,
-                onPressed: () =>
-                    setState(() => _isChoosingLocation = !_isChoosingLocation),
-                icon: const Icon(
-                  Icons.location_on_outlined,
-                  color: Color(0xFF6B7280),
-                ),
-                tooltip: 'Konum ekle',
-              ),
-              const Spacer(),
-              PopupMenuButton<PostVisibility>(
-                tooltip: 'Görünürlük',
-                iconSize: 20,
-                padding: EdgeInsets.zero,
-                icon: Icon(
-                  _visibility == PostVisibility.public
-                      ? Icons.public_rounded
-                      : Icons.people_outline_rounded,
-                  color: const Color(0xFF6B7280),
-                ),
-                onSelected: (value) => setState(() => _visibility = value),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: PostVisibility.friendsOnly,
-                    child: Text('Sadece arkadaşlar'),
-                  ),
-                  PopupMenuItem(
-                    value: PostVisibility.public,
-                    child: Text('Herkese açık'),
-                  ),
-                ],
-              ),
-              PopupMenuButton<CommentsPolicy>(
-                tooltip: 'Yorum ayarı',
-                iconSize: 20,
-                padding: EdgeInsets.zero,
-                icon: Icon(
-                  _comments == CommentsPolicy.disabled
-                      ? Icons.comments_disabled_outlined
-                      : Icons.mode_comment_outlined,
-                  color: const Color(0xFF6B7280),
-                ),
-                onSelected: (value) => setState(() => _comments = value),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: CommentsPolicy.everyone,
-                    child: Text('Herkes yorum yapabilir'),
-                  ),
-                  PopupMenuItem(
-                    value: CommentsPolicy.friendsOnly,
-                    child: Text('Arkadaşlar yorum yapabilir'),
-                  ),
-                  PopupMenuItem(
-                    value: CommentsPolicy.disabled,
-                    child: Text('Yorumları kapat'),
-                  ),
-                ],
-              ),
-              _shareButton(
-                onPressed:
-                    _isSending ||
-                        widget.mediaUploadController.hasPendingUploads ||
-                        !_hasContent && _pickedMedia.isEmpty
-                    ? null
-                    : _send,
-                enabled:
-                    (_hasContent || _pickedMedia.isNotEmpty) &&
-                    !widget.mediaUploadController.hasPendingUploads,
-              ),
-            ],
-          ),
-        ],
-      ],
-    ),
-  );
-
-  Widget _mediaChip(XFile media) {
-    final progress = widget.mediaUploadController.progressById[media.name];
-    final retryable =
-        progress?.status == MediaUploadStatus.failed ||
-        progress?.status == MediaUploadStatus.rejected;
-    final label = retryable
-        ? '${media.name} · Tekrar dene'
-        : progress?.status == MediaUploadStatus.uploading
-        ? '${media.name} ${((progress?.fraction ?? 0) * 100).round()}%'
-        : media.name;
-    return InputChip(
-      backgroundColor: const Color(0xFFEEF2FF),
-      side: BorderSide.none,
-      label: Text(label, overflow: TextOverflow.ellipsis),
-      onPressed: retryable
-          ? () => widget.mediaUploadController.retry(media.name)
-          : null,
-      onDeleted: () => setState(() {
-        _pickedMedia.remove(media);
-        _videoMediaIds.remove(media.name);
-        widget.mediaUploadController.remove(media.name);
-      }),
-    );
-  }
-
-  Widget _shareButton({
-    required VoidCallback? onPressed,
-    required bool enabled,
-  }) => FilledButton(
-    onPressed: onPressed,
-    style: FilledButton.styleFrom(
-      backgroundColor: enabled
-          ? AppColors.primary
-          : AppColors.primary.withValues(alpha: .24),
-      foregroundColor: Colors.white,
-      minimumSize: const Size(76, 40),
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      shape: const StadiumBorder(),
-      elevation: 0,
-    ),
-    child: _isSending
-        ? const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Colors.white,
-            ),
-          )
-        : const Text('Paylaş', style: TextStyle(fontWeight: FontWeight.w800)),
   );
 }
 
@@ -2296,11 +844,17 @@ class _PostCard extends StatelessWidget {
     required this.onOpenComments,
     required this.specialRequestController,
     required this.moderationRepository,
+    required this.onVote,
     this.onDelete,
   });
   final CommunityPost post;
   final ValueChanged<String> onToggleLike;
   final VoidCallback onOpenComments;
+
+  /// (postId, pollId, seçilen seçenekler) — anket kartı sayaçları kendi
+  /// uydurmuyor, oy sunucuya gidiyor ve dönen dağılım gösteriliyor.
+  final void Function(String postId, String pollId, Set<String> optionIds)
+  onVote;
   final CommunitySpecialRequestController specialRequestController;
   final ContentModerationRepository moderationRepository;
   final VoidCallback? onDelete;
@@ -2440,6 +994,13 @@ class _PostCard extends StatelessWidget {
           const SizedBox(height: 12),
           _PostMediaStrip(media: post.media),
         ],
+        if (post.poll case final poll?) ...[
+          const SizedBox(height: 12),
+          _PollCard(
+            poll: poll,
+            onVote: (optionIds) => onVote(post.id, poll.id, optionIds),
+          ),
+        ],
         if (post.postLocation != null) ...[
           const SizedBox(height: 10),
           Container(
@@ -2548,6 +1109,189 @@ class _PostCard extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Akıştaki anket.
+///
+/// Oy verilmeden önce seçenekler dokunulabilir satır, sonrasında dağılımı
+/// gösteren çubuk. Anket kapandıysa sonuç doğrudan görünüyor: kapanmış bir
+/// ankette "oy ver" göstermek, çalışmayacak bir düğme göstermek olurdu.
+class _PollCard extends StatefulWidget {
+  const _PollCard({required this.poll, required this.onVote});
+  final CommunityPoll poll;
+  final ValueChanged<Set<String>> onVote;
+
+  @override
+  State<_PollCard> createState() => _PollCardState();
+}
+
+class _PollCardState extends State<_PollCard> {
+  final Set<String> _pending = {};
+
+  CommunityPoll get _poll => widget.poll;
+  bool get _hasVoted => _poll.selectedOptionIds.isNotEmpty;
+  bool get _showResults => _hasVoted || _poll.isClosed;
+  int get _totalVotes =>
+      _poll.options.fold(0, (total, option) => total + option.votes);
+
+  void _toggle(String optionId) => setState(() {
+    if (_poll.selectionMode == PollSelectionMode.single) {
+      _pending
+        ..clear()
+        ..add(optionId);
+      return;
+    }
+    if (!_pending.remove(optionId)) _pending.add(optionId);
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8FAFC),
+      border: Border.all(color: const Color(0xFFE2E8F0)),
+      borderRadius: BorderRadius.circular(14),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final option in _poll.options)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _showResults
+                ? _PollResultRow(
+                    label: option.label,
+                    votes: option.votes,
+                    total: _totalVotes,
+                    isMine: _poll.selectedOptionIds.contains(option.id),
+                  )
+                : InkWell(
+                    onTap: () => _toggle(option.id),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 11,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(
+                          color: _pending.contains(option.id)
+                              ? AppColors.primary
+                              : const Color(0xFFE2E8F0),
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _pending.contains(option.id)
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked,
+                            size: 18,
+                            color: _pending.contains(option.id)
+                                ? AppColors.primary
+                                : const Color(0xFFCBD5E1),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              option.label,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+        Row(
+          children: [
+            Text(
+              _poll.isClosed
+                  ? '$_totalVotes oy · Anket kapandı'
+                  : '$_totalVotes oy',
+              style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+            ),
+            const Spacer(),
+            if (!_showResults)
+              FilledButton(
+                onPressed: _pending.isEmpty
+                    ? null
+                    : () => widget.onVote(Set.unmodifiable(_pending)),
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('Oy ver'),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+class _PollResultRow extends StatelessWidget {
+  const _PollResultRow({
+    required this.label,
+    required this.votes,
+    required this.total,
+    required this.isMine,
+  });
+  final String label;
+  final int votes;
+  final int total;
+  final bool isMine;
+
+  @override
+  Widget build(BuildContext context) {
+    final fraction = total == 0 ? 0.0 : votes / total;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (isMine) ...[
+              const Icon(
+                Icons.check_circle_rounded,
+                size: 15,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 5),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isMine ? FontWeight.w800 : FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              '%${(fraction * 100).round()}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            value: fraction,
+            minHeight: 6,
+            backgroundColor: const Color(0xFFE7E9F2),
+            valueColor: AlwaysStoppedAnimation(
+              isMine ? AppColors.primary : const Color(0xFFB9BFD6),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _PostPurposeBanner extends StatelessWidget {
