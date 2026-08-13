@@ -220,3 +220,14 @@ variable "container_app_environment_id" {
   type        = string
   default     = ""
 }
+
+# The public hostnames this app answers, on top of the generated
+# *.azurecontainerapps.io one. Empty by default and empty is the safe state: a
+# binding is only accepted after the hostname's DNS already points here, so
+# declaring one too early fails the apply - and this apply runs on every push to
+# main. See infra/bootstrap/azure-public-dns-cutover.md for the order.
+variable "custom_domains" {
+  description = "Public hostnames bound to this app, e.g. [\"api.turksquare.com\"]. Each one needs a CNAME to ingress_fqdn and a TXT asuid.<host> record carrying the environment's domain verification id BEFORE it is listed here."
+  type        = list(string)
+  default     = []
+}
