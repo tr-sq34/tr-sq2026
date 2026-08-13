@@ -87,6 +87,18 @@ abstract final class ApiEndpoints {
   static const communityMyPromotions = '/community/promotions/me';
   static String communityPromotionEvents(String id) =>
       '/community/promotions/$id/events';
+  // Forum: kategoriler, konular ve yanıtlar. Beğeni uçlarının PUT olması
+  // bilinçli — aynı isteği iki kez göndermek sayacı iki kez artırmasın.
+  static const communityForumCategories = '/community/forum/categories';
+  static const communityForumTopics = '/community/forum/topics';
+  static const communityForumTrending = '/community/forum/topics/trending';
+  static String communityForumTopic(String id) => '/community/forum/topics/$id';
+  static String communityForumTopicLike(String id) =>
+      '/community/forum/topics/$id/like';
+  static String communityForumReplies(String id) =>
+      '/community/forum/topics/$id/replies';
+  static String communityForumReplyLike(String id) =>
+      '/community/forum/replies/$id/like';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

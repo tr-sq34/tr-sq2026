@@ -6,6 +6,9 @@ import '../../application/community_home_controller.dart';
 import '../../data/community_home_repository.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
+import '../../../forum/application/forum_controller.dart';
+import '../../../forum/domain/entities/forum.dart';
+import '../../../forum/presentation/widgets/forum_trending_section.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../news/application/news_controller.dart';
@@ -28,6 +31,9 @@ class DiscoverScreen extends StatefulWidget {
     required this.onOpenStory,
     required this.onOpenPromotion,
     required this.onOpenMarketplace,
+    required this.forumController,
+    required this.onOpenForum,
+    required this.onOpenForumTopic,
   });
 
   final CommunityHomeController controller;
@@ -54,6 +60,12 @@ class DiscoverScreen extends StatefulWidget {
   /// home screen can never advertise something the marketplace has not got.
   final MarketplaceController marketplaceController;
 
+  /// Menüdeki Forum ekranıyla aynı denetleyici: şeritten açılan konu,
+  /// listede de aynı sayaçlarla duruyor.
+  final ForumController forumController;
+  final ValueChanged<String?> onOpenForum;
+  final ValueChanged<ForumTopic> onOpenForumTopic;
+
   final ValueChanged<StoryItem> onOpenStory;
   final ValueChanged<Promotion> onOpenPromotion;
   final VoidCallback onOpenMarketplace;
@@ -74,6 +86,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     widget.storyController.load();
     widget.promotionsController.loadActive();
     widget.marketplaceController.load();
+    widget.forumController.loadCategories();
+    widget.forumController.loadTrending();
   }
 
   @override
@@ -113,7 +127,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               onOpenArticle: widget.onOpenArticle,
               onOpenNewsCenter: widget.onOpenNewsCenter,
             ),
-            const _ForumSection(),
+            ForumTrendingSection(
+              controller: widget.forumController,
+              onOpenForum: widget.onOpenForum,
+              onOpenTopic: widget.onOpenForumTopic,
+            ),
             _RecentListingsSection(
               controller: widget.marketplaceController,
               onOpenMarketplace: widget.onOpenMarketplace,
@@ -1281,241 +1299,6 @@ class _EventCard extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    ),
-  );
-}
-
-// 7. Forum Section
-class _ForumSection extends StatelessWidget {
-  const _ForumSection();
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
-    child: Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Row(
-              children: [
-                Icon(
-                  Icons.whatshot_rounded,
-                  size: 14,
-                  color: Color(0xFFFBBF24),
-                ),
-                SizedBox(width: 8),
-                Text(
-                  'FORUMDA TREND TARTIŞMALAR',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF334155),
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ],
-            ),
-            Text(
-              'Tüm Forum >',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF6355D8),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            _FilterChip(label: '🔥 Tümü', isActive: true),
-            const SizedBox(width: 8),
-            _FilterChip(label: '🎓 Vize & Göçmenlik'),
-            const SizedBox(width: 8),
-            _FilterChip(label: '🏠 Emlak & Yaşam'),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: const Color(0xFFF1F5F9)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.02),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF5F3FF),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'İŞ KURMA & YATIRIM',
-                          style: TextStyle(
-                            color: Color(0xFF6355D8),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF1F2),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          '🔥 SICAK TARTIŞMA',
-                          style: TextStyle(
-                            color: Color(0xFFF43F5E),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.visibility_outlined,
-                        size: 12,
-                        color: Color(0xFF94A3B8),
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        '2.4k',
-                        style: TextStyle(
-                          color: Color(0xFF94A3B8),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Amerika\'da E-2 vizesi ile küçük işletme devralma süreçleri ve gerçek tecrübelerim',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: Color(0xFF0F172A),
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Divider(color: Color(0xFFF1F5F9), height: 1),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      const CircleAvatar(
-                        radius: 10,
-                        backgroundImage: NetworkImage(
-                          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=80&q=80',
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Son yanıt: ',
-                        style: TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 10,
-                        ),
-                      ),
-                      const Text(
-                        'Burak K. ',
-                        style: TextStyle(
-                          color: Color(0xFF334155),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        '(8 dk önce)',
-                        style: TextStyle(
-                          color: const Color(0xFF64748B).withValues(alpha: 0.7),
-                          fontSize: 9,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF5F3FF),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      '💬 48 Yanıt',
-                      style: TextStyle(
-                        color: Color(0xFF6355D8),
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({required this.label, this.isActive = false});
-  final String label;
-  final bool isActive;
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-    decoration: BoxDecoration(
-      color: isActive ? const Color(0xFF6355D8) : Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(
-        color: isActive ? const Color(0xFF6355D8) : const Color(0xFFE2E8F0),
-      ),
-    ),
-    child: Text(
-      label,
-      style: TextStyle(
-        color: isActive ? Colors.white : const Color(0xFF64748B),
-        fontSize: 10,
-        fontWeight: FontWeight.bold,
       ),
     ),
   );

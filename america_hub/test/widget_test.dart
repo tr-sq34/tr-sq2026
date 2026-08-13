@@ -15,6 +15,8 @@ import 'package:america_hub/features/community/data/repositories/mock_media_uplo
 import 'package:america_hub/features/community/data/repositories/mock_community_special_request_repository.dart';
 import 'package:america_hub/features/community/data/repositories/mock_content_moderation_repository.dart';
 import 'package:america_hub/features/events/application/events_controller.dart';
+import 'package:america_hub/features/forum/application/forum_controller.dart';
+import 'package:america_hub/features/forum/data/repositories/mock_forum_repository.dart';
 import 'package:america_hub/features/home/application/community_home_controller.dart';
 import 'package:america_hub/features/home/data/community_home_repository.dart';
 import 'package:america_hub/features/events/data/repositories/mock_events_repository.dart';
@@ -89,6 +91,9 @@ void main() {
         ),
         promotionsController: PromotionsController(
           repository: MockPromotionRepository(),
+        ),
+        forumController: ForumController(
+          repository: MockForumRepository(viewer: () => null),
         ),
       ),
     );

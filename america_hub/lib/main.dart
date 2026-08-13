@@ -55,6 +55,10 @@ import 'features/messaging/domain/repositories/direct_message_repository.dart';
 import 'features/messaging/domain/repositories/message_moderation_repository.dart';
 import 'features/home/application/community_home_controller.dart';
 import 'features/home/data/community_home_repository.dart';
+import 'features/forum/application/forum_controller.dart';
+import 'features/forum/data/repositories/api_forum_repository.dart';
+import 'features/forum/data/repositories/mock_forum_repository.dart';
+import 'features/forum/domain/repositories/forum_repository.dart';
 import 'features/news/application/news_controller.dart';
 import 'features/news/data/repositories/api_news_comments_repository.dart';
 import 'features/news/data/repositories/api_news_repository.dart';
@@ -282,6 +286,14 @@ Future<void> main() async {
         : ApiNewsCommentsRepository(client: communityApiClient),
   );
 
+  // Forum menüden de açılıyor, ana sayfadaki trend şeridinden de; ikisi tek
+  // denetleyiciyi paylaşıyor ki şeritte görünen sayı ile konuda yazan sayı
+  // ayrışmasın.
+  final ForumRepository forumRepository = useMockServices
+      ? MockForumRepository(viewer: () => authController.user)
+      : ApiForumRepository(client: communityApiClient);
+  final forumController = ForumController(repository: forumRepository);
+
   // The sponsored story slot, the in-app banner and the "Sana Özel Öne Çıkanlar"
   // cards are one record with a placement on it, so one repository serves all
   // three. Nothing here charges anybody: a request is approved on its merits.
@@ -321,6 +333,7 @@ Future<void> main() async {
       newsController: newsController,
       newsCommentsController: newsCommentsController,
       promotionsController: promotionsController,
+      forumController: forumController,
     ),
   );
 }
