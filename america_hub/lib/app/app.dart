@@ -20,6 +20,7 @@ import '../features/home/application/community_home_controller.dart';
 import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
 import '../features/promotions/application/promotions_controller.dart';
+import '../features/safety/application/sos_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
 import 'router/app_routes.dart';
@@ -50,6 +51,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.newsCommentsController,
     required this.promotionsController,
     required this.forumController,
+    required this.sosController,
   });
 
   final AuthController authController;
@@ -96,6 +98,10 @@ class AmericaHubApp extends StatelessWidget {
   /// denetleyiciyi okuyor, iki yerde iki farklı sayı görünmesin diye.
   final ForumController forumController;
 
+  /// Yardım Çağrısı: menüden açılıyor. Tek bir denetleyici, çünkü açık çağrı
+  /// üye başına tek — ekran nerede açılırsa açılsın aynı durumu göstermeli.
+  final SosController sosController;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -126,6 +132,7 @@ class AmericaHubApp extends StatelessWidget {
         newsCommentsController: newsCommentsController,
         promotionsController: promotionsController,
         forumController: forumController,
+        sosController: sosController,
       ).onGenerateRoute,
     );
   }

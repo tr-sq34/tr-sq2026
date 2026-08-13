@@ -37,6 +37,8 @@ import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
 import '../widgets/app_top_bar.dart';
 import '../../application/community_home_controller.dart';
+import '../../../safety/application/sos_controller.dart';
+import '../../../safety/presentation/screens/sos_screen.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 import '../../../../app/router/app_routes.dart';
 import '../../../auth/application/auth_controller.dart';
@@ -64,6 +66,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.newsCommentsController,
     required this.promotionsController,
     required this.forumController,
+    required this.sosController,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
@@ -93,6 +96,9 @@ class MainLayoutScreen extends StatefulWidget {
   /// Çeker menüdeki Forum ile ana sayfadaki trend şeridi aynı denetleyiciyi
   /// okur; bir konuyu şeritten açıp beğenmek listede de görünür.
   final ForumController forumController;
+
+  /// Yardım Çağrısı çeker menüden açılır.
+  final SosController sosController;
 
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
@@ -311,6 +317,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         moderationRepository: widget.contentModerationRepository,
         viewerId: widget.authController.user?.id ?? 'local-user',
       ),
+    ),
+  );
+
+  void _openSos() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => SosScreen(controller: widget.sosController),
     ),
   );
 
@@ -637,6 +649,23 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                   vertical: 10,
                 ),
                 children: [
+                  // 0. YARDIM ÇAĞRISI
+                  // Menünün en üstünde ve tek kırmızı satır: acil bir şeyi
+                  // aşağıda aratmak, onu bulunamaz yapmaktır.
+                  _buildDrawerItem(
+                    title: 'Yardım Çağrısı',
+                    subtitle: 'Güvenlik ekibine ulaş; konumun mühürlü kalır',
+                    icon: Icons.sos_rounded,
+                    iconBg: const Color(0xFFDC2626).withValues(alpha: 0.18),
+                    iconColor: const Color(0xFFF87171),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openSos();
+                    },
+                  ),
+
+                  const SizedBox(height: 4),
+
                   // 1. MESAJLAR
                   _buildDrawerItem(
                     title: 'Mesajlar',
