@@ -305,6 +305,16 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
   );
 
+  /// Sayfalar bir kez kuruluyor ve `IndexedStack` içinde canlı kalıyor: profil
+  /// sekmesi kendini yalnızca ilk açılışta yüklüyordu, dolayısıyla yeni paylaşım
+  /// ızgaraya ancak uygulama yeniden açılınca düşüyordu. Sekmeye her dönüşte
+  /// tazeleniyor.
+  void _selectPage(int index) {
+    setState(() => _currentIndex = index);
+    if (index == 3) widget.profileController.load();
+    if (index == 0) widget.homeController.load();
+  }
+
   /// The location line under the greeting, or null while the summary is still
   /// loading. A member with no locality yet gets no line rather than a blank one.
   String? get _localityLabel {
@@ -367,8 +377,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
             bottom: 16,
             child: _FloatingNav(
               pageIndex: _currentIndex,
-              onSelectPage: (index) =>
-                  setState(() => _currentIndex = index),
+              onSelectPage: _selectPage,
               onCompose: _openComposer,
             ),
           ),

@@ -142,6 +142,11 @@ class _Feed extends StatefulWidget {
 }
 
 class _FeedState extends State<_Feed> {
+  /// Kimin paylaşımı "benim" sayılacağı, kimin yorumu silinebileceği buradan
+  /// çıkıyor. Sabit 'local-user' yazdığı sürece gerçek bir hesapla girildiğinde
+  /// üye kendi paylaşımının silme düğmesini göremiyordu.
+  String get _viewerId => widget.viewer?.id ?? 'local-user';
+
   /// Üç sekme yan yana duran üç sayfa: parmakla sağa sola kaydırmak da
   /// sekmeye dokunmakla aynı şeyi yapıyor.
   final _pageController = PageController();
@@ -178,7 +183,7 @@ class _FeedState extends State<_Feed> {
       commentsEnabled: post.commentsPolicy != CommentsPolicy.disabled,
       onSubmit: (message, parentId) => widget.commentsController.addComment(
         post: post,
-        viewerId: 'local-user',
+        viewerId: _viewerId,
         isFriend: true,
         message: message,
         parentId: parentId,
@@ -186,12 +191,12 @@ class _FeedState extends State<_Feed> {
       onDelete: (comment) => widget.commentsController.deleteComment(
         comment: comment,
         post: post,
-        viewerId: 'local-user',
+        viewerId: _viewerId,
       ),
       canDelete: (comment) => PostAccessPolicy.canDeleteComment(
         comment: comment,
         post: post,
-        viewerId: 'local-user',
+        viewerId: _viewerId,
       ),
     ),
   );
@@ -333,7 +338,7 @@ class _FeedState extends State<_Feed> {
                 onToggleLike: widget.controller.toggleLike,
                 specialRequestController: widget.specialRequestController,
                 moderationRepository: widget.moderationRepository,
-                onDelete: post.ownerId == 'local-user'
+                onDelete: post.ownerId == _viewerId
                     ? () => _deletePost(post)
                     : null,
                 onOpenComments: () => _openComments(post),
@@ -354,7 +359,7 @@ class _FeedState extends State<_Feed> {
           .toList(growable: false),
     _FeedFilter.following =>
       widget.controller.items
-          .where((post) => post.ownerId != 'local-user')
+          .where((post) => post.ownerId != _viewerId)
           .toList(growable: false),
   };
 }

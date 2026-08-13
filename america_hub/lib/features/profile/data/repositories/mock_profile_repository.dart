@@ -3,6 +3,8 @@ import 'dart:convert';
 import '../../../../core/cache/cache_store.dart';
 import '../../../auth/data/repositories/mock_auth_repository.dart';
 import '../../../community/data/repositories/mock_media_upload_repository.dart';
+import '../../../community/domain/entities/community_post.dart';
+import '../../../community/domain/repositories/community_repository.dart';
 import '../../domain/entities/user_profile.dart';
 import '../../domain/repositories/profile_repository.dart';
 
@@ -20,12 +22,20 @@ class MockProfileRepository implements ProfileRepository {
     MockAuthRepository? auth,
     CacheStore? cacheStore,
     MockMediaUploadRepository? media,
+    CommunityPostArchive? posts,
   }) : _auth = auth ?? MockAuthRepository(),
        _store = cacheStore ?? MemoryCacheStore(),
-       _media = media;
+       _media = media,
+       _posts = posts;
 
   final MockAuthRepository _auth;
   final CacheStore _store;
+
+  /// Izgara artık kendi uydurduğu iki kaydı değil, üyenin gerçekten paylaştığı
+  /// gönderileri gösteriyor: akışa düşen paylaşım aynı anda profilde de duruyor,
+  /// fotoğraflısı da görseliyle. İki ayrı liste tutulduğu sürece üye kendi
+  /// paylaşımını profilinde hiç bulamıyordu.
+  final CommunityPostArchive? _posts;
 
   /// Resolves an upload id to the file it was read from. Null in tests that do
   /// not upload anything, in which case the id is stored unchanged and the
@@ -53,7 +63,11 @@ class MockProfileRepository implements ProfileRepository {
       comments: 9,
     ),
   ];
-  final List<ProfilePost> _archived = [];
+  /// Arşiv bir kopya değil, bir işaret: paylaşımın kendisi tek yerde durur,
+  /// burada yalnızca hangilerinin ızgaradan kaldırıldığı yazar. İki liste
+  /// arasında kayıt taşımak, arşivlenen bir paylaşımın beğenisini ve yorumunu
+  /// yolda kaybetmenin en kolay yoluydu.
+  final Set<String> _archivedIds = {};
 
   @override
   Future<UserProfile> getProfile() async {
@@ -87,7 +101,9 @@ class MockProfileRepository implements ProfileRepository {
       // account carries it so a reviewer can see the ✓ next to a name; nobody
       // else gets it for free.
       identityVerified: isDemo,
-      postCount: isDemo ? _demoPosts.length : 0,
+      // Başlıktaki sayı ızgaradaki kareleri sayar; arşivlenenler ikisinden de
+      // düşer.
+      postCount: (await getPosts(_auth.currentUserId ?? 'local-user')).length,
     );
   }
 
@@ -135,42 +151,64 @@ class MockProfileRepository implements ProfileRepository {
     String userId, {
     ProfilePostState state = ProfilePostState.active,
   }) async {
-    if (_auth.currentEmail != MockAuthRepository.demoEmail) return const [];
-    return state == ProfilePostState.archived
-        ? List.unmodifiable(_archived)
-        : List.unmodifiable(_demoPosts);
+    final wantArchived = state == ProfilePostState.archived;
+    return [
+      for (final post in await _ownPosts())
+        if (_archivedIds.contains(post.id) == wantArchived)
+          wantArchived ? _asArchived(post) : post,
+    ];
   }
 
-  @override
-  Future<void> archivePost(String postId) async {
-    final index = _demoPosts.indexWhere((post) => post.id == postId);
-    if (index < 0) return;
-    final post = _demoPosts.removeAt(index);
-    _archived.insert(0, ProfilePost(
-      id: post.id,
-      message: post.message,
-      createdAt: post.createdAt,
-      thumbnailUrl: post.thumbnailUrl,
-      likes: post.likes,
-      comments: post.comments,
-      archived: true,
-    ));
+  /// Üyenin kendi paylaşımları, en yenisi başta. Demo hesabın iki eski kaydı
+  /// listenin sonuna ekleniyor: onlar bu hesabın geçmişi, yeni kurulan bir
+  /// hesabın değil.
+  Future<List<ProfilePost>> _ownPosts() async {
+    final live = await _posts?.getPostsByOwner(_auth.currentUserId ?? 'local-user');
+    return [
+      for (final post in live ?? const <CommunityPost>[]) _asProfilePost(post),
+      if (_auth.currentEmail == MockAuthRepository.demoEmail) ..._demoPosts,
+    ];
   }
 
-  @override
-  Future<void> unarchivePost(String postId) async {
-    final index = _archived.indexWhere((post) => post.id == postId);
-    if (index < 0) return;
-    final post = _archived.removeAt(index);
-    _demoPosts.insert(0, ProfilePost(
+  /// Izgara bir görsel şeridi: paylaşımın ilk medyası varsa küçük görseli, yoksa
+  /// metnin kendisi kareyi doldurur.
+  ProfilePost _asProfilePost(CommunityPost post) {
+    final media = post.media.isEmpty ? null : post.media.first;
+    return ProfilePost(
       id: post.id,
       message: post.message,
-      createdAt: post.createdAt,
-      thumbnailUrl: post.thumbnailUrl,
+      // Akış kaydında tarih değil, "2 sa önce" gibi bir etiket var; kimliğin
+      // sonundaki damga yazıldığı anı taşıyor, o yüzden sıra ondan okunuyor.
+      createdAt: _createdAtOf(post.id),
+      thumbnailUrl: media?.thumbnailUrl ?? media?.url,
       likes: post.likes,
       comments: post.comments,
-    ));
+      archived: _archivedIds.contains(post.id),
+    );
   }
+
+  static DateTime _createdAtOf(String postId) {
+    final micros = int.tryParse(postId.split('-').last);
+    return micros == null || micros < 1000000
+        ? DateTime.now()
+        : DateTime.fromMicrosecondsSinceEpoch(micros);
+  }
+
+  ProfilePost _asArchived(ProfilePost post) => ProfilePost(
+    id: post.id,
+    message: post.message,
+    createdAt: post.createdAt,
+    thumbnailUrl: post.thumbnailUrl,
+    likes: post.likes,
+    comments: post.comments,
+    archived: true,
+  );
+
+  @override
+  Future<void> archivePost(String postId) async => _archivedIds.add(postId);
+
+  @override
+  Future<void> unarchivePost(String postId) async => _archivedIds.remove(postId);
 
   /// The handful of fields the member edits from inside the app, kept apart
   /// from the onboarding answers because those have a different writer.

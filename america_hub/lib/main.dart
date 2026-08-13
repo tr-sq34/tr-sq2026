@@ -139,7 +139,11 @@ Future<void> main() async {
     passkeyService: passkeyService,
   );
 
-  final mockCommunityRemote = MockCommunityRepository();
+  // Sahte depo da paylaşımı imzalayan kişiyi bilmek zorunda: sabit bir isim,
+  // üyenin kendi paylaşımını başkasının adıyla görmesi demekti.
+  final mockCommunityRemote = MockCommunityRepository(
+    viewer: () => authController.user,
+  );
   final CommunityRepository communityRemote = useMockServices
       ? mockCommunityRemote
       : ApiCommunityRepository(client: communityApiClient);
@@ -171,7 +175,14 @@ Future<void> main() async {
   final storyController = StoryController(repository: storyRepository);
 
   final communityHomeController = CommunityHomeController(
-    CommunityHomeRepository(communityApiClient),
+    useMockServices
+        ? MockCommunityHomeRepository(
+            feed: mockCommunityRemote,
+            stories: mockCommunityRemote,
+            onboarding: mockAuthRepository.getOnboarding,
+            viewerId: () => mockCommunityRemote.viewerId,
+          )
+        : ApiCommunityHomeRepository(communityApiClient),
   );
 
   final memberCapabilitiesController = MemberCapabilitiesController(
@@ -220,6 +231,9 @@ Future<void> main() async {
           auth: mockAuthRepository,
           cacheStore: cacheStore,
           media: mockMediaUploadRepository,
+          // Izgara ayrı bir demo listesi değil, akışın kendisi: paylaşılan
+          // gönderi aynı anda profilde de görünüyor.
+          posts: mockCommunityRemote,
         )
       : ApiProfileRepository(client: communityApiClient);
   final profileController = ProfileController(repository: profileRepository);
