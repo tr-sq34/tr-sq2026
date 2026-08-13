@@ -29,7 +29,17 @@ depoya girmez - yalnızca argon2id özeti secret store'a konur. Adımlar:
 | Mesajlar | canlı | Messaging gateway |
 | Sistem ve Denetim | canlı | Kimlik + Community + Messaging gateway (yalnızca okuma) |
 | Doğrulama | canlı | Verification vault (yalnızca okuma; belge içeriği yok) |
-| Güvenlik, Analitik | bağlanmadı | — |
+| Analitik ve Konum | canlı | Kimlik (hesap büyümesi) + Community (içerik ve toplulaştırılmış konum) |
+| Güvenlik ve SOS | bağlanmadı | — |
 
 Bağlanmamış bölümler sahte veri göstermez; ilgili API ve audit sözleşmesi
 etkinleşene kadar açıkça "bağlanmadı" der.
+
+## Konum verisi
+
+Analitik ve Konum ekranı üyenin canlı konumunu, konum iznini veya hareket
+geçmişini okumaz; yalnızca profilde kendi seçtiği şehir/eyalet tercihini
+toplulaştırır. Beşten az üyeli şehir ve eyaletler tek tek listelenmez, tek bir
+"eşik altı" satırında toplanır - küçük bir kova ile Üyeler ekranındaki şehir
+filtresi yan yana getirildiğinde tek bir kişiyi işaret edebilir. Eşik ve eşik
+altında kalan toplam ekranda açıkça yazılır.
