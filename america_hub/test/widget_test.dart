@@ -38,7 +38,10 @@ import 'package:america_hub/features/profile/data/repositories/mock_profile_repo
 import 'package:america_hub/features/journey/application/journey_controller.dart';
 import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
+import 'package:america_hub/features/safety/application/sos_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_sos.dart';
 
 void main() {
   testWidgets('starts on the two-step TurkSquare login screen', (tester) async {
@@ -95,6 +98,7 @@ void main() {
         forumController: ForumController(
           repository: MockForumRepository(viewer: () => null),
         ),
+        sosController: SosController(repository: FakeSosRepository()),
       ),
     );
 

@@ -71,6 +71,8 @@ import 'features/promotions/data/repositories/api_promotion_repository.dart';
 import 'features/promotions/data/repositories/mock_promotion_repository.dart';
 import 'features/promotions/domain/repositories/promotion_repository.dart';
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
+import 'features/safety/application/sos_controller.dart';
+import 'features/safety/data/sos_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
 
 Future<void> main() async {
@@ -304,6 +306,13 @@ Future<void> main() async {
     repository: promotionRepository,
   );
 
+  // Yardım çağrısının sahtesi yok ve olmayacak: gönderilmiş gibi görünüp
+  // kimseye ulaşmayan bir SOS, hiç olmayan bir SOS'tan daha kötüdür. Sahte
+  // servis kipinde de gerçek uca gider, ulaşamazsa ekran bunu söyler.
+  final sosController = SosController(
+    repository: ApiSosRepository(client: communityApiClient),
+  );
+
   // Deliberately empty on both sides of the mock flag: no service publishes
   // member notifications yet, so the bell stays at zero until one does.
   final notificationsController = NotificationsController(
@@ -334,6 +343,7 @@ Future<void> main() async {
       newsCommentsController: newsCommentsController,
       promotionsController: promotionsController,
       forumController: forumController,
+      sosController: sosController,
     ),
   );
 }

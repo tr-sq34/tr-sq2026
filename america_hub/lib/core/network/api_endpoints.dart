@@ -99,6 +99,11 @@ abstract final class ApiEndpoints {
       '/community/forum/topics/$id/replies';
   static String communityForumReplyLike(String id) =>
       '/community/forum/replies/$id/like';
+  // Yardım çağrısı. Topluluk servisinde duruyor ama `/community` altında
+  // değil: bu uçların hiçbiri sosyal bir kayıt değil, üyenin acil durumu.
+  static const safetySos = '/safety/sos';
+  static const safetySosActive = '/safety/sos/active';
+  static String safetySosCancel(String id) => '/safety/sos/$id/cancel';
   static const eventsUpcoming = '/events';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';

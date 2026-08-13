@@ -36,9 +36,11 @@ import 'package:america_hub/features/journey/data/repositories/mock_journey_repo
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:america_hub/features/safety/application/sos_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'fake_image_http.dart';
+import 'fake_sos.dart';
 
 /// Lets overflow reports through without failing the test.
 ///
@@ -151,6 +153,7 @@ Future<AuthController> pumpShell(
         forumController: ForumController(
           repository: MockForumRepository(viewer: () => authController.user),
         ),
+        sosController: SosController(repository: FakeSosRepository()),
         onSignOut: () async {},
       ),
     ),

@@ -30,6 +30,7 @@ import '../../features/auth/presentation/screens/email_verification_screen.dart'
 import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/home/presentation/screens/main_layout_screen.dart';
 import '../../features/promotions/application/promotions_controller.dart';
+import '../../features/safety/application/sos_controller.dart';
 import '../startup/startup_screen.dart';
 import 'app_routes.dart';
 
@@ -57,6 +58,7 @@ class AppRouter {
     required this.newsCommentsController,
     required this.promotionsController,
     required this.forumController,
+    required this.sosController,
   });
 
   final AuthController authController;
@@ -81,6 +83,7 @@ class AppRouter {
   final CommunityCommentsController newsCommentsController;
   final PromotionsController promotionsController;
   final ForumController forumController;
+  final SosController sosController;
 
   /// Where a member lands right after signing in.
   ///
@@ -121,6 +124,7 @@ class AppRouter {
             newsCommentsController: newsCommentsController,
             promotionsController: promotionsController,
             forumController: forumController,
+            sosController: sosController,
             onSignOut: () async {
               await authController.signOut();
               if (context.mounted) {
