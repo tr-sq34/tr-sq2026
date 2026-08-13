@@ -66,6 +66,8 @@ export const ACTION_LABELS: Record<string, string> = {
   'forum_category.update': 'Forum kategorisini güncelledi',
   'forum_category.deactivate': 'Forum kategorisini kapattı',
   'forum_topic.state': 'Forum konusunu düzenledi',
+  'marketplace_listing.status': 'İlan durumunu değiştirdi',
+  'marketplace_auction.cancel': 'İhaleyi iptal etti',
   'news_article.publish': 'Haber yayınladı',
   'news_article.retract': 'Haberi geri çekti',
   'official_post.publish': 'Resmî paylaşım yaptı',
