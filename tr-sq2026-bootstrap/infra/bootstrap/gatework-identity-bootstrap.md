@@ -67,13 +67,27 @@ az containerapp update -g "$RG" -n "$APP" --set-env-vars \
   GATEWORK_BOOTSTRAP_OWNER_DISPLAY_NAME='TurkSquare Operasyon' \
   GATEWORK_BOOTSTRAP_OWNER_PASSWORD_HASH=secretref:gatework-bootstrap-owner-password-hash
 
-# 4. Confirm, then take all of it back out.
+# 4. Read the names back before reading the log. A mistyped variable name is the
+#    one failure that leaves no trace: the seed reads GATEWORK_BOOTSTRAP_OWNER_EMAIL,
+#    finds nothing and returns without logging, so the boot looks normal and the
+#    login is a plain 401. Expect exactly the three names above - once truncated
+#    to GATEWORK_BOOTSTRAP_OWNER_EMAI, and it cost a deploy cycle to find.
+az containerapp show -g "$RG" -n "$APP" \
+  --query "properties.template.containers[0].env[?contains(name,'BOOTSTRAP')].name" -o tsv
+
+# 5. Confirm, then take all of it back out. The line to look for is "Gatework
+#    bootstrap owner account created"; "skipped" means the hash never arrived.
 az containerapp logs show -g "$RG" -n "$APP" --tail 200 | grep -i "bootstrap owner"
 az containerapp update -g "$RG" -n "$APP" --remove-env-vars \
   GATEWORK_BOOTSTRAP_OWNER_EMAIL GATEWORK_BOOTSTRAP_OWNER_DISPLAY_NAME GATEWORK_BOOTSTRAP_OWNER_PASSWORD_HASH
 az containerapp secret remove -g "$RG" -n "$APP" \
   --secret-names gatework-bootstrap-owner-password-hash
 ```
+
+One `az` quirk worth knowing: `--remove-env-vars` and `--set-env-vars` in the
+same `az containerapp update` are not applied in the order they are written, and
+a variable named in both ends up removed. Rewriting one of these three - swapping
+a plain value for a `secretref`, say - takes two commands.
 
 Deliberately not in Terraform. A bootstrap variable that lives in the module is
 a variable somebody forgets to remove, and then every deploy carries a way to
