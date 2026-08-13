@@ -81,6 +81,16 @@ const gateworkMembersQuery = z.object({ cursor: z.string().uuid().optional(), li
 const gateworkRevokeSchema = z.object({ reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const gateworkRoleSchema = z.object({ userId: z.string().uuid(), role: z.enum(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
 const systemPrincipalSchema = z.object({ displayName: z.string().trim().min(2).max(100), handle: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{2,39}$/), reason: z.string().trim().min(5).max(500), idempotencyKey: z.string().uuid() });
+// Offset rather than a cursor, unlike the member list: the audit log is read by
+// paging backwards through time and by jumping to a page, and rows are only ever
+// appended at the front, so a keyset cursor would buy nothing here.
+const gateworkAuditQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  action: z.string().trim().min(2).max(80).optional(),
+  actorId: z.string().uuid().optional(),
+  outcome: z.enum(['succeeded', 'denied', 'failed']).optional(),
+});
 
 const opaqueToken = () => randomBytes(48).toString('base64url');
 const hashOpaque = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -1123,6 +1133,37 @@ app.post('/v1/auth/gatework/roles/revoke', { config: { rateLimit: { max: 6, time
     return reply.code(204).send();
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'ROLE_CHANGE_REJECTED' } });
+  }
+});
+
+// Every privileged action in this service has been writing an audit row since
+// the console existed, and nothing could read them back: the trail was only
+// reachable from a database console, which is exactly where an operator under
+// review does not look. Read-only, and the actor is joined to a name because a
+// row that says a UUID granted a role to another UUID answers no question.
+//
+// Deliberately not audited. Auditing the read of the audit log fills the log
+// with itself: the first page becomes a list of the times somebody opened the
+// first page, and the actions being looked for get pushed off it.
+app.get('/v1/auth/gatework/audit', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    await requireGateworkRole(request, ['owner', 'security_admin', 'auditor']);
+    const input = gateworkAuditQuery.parse(request.query);
+    const rows = await db.query<{ id: string; actor_id: string; actor_email: string | null; actor_name: string | null; actor_roles: string[]; action: string; target_type: string; target_id: string; reason: string | null; outcome: string; request_id: string | null; created_at: Date }>(
+      `SELECT e.id,e.actor_id,u.email actor_email,u.display_name actor_name,e.actor_roles,e.action,e.target_type,e.target_id,e.reason,e.outcome,e.request_id,e.created_at
+       FROM gatework_audit_events e LEFT JOIN users u ON u.id=e.actor_id
+       WHERE ($3::text IS NULL OR e.action LIKE $3||'%')
+         AND ($4::uuid IS NULL OR e.actor_id=$4)
+         AND ($5::text IS NULL OR e.outcome=$5)
+       ORDER BY e.created_at DESC, e.id DESC LIMIT $1 OFFSET $2`,
+      [input.limit, input.offset, input.action ?? null, input.actorId ?? null, input.outcome ?? null],
+    );
+    return {
+      data: rows.rows.map((row) => ({ id: row.id, actorId: row.actor_id, actorEmail: row.actor_email, actorName: row.actor_name, actorRoles: row.actor_roles, action: row.action, targetType: row.target_type, targetId: row.target_id, reason: row.reason, outcome: row.outcome, requestId: row.request_id, createdAt: row.created_at.toISOString() })),
+      meta: { nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null },
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_FORBIDDEN' } });
   }
 });
 
