@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../../auth/domain/entities/app_user.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/pagination/paged_controller.dart';
+import '../../../../core/widgets/app_image_source.dart';
 import '../../../../core/widgets/app_remote_image.dart';
 import '../../../../core/widgets/app_button.dart';
 import '../../../../core/widgets/app_bottom_sheet.dart';
@@ -275,7 +276,9 @@ class _Feed extends StatefulWidget {
 }
 
 class _FeedState extends State<_Feed> {
-  final _scrollController = ScrollController();
+  /// Üç sekme yan yana duran üç sayfa: parmakla sağa sola kaydırmak da
+  /// sekmeye dokunmakla aynı şeyi yapıyor.
+  final _pageController = PageController();
   _FeedFilter _filter = _FeedFilter.forYou;
   Future<void> _openComposer() => showModalBottomSheet<void>(
     context: context,
@@ -342,70 +345,113 @@ class _FeedState extends State<_Feed> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _scrollController.addListener(() {
-      if (_scrollController.position.extentAfter < 360)
-        widget.controller.loadMore();
-    });
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
+  void _selectFilter(_FeedFilter value) {
+    if (value == _filter) return;
+    setState(() => _filter = value);
+    if (!_pageController.hasClients) return;
+    _pageController.animateToPage(
+      value.index,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// Sonsuz akış artık tek bir kaydırma denetleyicisine bağlı değil: üç
+  /// sayfanın da kendi listesi var, o yüzden hangisi sona yaklaşırsa o
+  /// bildirim üzerinden sonraki sayfa isteniyor.
+  bool _onScroll(ScrollNotification notification) {
+    if (notification.metrics.axis == Axis.vertical &&
+        notification.metrics.extentAfter < 360) {
+      widget.controller.loadMore();
+    }
+    return false;
   }
 
   @override
   Widget build(BuildContext context) => Column(
     children: [
       const _ReferenceFeedHeader(),
-      _ReferenceFeedFilters(
-        selected: _filter,
-        onSelected: (value) => setState(() => _filter = value),
-      ),
       Expanded(
-        child: RefreshIndicator(
-          onRefresh: widget.controller.refresh,
-          child: ListView(
-            controller: _scrollController,
-            padding: const EdgeInsets.only(bottom: 28),
-            children: [
-              _StoryRail(
-                controller: widget.storyController,
-                mediaUploadController: widget.mediaUploadController,
-                moderationRepository: widget.moderationRepository,
-                promotionsController: widget.promotionsController,
-              ),
-              const SizedBox(height: 10),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: _ReferenceComposer(onTap: _openComposer),
-              ),
-              const SizedBox(height: 12),
-              for (final post in _filteredPosts)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: _PostCard(
-                    post: post,
-                    onToggleLike: widget.controller.toggleLike,
-                    specialRequestController: widget.specialRequestController,
-                    moderationRepository: widget.moderationRepository,
-                    onDelete: post.ownerId == 'local-user'
-                        ? () => _deletePost(post)
-                        : null,
-                    onOpenComments: () => _openComments(post),
-                  ),
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _onScroll,
+          // Story rayı ve düzenleyici yukarı kaydırıldığında kayboluyor,
+          // sekme şeridi ise tepede kalıyor: yatay kaydırırken hangi
+          // sekmede olduğunu görmek gerekiyor.
+          child: NestedScrollView(
+            headerSliverBuilder: (context, _) => [
+              SliverToBoxAdapter(
+                child: _StoryRail(
+                  controller: widget.storyController,
+                  mediaUploadController: widget.mediaUploadController,
+                  moderationRepository: widget.moderationRepository,
+                  promotionsController: widget.promotionsController,
                 ),
-              PagedListFooter<CommunityPost>(controller: widget.controller),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  child: _ReferenceComposer(onTap: _openComposer),
+                ),
+              ),
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _FeedFiltersHeader(
+                  selected: _filter,
+                  onSelected: _selectFilter,
+                ),
+              ),
             ],
+            body: PageView(
+              controller: _pageController,
+              onPageChanged: (value) =>
+                  setState(() => _filter = _FeedFilter.values[value]),
+              children: [
+                for (final filter in _FeedFilter.values) _feedPage(filter),
+              ],
+            ),
           ),
         ),
       ),
     ],
   );
 
-  List<CommunityPost> get _filteredPosts => switch (_filter) {
+  Widget _feedPage(_FeedFilter filter) {
+    final posts = _postsFor(filter);
+    return RefreshIndicator(
+      onRefresh: widget.controller.refresh,
+      child: ListView(
+        key: PageStorageKey('feed-${filter.name}'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(top: 12, bottom: 28),
+        children: [
+          if (posts.isEmpty && !widget.controller.isInitialLoading)
+            _FeedEmptyState(filter: filter),
+          for (final post in posts)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: _PostCard(
+                post: post,
+                onToggleLike: widget.controller.toggleLike,
+                specialRequestController: widget.specialRequestController,
+                moderationRepository: widget.moderationRepository,
+                onDelete: post.ownerId == 'local-user'
+                    ? () => _deletePost(post)
+                    : null,
+                onOpenComments: () => _openComments(post),
+              ),
+            ),
+          PagedListFooter<CommunityPost>(controller: widget.controller),
+        ],
+      ),
+    );
+  }
+
+  List<CommunityPost> _postsFor(_FeedFilter filter) => switch (filter) {
     _FeedFilter.forYou => widget.controller.items,
     _FeedFilter.nearby =>
       widget.controller.items
@@ -416,6 +462,64 @@ class _FeedState extends State<_Feed> {
           .where((post) => post.ownerId != 'local-user')
           .toList(growable: false),
   };
+}
+
+/// Sekme şeridini akışın tepesine çiviler.
+class _FeedFiltersHeader extends SliverPersistentHeaderDelegate {
+  const _FeedFiltersHeader({required this.selected, required this.onSelected});
+  final _FeedFilter selected;
+  final ValueChanged<_FeedFilter> onSelected;
+
+  @override
+  double get minExtent => 48;
+
+  @override
+  double get maxExtent => 48;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
+      _ReferenceFeedFilters(selected: selected, onSelected: onSelected);
+
+  @override
+  bool shouldRebuild(_FeedFiltersHeader oldDelegate) =>
+      oldDelegate.selected != selected;
+}
+
+class _FeedEmptyState extends StatelessWidget {
+  const _FeedEmptyState({required this.filter});
+  final _FeedFilter filter;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(28, 60, 28, 28),
+    child: Column(
+      children: [
+        Icon(
+          switch (filter) {
+            _FeedFilter.forYou => Icons.auto_awesome_outlined,
+            _FeedFilter.nearby => Icons.near_me_outlined,
+            _FeedFilter.following => Icons.group_outlined,
+          },
+          size: 34,
+          color: AppColors.textMuted,
+        ),
+        const SizedBox(height: 10),
+        Text(
+          switch (filter) {
+            _FeedFilter.forYou => 'Akışta henüz paylaşım yok.',
+            _FeedFilter.nearby => 'Yakınında henüz paylaşım yok.',
+            _FeedFilter.following =>
+              'Takip ettiklerinden henüz paylaşım yok.',
+          },
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 enum _FeedFilter { forYou, nearby, following }
@@ -517,17 +621,9 @@ class _ReferenceFeedFilters extends StatelessWidget {
           active: selected == _FeedFilter.following,
           onTap: () => onSelected(_FeedFilter.following),
         ),
-        const Spacer(),
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(
-            Icons.tune_rounded,
-            size: 18,
-            color: Color(0xFF777381),
-          ),
-          visualDensity: VisualDensity.compact,
-          tooltip: 'Filtreler',
-        ),
+        // Sağda bir filtre düğmesi vardı, hiçbir şey yapmıyordu; sekmeler
+        // zaten filtrenin kendisi. Boş bir düğme, çalıştığını sanıp basan
+        // üyeye yalan söylüyor.
       ],
     ),
   );
@@ -1483,67 +1579,6 @@ class _FeedHeader extends StatelessWidget {
           icon: const Icon(Icons.add_rounded, size: 19),
         ),
       ],
-    ),
-  );
-}
-
-class _FeedFilters extends StatelessWidget {
-  const _FeedFilters();
-
-  @override
-  Widget build(BuildContext context) => Container(
-    height: 49,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      border: Border(bottom: BorderSide(color: Color(0xFFF0F1F4))),
-    ),
-    child: Row(
-      children: [
-        const _FeedFilterChip(label: 'Senin iÃ§in', selected: true),
-        const SizedBox(width: 7),
-        const _FeedFilterChip(label: 'YakÄ±nÄ±ndakiler'),
-        const SizedBox(width: 7),
-        const _FeedFilterChip(label: 'Takip ettiklerin'),
-        const Spacer(),
-        IconButton(
-          onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('AkÄ±ÅŸ filtreleri yakÄ±nda burada olacak.'),
-            ),
-          ),
-          visualDensity: VisualDensity.compact,
-          tooltip: 'Filtrele',
-          icon: const Icon(
-            Icons.tune_rounded,
-            size: 18,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _FeedFilterChip extends StatelessWidget {
-  const _FeedFilterChip({required this.label, this.selected = false});
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-    decoration: BoxDecoration(
-      color: selected ? AppColors.primary : const Color(0xFFF1F2F5),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      label,
-      style: TextStyle(
-        color: selected ? Colors.white : AppColors.textSecondary,
-        fontSize: 10,
-        fontWeight: FontWeight.w800,
-      ),
     ),
   );
 }
@@ -2640,74 +2675,144 @@ class _ExpandablePostTextState extends State<_ExpandablePostText> {
   }
 }
 
-class _PostMediaStrip extends StatelessWidget {
+/// Paylaşımın fotoğraflarını, kaçı varsa o kadarını gösterir.
+class _PostMediaStrip extends StatefulWidget {
   const _PostMediaStrip({required this.media});
   final List<PostMedia> media;
 
   @override
+  State<_PostMediaStrip> createState() => _PostMediaStripState();
+}
+
+class _PostMediaStripState extends State<_PostMediaStrip> {
+  /// `keepPage: false`: her paylaşım ilk fotoğrafından açılmalı. Varsayılan
+  /// davranışta sayfa numarası akışın sayfa deposuna yazılıyor ve kart yeniden
+  /// kurulduğunda şerit ortasından, hatta sonuncudan başlıyordu.
+  final _controller = PageController(keepPage: false);
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final first = media.first;
-    if (first.previewBytes != null) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: AspectRatio(
-          aspectRatio: 1.35,
-          child: Image.memory(first.previewBytes!, fit: BoxFit.cover),
-        ),
-      );
-    }
-    if (first.url.startsWith('http')) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: AspectRatio(
-          aspectRatio: 1.35,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              AppRemoteImage(
-                imageUrl: first.thumbnailUrl ?? first.url,
-                semanticLabel: 'Paylaşım medyası',
-              ),
-              if (first.type == PostMediaType.video)
-                const Center(
-                  child: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Color(0xAA000000),
-                    child: Icon(Icons.play_arrow_rounded, color: Colors.white),
+    final media = widget.media;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: AspectRatio(
+        aspectRatio: 1.35,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            PageView.builder(
+              controller: _controller,
+              itemCount: media.length,
+              onPageChanged: (value) => setState(() => _index = value),
+              itemBuilder: (_, index) => _PostMediaFrame(media: media[index]),
+            ),
+            if (media.length > 1) ...[
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xAA000000),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '${_index + 1}/${media.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 10,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (var dot = 0; dot < media.length; dot++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                        width: dot == _index ? 7 : 5,
+                        height: dot == _index ? 7 : 5,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: dot == _index
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: .5),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ],
-          ),
+          ],
         ),
-      );
-    }
-    return Container(
-      height: 118,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1EFFF),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            first.type == PostMediaType.video
-                ? Icons.videocam_outlined
-                : Icons.image_outlined,
-            color: AppColors.primary,
-            size: 30,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${media.length} medya eklendi',
-            style: const TextStyle(
-              color: AppColors.primary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
+}
+
+/// Tek bir kare. Galeriden yeni seçilmiş bir fotoğrafın elimizde yalnızca
+/// cihazdaki yolu oluyor; eskiden burası adresi http ile başlamayan her şeyi
+/// "3 medya eklendi" yazısına çevirdiği için paylaşımın görseli hiç
+/// görünmüyordu. Artık çözümlemeyi [appImageProvider] yapıyor, yer tutucu da
+/// yalnızca gerçekten çizilemeyen kare için kalıyor.
+class _PostMediaFrame extends StatelessWidget {
+  const _PostMediaFrame({required this.media});
+  final PostMedia media;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = media.previewBytes;
+    final source = media.thumbnailUrl ?? media.url;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (bytes != null)
+          Image.memory(bytes, fit: BoxFit.cover)
+        else if (appImageProvider(source) != null)
+          AppRemoteImage(
+            imageUrl: source,
+            semanticLabel: 'Paylaşım medyası',
+          )
+        else
+          const _PendingMedia(),
+        if (media.type == PostMediaType.video)
+          const Center(
+            child: CircleAvatar(
+              radius: 24,
+              backgroundColor: Color(0xAA000000),
+              child: Icon(Icons.play_arrow_rounded, color: Colors.white),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _PendingMedia extends StatelessWidget {
+  const _PendingMedia();
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+    color: Color(0xFFF1EFFF),
+    child: Center(
+      child: Icon(Icons.image_outlined, color: AppColors.primary, size: 30),
+    ),
+  );
 }

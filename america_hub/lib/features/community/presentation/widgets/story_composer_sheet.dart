@@ -156,17 +156,19 @@ class _StoryComposerSheetState extends State<StoryComposerSheet> {
       }
       if (!mounted) return;
       Navigator.pop(context);
-      if (_promote) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              promotionFailed
-                  ? 'Story paylaşıldı ama tanıtım talebin gönderilemedi.'
-                  : 'Tanıtım talebin incelenmek üzere gönderildi.',
-            ),
+      // Paylaşımın kendisi de haber veriyor: sayfa kapanıp akışa dönmek tek
+      // başına "oldu" demiyor, üye paylaşılmadığını sanıyordu.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            !_promote
+                ? 'Story paylaşıldı.'
+                : promotionFailed
+                ? 'Story paylaşıldı ama tanıtım talebin gönderilemedi.'
+                : 'Story paylaşıldı, tanıtım talebin incelenmek üzere gönderildi.',
           ),
-        );
-      }
+        ),
+      );
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
