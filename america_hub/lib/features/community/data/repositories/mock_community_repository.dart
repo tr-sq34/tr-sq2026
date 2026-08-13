@@ -19,9 +19,18 @@ class MockCommunityRepository
   /// paylaşımını başkasının imzasıyla görmesi demekti — "Ahmet Yılmaz" tam
   /// olarak buydu. Testler ve önizlemeler bunu hiç vermeden de kurabilsin diye
   /// isteğe bağlı.
-  MockCommunityRepository({AppUser? Function()? viewer}) : _viewer = viewer;
+  MockCommunityRepository({
+    AppUser? Function()? viewer,
+    Future<String?> Function()? viewerRegion,
+  }) : _viewer = viewer,
+       _viewerRegion = viewerRegion;
 
   final AppUser? Function()? _viewer;
+
+  /// "Yakınındakiler" sekmesi sunucuda üyenin seçtiği eyalete bakıyor; demo
+  /// modun da aynı soruyu sorması gerekiyor, yoksa sekme her şeyi gösterip
+  /// gerçekte olmayan bir davranışı öğretir.
+  final Future<String?> Function()? _viewerRegion;
 
   static const _fallbackOwnerId = 'local-user';
 
@@ -162,7 +171,36 @@ class MockCommunityRepository
     required FeedMode mode,
     String? cursor,
     int limit = 20,
-  }) => fetchPage(cursor: cursor, limit: limit);
+  }) async {
+    if (mode == FeedMode.forYou) return fetchPage(cursor: cursor, limit: limit);
+    final visible = _posts.where((post) => !post.isDeleted);
+    // Takip kayıtları demo modda hiç yok; burada bir liste uydurmak yerine
+    // sekme boş kalıyor — sunucuda da takip etmeyen biri boş görür.
+    if (mode == FeedMode.following) return _pageOf(const [], cursor, limit);
+    final region = (await _viewerRegion?.call())?.trim();
+    if (region == null || region.isEmpty) return _pageOf(const [], cursor, limit);
+    final suffix = ', ${region.toLowerCase()}';
+    return _pageOf(
+      visible
+          .where((post) => post.location.toLowerCase().endsWith(suffix))
+          .toList(growable: false),
+      cursor,
+      limit,
+    );
+  }
+
+  CursorPage<CommunityPost> _pageOf(
+    List<CommunityPost> posts,
+    String? cursor,
+    int limit,
+  ) {
+    final start = (int.tryParse(cursor ?? '0') ?? 0).clamp(0, posts.length);
+    final end = (start + limit).clamp(0, posts.length).toInt();
+    return CursorPage(
+      items: posts.sublist(start, end),
+      nextCursor: end < posts.length ? '$end' : null,
+    );
+  }
 
   @override
   Future<CommunityPost> setLike(String postId, bool isLiked) async =>

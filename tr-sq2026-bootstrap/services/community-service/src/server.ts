@@ -354,7 +354,15 @@ app.get('/v1/community/feed', async (request, reply) => {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
     const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
     if (input.mode === 'following') where += ` AND EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.active)`;
-    if (input.mode === 'nearby') where += ` AND p.location_cell IS NOT NULL AND ST_DWithin(p.location_cell,(SELECT approximate_cell FROM viewer_location_projection WHERE user_id=$1),50000)`;
+    // "Nearby" is the chosen state, not a radius. The original predicate asked
+    // for posts within 50km of viewer_location_projection.approximate_cell, and
+    // nothing has ever written either that projection or community_posts
+    // .location_cell - so the tab was empty for everybody, always. Rewriting it
+    // in terms of coordinates would have meant tracking members to fill the
+    // gap; locality here is what a member chose to publish (migration 008), so
+    // that is what the tab means. A post carries its own region when the
+    // composer sent one, and otherwise inherits the author's chosen state.
+    if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
     const result = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; author_name: string; likes: string; comments: string; is_liked: boolean }>(`SELECT p.id,p.created_at,p.body,p.location_label,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,0 comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);

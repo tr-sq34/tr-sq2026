@@ -1,27 +1,85 @@
+import '../../../core/pagination/cursor_data_source.dart';
+import '../../../core/pagination/cursor_page.dart';
 import '../../../core/pagination/paged_controller.dart';
 import '../domain/entities/community_post.dart';
 import '../domain/entities/create_post_draft.dart';
+import '../domain/entities/feed_extensions.dart';
 import '../domain/repositories/community_repository.dart';
 
+/// Sekmeyi sunucuya taşıyan kaynak.
+///
+/// "Senin İçin" hâlâ önbellekli depodan geliyor — açılışta görünen ilk sayfa o,
+/// ve çevrimdışı açılan uygulamanın gösterebildiği tek şey de o. Diğer iki sekme
+/// önbelleğe girmiyor: kimi takip ettiğin ve nerede olduğun, eski bir sayfanın
+/// doğru cevap veremeyeceği sorular.
+class _FeedModeSource implements CursorDataSource<CommunityPost> {
+  _FeedModeSource({required this.cached, required this.feed});
+
+  final CursorDataSource<CommunityPost> cached;
+  final FeedRepository feed;
+  FeedMode mode = FeedMode.forYou;
+
+  @override
+  Future<CursorPage<CommunityPost>> fetchPage({String? cursor, int limit = 20}) =>
+      mode == FeedMode.forYou
+          ? cached.fetchPage(cursor: cursor, limit: limit)
+          : feed.fetchFeed(mode: mode, cursor: cursor, limit: limit);
+}
+
 class CommunityFeedController extends PagedController<CommunityPost> {
-  CommunityFeedController({
+  factory CommunityFeedController({
     required CommunityRepository repository,
+    required FeedRepository feed,
     required CommunityPostCommands commands,
     required PostInteractionRepository interactions,
     required PollRepository polls,
     Future<void> Function()? onMutationCommitted,
-  })  : _commands = commands,
+  }) => CommunityFeedController._(
+    _FeedModeSource(cached: repository, feed: feed),
+    commands: commands,
+    interactions: interactions,
+    polls: polls,
+    onMutationCommitted: onMutationCommitted,
+  );
+
+  CommunityFeedController._(
+    _FeedModeSource source, {
+    required CommunityPostCommands commands,
+    required PostInteractionRepository interactions,
+    required PollRepository polls,
+    Future<void> Function()? onMutationCommitted,
+  })  : _source = source,
+        _commands = commands,
         _interactions = interactions,
         _polls = polls,
         _onMutationCommitted = onMutationCommitted,
-        super(dataSource: repository, pageSize: 2);
+        super(dataSource: source, pageSize: 2);
 
+  final _FeedModeSource _source;
   final CommunityPostCommands _commands;
   final PostInteractionRepository _interactions;
   final PollRepository _polls;
   final Future<void> Function()? _onMutationCommitted;
 
+  FeedMode get mode => _source.mode;
+
   Future<void> load() => loadInitial();
+
+  /// Sekme değişince liste sunucudan yeniden geliyor.
+  ///
+  /// Eskiden üç sekme aynı sayfayı istemcide süzüyordu: "Yakınındakiler"
+  /// paylaşımın adresinde "New York" arıyordu — New York'ta olmayan herkes için
+  /// boş, orada olanlar için rastgele — "Takip ettiklerin" ise kendi
+  /// paylaşımlarını gizlemekten ibaretti. İkisi de sunucunun zaten bildiği
+  /// sorunun yanlış cevabıydı.
+  Future<void> setMode(FeedMode mode) async {
+    if (_source.mode == mode) return;
+    _source.mode = mode;
+    // Önceki sekmenin gönderileri yeni sekmenin altında beklemesin: yanlış
+    // listeyi bir an gostermek, boş bir liste göstermekten daha kafa karıştırıcı.
+    replaceItems(const []);
+    await loadInitial();
+  }
 
   Future<void> toggleLike(String postId) async {
     CommunityPost? previous;

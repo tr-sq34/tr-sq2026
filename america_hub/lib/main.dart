@@ -149,6 +149,7 @@ Future<void> main() async {
   // üyenin kendi paylaşımını başkasının adıyla görmesi demekti.
   final mockCommunityRemote = MockCommunityRepository(
     viewer: () => authController.user,
+    viewerRegion: () async => (await mockAuthRepository.getOnboarding()).regionCode,
   );
   final CommunityRepository communityRemote = useMockServices
       ? mockCommunityRemote
@@ -171,8 +172,15 @@ Future<void> main() async {
     cacheStore: cacheStore,
   );
 
+  // Sekme sunucuda: "Yakınındakiler" ve "Takip ettiklerin" ayrı bir sorgu, o
+  // yüzden akış denetleyicisi önbellekli depoya ek olarak uzak depoyu da alıyor.
+  final FeedRepository communityFeed = useMockServices
+      ? mockCommunityRemote
+      : ApiCommunityRepository(client: communityApiClient);
+
   final communityController = CommunityFeedController(
     repository: communityRepository,
+    feed: communityFeed,
     commands: communityCommands,
     interactions: communityInteractions,
     polls: communityPolls,
