@@ -159,7 +159,17 @@ module "verification_vault_container_app" {
   secret_env = [
     { name = "STRIPE-SECRET-KEY", key_vault_secret_id = "STRIPE-SECRET-KEY", env_name = "STRIPE_SECRET_KEY" },
     { name = "STRIPE-WEBHOOK-SECRET", key_vault_secret_id = "STRIPE-WEBHOOK-SECRET", env_name = "STRIPE_WEBHOOK_SECRET" },
-    { name = "VERIFICATION-RETURN-URL", key_vault_secret_id = "VERIFICATION-RETURN-URL", env_name = "VERIFICATION_RETURN_URL" }
+    { name = "VERIFICATION-RETURN-URL", key_vault_secret_id = "VERIFICATION-RETURN-URL", env_name = "VERIFICATION_RETURN_URL" },
+    # user() reads both of these on every authenticated request, and they were
+    # never set: the app started healthy and then rejected every call, so
+    # "Onaylı Hesap" could not be started or read at all. The health check does
+    # not touch them, which is why the app looked fine the whole time.
+    { name = "JWT-ISSUER", key_vault_secret_id = "JWT-ISSUER", env_name = "JWT_ISSUER" },
+    { name = "JWT-AUDIENCE", key_vault_secret_id = "JWT-AUDIENCE", env_name = "JWT_AUDIENCE" },
+    # And this one for the operator endpoints, same secret every other
+    # gatework-facing service reads: Identity stamps one delegation audience for
+    # all of them.
+    { name = "GATEWORK-COMMUNITY-AUDIENCE", key_vault_secret_id = "GATEWORK-COMMUNITY-AUDIENCE", env_name = "GATEWORK_JWT_AUDIENCE" }
   ]
 
   extra_env = [
@@ -385,6 +395,10 @@ module "gatework_console_container_app" {
     {
       name  = "MESSAGING_API_BASE_URL"
       value = module.messaging_gateway_container_app.base_url
+    },
+    {
+      name  = "VERIFICATION_API_BASE_URL"
+      value = module.verification_vault_container_app.base_url
     }
   ]
 
