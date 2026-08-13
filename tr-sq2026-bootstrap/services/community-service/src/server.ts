@@ -2904,6 +2904,280 @@ app.get('/v1/internal/gatework/marketplace/overview', async (request, reply) => 
   }
 });
 
+// --- Safety and SOS -------------------------------------------------------
+// The one flow in this service that handles an exact position, and the rules
+// around it are the reason it is written out at length rather than folded into
+// the sections above.
+//
+// A member asks for help and may send a point with the request. That point is
+// sealed: listing alerts never returns it, and reading it takes a separate
+// grant with a written reason and an expiry, which the operator has to ask for
+// by name. Closing the alert revokes every grant and deletes the point in the
+// same transaction, so the coordinates of somebody who has been helped do not
+// stay in an operations console.
+//
+// The member can always cancel, and cancelling deletes the point too. "I am
+// fine" has to mean the position stops existing, not that a card turns grey.
+const SAFETY_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'auditor'];
+const SAFETY_ACT_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin'];
+
+const sosTriggerSchema = z.object({
+  kind: z.enum(['personal_safety', 'medical', 'harassment', 'accident', 'other']),
+  note: z.string().trim().min(1).max(500).optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  accuracyMeters: z.number().int().min(0).max(100_000).optional(),
+  locationNote: z.string().trim().max(200).optional(),
+}).refine((value) => (value.latitude === undefined) === (value.longitude === undefined), { message: 'latitude and longitude travel together' });
+
+const sosCloseSchema = z.object({ status: z.enum(['resolved', 'cancelled']), reason: z.string().trim().min(5).max(1000) });
+const sosLocationAccessSchema = z.object({
+  reason: z.string().trim().min(5).max(500),
+  // Bounded on both ends. Too short is a grant an operator has to keep
+  // re-opening in the middle of an emergency; too long is a seal that is not
+  // one. The default is the whole of a normal response.
+  minutes: z.coerce.number().int().min(5).max(120).default(30),
+});
+
+// A member pressing a panic button presses it more than once. Sending the same
+// SOS again must therefore not fail and must not open a second card: the newer
+// position simply replaces the older one on the alert already open.
+app.post('/v1/safety/sos', { config: { rateLimit: { max: 30, timeWindow: '5 minutes' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = sosTriggerSchema.parse(request.body);
+    const point = input.latitude !== undefined && input.longitude !== undefined
+      ? { lat: input.latitude, lon: input.longitude }
+      : null;
+    // ST_MakePoint is strict, so a missing coordinate yields NULL and the
+    // no-location case needs no second statement. The casts are not decoration:
+    // an unreferenced or untyped parameter is a bind error, not a NULL.
+    const row = await db.query<{ id: string; status: string; created_at: Date }>(
+      `INSERT INTO sos_alerts(member_id,kind,note,location_cell,location_accuracy_m,location_captured_at,location_note)
+       VALUES($1,$2,$3,
+              ST_SetSRID(ST_MakePoint($5::float8,$4::float8),4326)::geography,
+              $6::int,
+              CASE WHEN $4::float8 IS NULL THEN NULL ELSE now() END,
+              $7)
+       ON CONFLICT (member_id) WHERE status IN ('active','acknowledged') DO UPDATE SET
+         kind=EXCLUDED.kind,
+         note=COALESCE(EXCLUDED.note,sos_alerts.note),
+         location_cell=COALESCE(EXCLUDED.location_cell,sos_alerts.location_cell),
+         location_accuracy_m=COALESCE(EXCLUDED.location_accuracy_m,sos_alerts.location_accuracy_m),
+         location_captured_at=COALESCE(EXCLUDED.location_captured_at,sos_alerts.location_captured_at),
+         location_note=COALESCE(EXCLUDED.location_note,sos_alerts.location_note)
+       RETURNING id,status,created_at`,
+      [userId, input.kind, input.note ?? null, point?.lat ?? null, point?.lon ?? null, input.accuracyMeters ?? null, input.locationNote ?? null],
+    );
+    const alert = row.rows[0]!;
+    return reply.code(201).send({ data: { id: alert.id, status: alert.status, createdAt: alert.created_at.toISOString(), locationShared: Boolean(point) } });
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'SOS_NOT_SENT', message: 'Yardım çağrısı gönderilemedi.' } });
+  }
+});
+
+app.get('/v1/safety/sos/active', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const row = await db.query<{ id: string; kind: string; status: string; note: string | null; location_note: string | null; created_at: Date; acknowledged_at: Date | null; has_location: boolean; watchers: string }>(
+      `SELECT a.id,a.kind,a.status,a.note,a.location_note,a.created_at,a.acknowledged_at,
+              a.location_cell IS NOT NULL has_location,
+              (SELECT count(*) FROM sos_location_grants g WHERE g.alert_id=a.id AND g.revoked_at IS NULL AND g.expires_at>now()) watchers
+       FROM sos_alerts a WHERE a.member_id=$1 AND a.status IN ('active','acknowledged')`,
+      [userId],
+    );
+    const alert = row.rows[0];
+    if (!alert) return { data: null };
+    return {
+      data: {
+        id: alert.id,
+        kind: alert.kind,
+        status: alert.status,
+        note: alert.note,
+        locationNote: alert.location_note,
+        locationShared: alert.has_location,
+        createdAt: alert.created_at.toISOString(),
+        acknowledgedAt: alert.acknowledged_at?.toISOString() ?? null,
+        // The member is told how many operators can currently see their
+        // position. Being watched without knowing it is the thing the grant
+        // was built to prevent, and a count they cannot see is not a seal.
+        activeLocationWatchers: Number(alert.watchers),
+      },
+    };
+  } catch {
+    return reply.code(401).send({ error: { code: 'SOS_UNAVAILABLE', message: 'Yardım çağrısı okunamadı.' } });
+  }
+});
+
+// Cancelling is destructive on purpose: the point is deleted and every live
+// grant is revoked in the same statement.
+app.post('/v1/safety/sos/:id/cancel', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const closed = await client.query(
+        `UPDATE sos_alerts SET status='cancelled',closed_at=now(),closed_by=$1,closure_reason='Üye çağrıyı geri aldı.',
+                location_cell=NULL,location_accuracy_m=NULL,location_captured_at=NULL
+         WHERE id=$2 AND member_id=$1 AND status IN ('active','acknowledged')`,
+        [userId, id],
+      );
+      if (!closed.rowCount) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'SOS_NOT_OPEN', message: 'Açık bir yardım çağrısı bulunamadı.' } }); }
+      await client.query('UPDATE sos_location_grants SET revoked_at=now() WHERE alert_id=$1 AND revoked_at IS NULL', [id]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'SOS_CANCEL_REJECTED', message: 'Çağrı geri alınamadı.' } });
+  }
+});
+
+// The operator queue. No coordinates in this response at any role: what an
+// operator sees is that there is a point and whether they are currently allowed
+// to look at it.
+app.get('/v1/internal/gatework/safety/alerts', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SAFETY_READ_ROLES);
+    const input = z.object({ state: z.enum(['open', 'all']).default('open'), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
+    const rows = await db.query<{ id: string; member_id: string; member_name: string | null; kind: string; status: string; note: string | null; location_note: string | null; has_location: boolean; location_captured_at: Date | null; location_accuracy_m: number | null; created_at: Date; acknowledged_at: Date | null; closed_at: Date | null; closure_reason: string | null; grant_expires_at: Date | null; watchers: string }>(
+      `SELECT a.id,a.member_id,cp.display_name member_name,a.kind,a.status,a.note,a.location_note,
+              a.location_cell IS NOT NULL has_location,a.location_captured_at,a.location_accuracy_m,
+              a.created_at,a.acknowledged_at,a.closed_at,a.closure_reason,
+              (SELECT max(g.expires_at) FROM sos_location_grants g WHERE g.alert_id=a.id AND g.operator_id=$1 AND g.revoked_at IS NULL AND g.expires_at>now()) grant_expires_at,
+              (SELECT count(*) FROM sos_location_grants g WHERE g.alert_id=a.id AND g.revoked_at IS NULL AND g.expires_at>now()) watchers
+       FROM sos_alerts a LEFT JOIN community_profile_projection cp ON cp.user_id=a.member_id
+       WHERE ($2='all' OR a.status IN ('active','acknowledged'))
+       ORDER BY (a.status IN ('active','acknowledged')) DESC, a.created_at ASC LIMIT $3`,
+      [actor.actorId, input.state, input.limit],
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id,
+        memberId: row.member_id,
+        memberName: row.member_name,
+        kind: row.kind,
+        status: row.status,
+        note: row.note,
+        locationNote: row.location_note,
+        location: {
+          shared: row.has_location,
+          capturedAt: row.location_captured_at?.toISOString() ?? null,
+          accuracyMeters: row.location_accuracy_m,
+          // Whether this operator may read it, and until when. The coordinates
+          // themselves are a different endpoint on purpose.
+          accessExpiresAt: row.grant_expires_at?.toISOString() ?? null,
+          activeWatchers: Number(row.watchers),
+        },
+        createdAt: row.created_at.toISOString(),
+        acknowledgedAt: row.acknowledged_at?.toISOString() ?? null,
+        closedAt: row.closed_at?.toISOString() ?? null,
+        closureReason: row.closure_reason,
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'SOS_ALERTS_UNAVAILABLE', message: 'Yardım çağrıları okunamadı.' } });
+  }
+});
+
+// Taking the call. Separate from closing it: "somebody is on this" and "this is
+// over" are different facts, and a queue that cannot tell them apart makes two
+// operators answer the same person while a third alert waits.
+app.post('/v1/internal/gatework/safety/alerts/:id/acknowledge', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SAFETY_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const updated = await db.query('UPDATE sos_alerts SET status=\'acknowledged\',acknowledged_at=now(),acknowledged_by=$1 WHERE id=$2 AND status=\'active\'', [actor.actorId, id]);
+    if (!updated.rowCount) return reply.code(409).send({ error: { code: 'SOS_NOT_ACTIONABLE', message: 'Çağrı zaten üstlenilmiş veya kapanmış.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.acknowledge', targetType: 'sos_alert', targetId: id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_ACKNOWLEDGE_REJECTED', message: 'Çağrı üstlenilemedi.' } });
+  }
+});
+
+// Breaking the seal. The reason is required and stored on the grant itself, not
+// only in the audit log: the grant is what a member is entitled to see when
+// they ask who looked and why.
+app.post('/v1/internal/gatework/safety/alerts/:id/location-access', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SAFETY_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = sosLocationAccessSchema.parse(request.body);
+    // Only an open alert. A closed one has had its point deleted, and a grant
+    // over nothing is a permission somebody would later mistake for evidence.
+    const alert = await db.query<{ has_location: boolean }>("SELECT location_cell IS NOT NULL has_location FROM sos_alerts WHERE id=$1 AND status IN ('active','acknowledged')", [id]);
+    if (!alert.rows.length) return reply.code(404).send({ error: { code: 'SOS_NOT_OPEN', message: 'Açık çağrı bulunamadı.' } });
+    if (!alert.rows[0]!.has_location) return reply.code(409).send({ error: { code: 'SOS_NO_LOCATION', message: 'Bu çağrıda konum paylaşılmamış.' } });
+    const grant = await db.query<{ id: string; expires_at: Date }>(
+      "INSERT INTO sos_location_grants(alert_id,operator_id,operator_roles,reason,expires_at) VALUES($1,$2,$3,$4,now()+make_interval(mins=>$5::int)) RETURNING id,expires_at",
+      [id, actor.actorId, actor.roles, input.reason, input.minutes],
+    );
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.location_access', targetType: 'sos_alert', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(201).send({ data: { grantId: grant.rows[0]!.id, expiresAt: grant.rows[0]!.expires_at.toISOString() } });
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_LOCATION_ACCESS_REJECTED', message: 'Konum erişimi açılamadı.' } });
+  }
+});
+
+// The point itself, and the only route that returns it. The grant is checked in
+// the same statement that reads the coordinates rather than in a prior query:
+// two statements leave a window in which a revoked grant still answers.
+app.get('/v1/internal/gatework/safety/alerts/:id/location', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SAFETY_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const row = await db.query<{ latitude: number; longitude: number; accuracy: number | null; captured_at: Date | null; expires_at: Date }>(
+      `SELECT ST_Y(a.location_cell::geometry) latitude,ST_X(a.location_cell::geometry) longitude,
+              a.location_accuracy_m accuracy,a.location_captured_at captured_at,g.expires_at
+       FROM sos_alerts a
+       JOIN sos_location_grants g ON g.alert_id=a.id AND g.operator_id=$2 AND g.revoked_at IS NULL AND g.expires_at>now()
+       WHERE a.id=$1 AND a.location_cell IS NOT NULL AND a.status IN ('active','acknowledged')
+       ORDER BY g.expires_at DESC LIMIT 1`,
+      [id, actor.actorId],
+    );
+    const point = row.rows[0];
+    if (!point) return reply.code(403).send({ error: { code: 'SOS_LOCATION_SEALED', message: 'Bu konumu görme yetkin yok veya süresi doldu.' } });
+    return { data: { latitude: point.latitude, longitude: point.longitude, accuracyMeters: point.accuracy, capturedAt: point.captured_at?.toISOString() ?? null, accessExpiresAt: point.expires_at.toISOString() } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_LOCATION_UNAVAILABLE', message: 'Konum okunamadı.' } });
+  }
+});
+
+// Closing. The point goes with it, in the same transaction as the status: an
+// alert that is over is not a reason to keep somebody's coordinates, and the
+// closure reason is the record of what happened instead.
+app.post('/v1/internal/gatework/safety/alerts/:id/close', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SAFETY_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = sosCloseSchema.parse(request.body);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const closed = await client.query(
+        `UPDATE sos_alerts SET status=$1,closed_at=now(),closed_by=$2,closure_reason=$3,
+                location_cell=NULL,location_accuracy_m=NULL,location_captured_at=NULL
+         WHERE id=$4 AND status IN ('active','acknowledged')`,
+        [input.status, actor.actorId, input.reason, id],
+      );
+      if (!closed.rowCount) { await client.query('ROLLBACK'); return reply.code(409).send({ error: { code: 'SOS_NOT_OPEN', message: 'Çağrı zaten kapanmış.' } }); }
+      await client.query('UPDATE sos_location_grants SET revoked_at=now() WHERE alert_id=$1 AND revoked_at IS NULL', [id]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.close', targetType: 'sos_alert', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_CLOSE_REJECTED', message: 'Çağrı kapatılamadı.' } });
+  }
+});
+
 // --- Analytics and locality ----------------------------------------------
 // The console's Analitik ve Konum screen. Two rules shape everything below,
 // and both come from how locality was designed in migration 008: locality is a
