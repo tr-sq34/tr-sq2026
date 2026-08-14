@@ -6,6 +6,8 @@ import '../../application/community_home_controller.dart';
 import '../../data/community_home_repository.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
+import '../../../events/application/events_controller.dart';
+import '../../../events/domain/entities/community_event.dart';
 import '../../../forum/application/forum_controller.dart';
 import '../../../forum/domain/entities/forum.dart';
 import '../../../forum/presentation/widgets/forum_trending_section.dart';
@@ -34,6 +36,9 @@ class DiscoverScreen extends StatefulWidget {
     required this.forumController,
     required this.onOpenForum,
     required this.onOpenForumTopic,
+    required this.eventsController,
+    required this.onOpenEvents,
+    required this.onOpenEvent,
   });
 
   final CommunityHomeController controller;
@@ -66,6 +71,12 @@ class DiscoverScreen extends StatefulWidget {
   final ValueChanged<String?> onOpenForum;
   final ValueChanged<ForumTopic> onOpenForumTopic;
 
+  /// Etkinlikler ekranıyla aynı denetleyici: şeritten açılan etkinlik,
+  /// listede de aynı katılım durumuyla duruyor.
+  final EventsController eventsController;
+  final VoidCallback onOpenEvents;
+  final ValueChanged<CommunityEvent> onOpenEvent;
+
   final ValueChanged<StoryItem> onOpenStory;
   final ValueChanged<Promotion> onOpenPromotion;
   final VoidCallback onOpenMarketplace;
@@ -88,6 +99,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     widget.marketplaceController.load();
     widget.forumController.loadCategories();
     widget.forumController.loadTrending();
+    widget.eventsController.load();
   }
 
   @override
@@ -127,7 +139,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             // olmadı; "Teklif Ver" düğmesi de boştu. Sunucuda ihaleleri
             // listeleyen bir uç nokta yok, uygulamada ihale açan bir ekran yok.
             // İhale gerçekten yapıldığında bölüm de gerçek verisiyle döner.
-            const _LocalContextSection(),
+            _LocalContextSection(
+              controller: widget.eventsController,
+              city: summary?.city,
+              onOpenEvents: widget.onOpenEvents,
+              onOpenEvent: widget.onOpenEvent,
+            ),
             HeadlineStrip(
               controller: widget.newsController,
               onOpenArticle: widget.onOpenArticle,
@@ -810,211 +827,271 @@ class _HighlightCard extends StatelessWidget {
 }
 
 // 6. Local Context & News
+///
+/// Etkinlikler ekranıyla aynı denetleyiciyi okur: ana sayfa, Etkinlikler
+/// listesinde olmayan bir buluşmayı gösteremez. Burada iki etkinlik koda elle
+/// yazılmıştı ("Türk Pikniği 2026", "Anadolu Caz Gecesi"); ikisi de hiç var
+/// olmadı ve karta dokunulduğunda hiçbir yere gitmiyordu. Etkinlik yoksa şerit
+/// hiç çizilmiyor.
 class _LocalContextSection extends StatelessWidget {
-  const _LocalContextSection();
+  const _LocalContextSection({
+    required this.controller,
+    required this.city,
+    required this.onOpenEvents,
+    required this.onOpenEvent,
+  });
+
+  final EventsController controller;
+  final String? city;
+  final VoidCallback onOpenEvents;
+  final ValueChanged<CommunityEvent> onOpenEvent;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Çevrende neler oluyor?',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w900,
-            color: Color(0xFF0F172A),
-          ),
-        ),
-        const SizedBox(height: 2),
-        const Text(
-          'New York ve çevresindeki Türk topluluğundan gelişmeler',
-          style: TextStyle(
-            fontSize: 11,
-            color: Color(0xFF64748B),
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 24),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (_, _) {
+      // En yakın tarihliler önde: "yaklaşan" sözünün karşılığı bu.
+      final events =
+          (controller.items.toList()
+                ..sort((a, b) => a.startsAt.compareTo(b.startsAt)))
+              .take(6)
+              .toList(growable: false);
+      if (events.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            const Text(
+              'Çevrende neler oluyor?',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              city == null
+                  ? 'Türk topluluğundan yaklaşan buluşmalar'
+                  : '$city ve çevresindeki Türk topluluğundan gelişmeler',
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(
-                  Icons.calendar_month_rounded,
-                  size: 14,
-                  color: Color(0xFF6355D8),
+                // Esnek: buyuk yazi tipi ayarinda baslik satiri tasip
+                // "Tumunu gor" bagini ekranin disina itiyordu.
+                const Expanded(
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.calendar_month_rounded,
+                        size: 14,
+                        color: Color(0xFF6355D8),
+                      ),
+                      SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'YAKLAŞAN ETKİNLİKLER',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF334155),
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                SizedBox(width: 8),
-                Text(
-                  'YAKLAŞAN ETKİNLİKLER',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF334155),
-                    letterSpacing: 1.1,
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onOpenEvents,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                    child: Text(
+                      'Tümünü gör',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF6355D8),
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
-            Text(
-              'Tümünü gör',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF6355D8),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 145,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final event in events)
+                    _EventCard(event: event, onTap: () => onOpenEvent(event)),
+                ],
               ),
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 145,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            children: const [
-              _EventCard(
-                title: 'Türk Pikniği 2026',
-                location: 'Central Park · NYC',
-                date: 'Bu Cumartesi',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=400&q=80',
-              ),
-              _EventCard(
-                title: 'Anadolu Caz Gecesi',
-                location: 'Brooklyn · NYC',
-                date: 'Pazar',
-                imageUrl:
-                    'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=400&q=80',
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
+      );
+    },
   );
 }
 
+const _monthNames = [
+  'Ocak',
+  'Şubat',
+  'Mart',
+  'Nisan',
+  'Mayıs',
+  'Haziran',
+  'Temmuz',
+  'Ağustos',
+  'Eylül',
+  'Ekim',
+  'Kasım',
+  'Aralık',
+];
+
+/// Kartın köşesindeki tarih. Yakın günler için "Bugün"/"Yarın", ötesi için
+/// tarihin kendisi: eskiden orada "Bu Cumartesi" yazıyordu ve iki hafta
+/// sonraki bir etkinlik için de aynı şeyi söylüyordu.
+String eventDateLabel(DateTime startsAt, {DateTime? now}) {
+  final at = startsAt.toLocal();
+  final today = now?.toLocal() ?? DateTime.now();
+  final days = DateTime(
+    at.year,
+    at.month,
+    at.day,
+  ).difference(DateTime(today.year, today.month, today.day)).inDays;
+  if (days == 0) return 'Bugün';
+  if (days == 1) return 'Yarın';
+  return '${at.day} ${_monthNames[at.month - 1]}';
+}
+
 class _EventCard extends StatelessWidget {
-  const _EventCard({
-    required this.title,
-    required this.location,
-    required this.date,
-    required this.imageUrl,
-  });
-  final String title;
-  final String location;
-  final String date;
-  final String imageUrl;
+  const _EventCard({required this.event, required this.onTap});
+  final CommunityEvent event;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(right: 12),
-    child: Container(
-      width: 190,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFF1F5F9)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Stack(
-            children: [
-              SizedBox(
-                height: 90,
-                width: double.infinity,
-                child: Image.network(
-                  imageUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      Container(color: const Color(0xFFF1F5F9)),
-                ),
-              ),
-              Positioned(
-                top: 8,
-                left: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(6),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 4,
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    date,
-                    style: const TextStyle(
-                      color: Color(0xFF6355D8),
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 190,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF1F5F9)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Stack(
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    color: Color(0xFF0F172A),
+                SizedBox(
+                  height: 90,
+                  width: double.infinity,
+                  child: AppRemoteImage(
+                    imageUrl: event.imageUrl,
+                    semanticLabel: event.title,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.location_on_rounded,
-                      size: 10,
-                      color: Color(0xFFF43F5E),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
                     ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        location,
-                        style: const TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.95),
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 4,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      ],
+                    ),
+                    child: Text(
+                      eventDateLabel(event.startsAt),
+                      style: const TextStyle(
+                        color: Color(0xFF6355D8),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
                       ),
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: Color(0xFF0F172A),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.location_on_rounded,
+                        size: 10,
+                        color: Color(0xFFF43F5E),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          event.city.isEmpty
+                              ? event.location
+                              : '${event.location} · ${event.city}',
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     ),
   );
