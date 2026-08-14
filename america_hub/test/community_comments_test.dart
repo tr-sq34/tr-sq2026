@@ -140,6 +140,41 @@ void main() {
     expect(request.path, '/community/comments/c-1');
   });
 
+  test('beğeni isteği son durumu söylüyor', () async {
+    final harness = build({
+      'data': {'likes': 3, 'isLiked': true},
+    });
+
+    await harness.repository.setCommentLike(commentId: 'c-1', liked: true);
+
+    final request = harness.adapter.requests.single;
+    expect(request.method, 'PUT');
+    expect(request.path, '/community/comments/c-1/likes');
+    // Artış değil durum: aynı istek ikinci kez gitse de sayı ikiye katlanmıyor.
+    expect(request.data, {'enabled': true});
+  });
+
+  test('yorumun beğeni sayısı ve kendi beğenim okunuyor', () async {
+    final harness = build({
+      'data': [
+        {
+          'id': 'c-1',
+          'authorId': 'u-1',
+          'authorName': 'Elif Demir',
+          'body': 'Selam.',
+          'createdAt': '2026-07-22T10:30:00.000Z',
+          'likes': 4,
+          'isLiked': true,
+        },
+      ],
+    });
+
+    final comment = (await harness.repository.getComments('post-1')).single;
+
+    expect(comment.likes, 4);
+    expect(comment.isLiked, isTrue);
+  });
+
   test('adı gelmeyen yorum kimliksiz kalmıyor', () async {
     final harness = build({
       'data': [

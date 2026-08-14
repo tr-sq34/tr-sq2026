@@ -40,6 +40,18 @@ class MockCommunityCommentsRepository implements CommunityCommentsRepository {
     return comment;
   }
 
+  /// Beğeni burada da bir yerde duruyor: depo değiştirmenin davranışı
+  /// değiştirmediğini görebilmek için.
+  @override
+  Future<void> setCommentLike({required String commentId, required bool liked}) async {
+    final index = _comments.indexWhere((comment) => comment.id == commentId);
+    if (index == -1 || _comments[index].isLiked == liked) return;
+    _comments[index] = _comments[index].copyWith(
+      isLiked: liked,
+      likes: liked ? _comments[index].likes + 1 : _comments[index].likes - 1,
+    );
+  }
+
   @override
   Future<void> deleteComment(String commentId) async {
     final index = _comments.indexWhere((comment) => comment.id == commentId);

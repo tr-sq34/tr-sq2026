@@ -31,6 +31,13 @@ abstract interface class CommunityCommentsRepository {
     String? parentId,
   });
   Future<void> deleteComment(String commentId);
+
+  /// Kalp açık mı kapalı mı — kaç arttığı değil, ne olması gerektiği.
+  ///
+  /// İstek son durumu söylüyor, bu yüzden aynı isteğin ikinci kez gitmesi
+  /// sayıyı ikiye katlamıyor; bağlantı koparsa uygulama tazelendiğinde
+  /// sunucudaki cevap neyse o kalıyor.
+  Future<void> setCommentLike({required String commentId, required bool liked});
 }
 
 abstract interface class FeedRepository {
