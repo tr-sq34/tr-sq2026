@@ -1,4 +1,5 @@
-import { AuditLog } from '@/components/audit-log';
+import { AuditLog } from '@/components/system/audit-log';
+import { EmptyState, PageHeader } from '@/components/ui/page';
 import { auditPage, canSeeAudit, type AuditRow } from '@/lib/audit';
 import { getSession } from '@/lib/session';
 
@@ -10,7 +11,15 @@ export default async function SystemPage() {
   const roles = session.member.roles;
 
   if (!canSeeAudit(roles)) {
-    return <main><h1 className="text-3xl font-semibold">Sistem ve Denetim</h1><p className="mt-4 max-w-xl text-zinc-400">Denetim kaydı yalnızca owner, güvenlik yöneticisi ve denetçi rollerine açıktır. Mevcut rollerin: {roles.join(', ')}.</p></main>;
+    return (
+      <main>
+        <PageHeader eyebrow="Yetki gerekli" tone="warning" title="Sistem ve Denetim" />
+        <EmptyState
+          title="Denetim kaydı yalnızca owner, güvenlik yöneticisi ve denetçi rollerine açıktır."
+          description={`Mevcut rollerin: ${roles.join(', ')}.`}
+        />
+      </main>
+    );
   }
 
   let rows: AuditRow[] = [];
@@ -23,14 +32,11 @@ export default async function SystemPage() {
 
   return (
     <main>
-      <div className="mb-8">
-        <p className="text-sm text-emerald-400">Kimlik + Topluluk + Mesajlaşma bağlı</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Sistem ve Denetim</h1>
-        <p className="mt-2 max-w-2xl text-zinc-400">
-          Panelden yapılan her yetkili işlem — rol verme, oturum sonlandırma, şikâyet kararı, kısıtlama, forum ve içerik değişiklikleri — gerekçesiyle birlikte buraya yazılır. Bu ekran yalnızca okur; kayıt buradan değiştirilemez ve silinemez.
-        </p>
-      </div>
-
+      <PageHeader
+        eyebrow="Kimlik + Topluluk + Mesajlaşma bağlı"
+        title="Sistem ve Denetim"
+        description="Panelden yapılan her yetkili işlem — rol verme, oturum sonlandırma, şikâyet kararı, kısıtlama, forum ve içerik değişiklikleri — gerekçesiyle birlikte buraya yazılır. Bu ekran yalnızca okur; kayıt buradan değiştirilemez ve silinemez."
+      />
       <AuditLog initialRows={rows} initialFailures={failures} />
     </main>
   );
