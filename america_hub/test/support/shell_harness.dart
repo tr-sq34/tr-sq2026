@@ -1,3 +1,5 @@
+import 'package:america_hub/features/profile/application/friendship_controller.dart';
+import 'package:america_hub/features/profile/data/repositories/mock_friendship_repository.dart';
 import 'package:america_hub/core/network/api_client.dart';
 import 'package:america_hub/core/storage/in_memory_session_store.dart';
 import 'package:america_hub/core/storage/in_memory_token_store.dart';
@@ -108,6 +110,9 @@ Future<AuthController> pumpShell(
           commands: communityRepository,
           interactions: communityRepository,
           polls: communityRepository,
+        ),
+        friendshipController: FriendshipController(
+          repository: MockFriendshipRepository(),
         ),
         storyController: StoryController(repository: communityRepository),
         commentsController: CommunityCommentsController(

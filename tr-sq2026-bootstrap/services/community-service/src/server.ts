@@ -1096,6 +1096,12 @@ app.post('/v1/community/blocks', { config: { rateLimit: { max: 30, timeWindow: '
       'UPDATE relationship_projection SET active=false,updated_at=now() WHERE active AND ((viewer_id=$1 AND subject_id=$2) OR (viewer_id=$2 AND subject_id=$1))',
       [blockerId, blockedId],
     );
+    // And an unanswered request goes with it. Leaving it pending would put the
+    // blocked account back in the blocker's inbox with an Accept button.
+    await client.query(
+      "DELETE FROM friend_requests WHERE status='pending' AND ((requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1))",
+      [blockerId, blockedId],
+    );
     // Emitted even when the row already existed: a re-block is the cheapest way
     // for a user to repair a projection whose earlier event was lost, and the
     // consumer is idempotent.
@@ -1148,6 +1154,262 @@ app.get('/v1/community/blocks', async (request, reply) => {
     return { data: rows.rows.map((row) => ({ userId: row.blocked_id, displayName: row.display_name, createdAt: row.created_at.toISOString() })) };
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'BLOCKS_UNAVAILABLE', message: 'Engellenen kullanıcılar yüklenemedi.' } });
+  }
+});
+
+/**
+ * Arkadaşlık.
+ *
+ * `relationship_projection` has been read by nearly every access decision in
+ * this service since migration 002 and never written by anything. These routes
+ * are what finally writes it: accepting a request inserts both directions in
+ * the same transaction, so the friendship exists in full or not at all.
+ *
+ * The friendship is symmetric on purpose. A one-way follow is a different
+ * feature with different consent, and half of one is not a starting point.
+ */
+const friendRequestBody = z.object({ userId: z.string().uuid() });
+const friendAnswerBody = z.object({ status: z.enum(['accepted', 'declined']) });
+
+/// The viewer's standing with somebody else, in one word. The app draws a
+/// different button for each, so a wrong answer here is a button that does
+/// nothing.
+async function relationshipWith(viewerId: string, otherId: string) {
+  if (viewerId === otherId) return { relationship: 'self' as const, requestId: null };
+  const row = await db.query<{ blocked: boolean; friend: boolean; request_id: string | null; incoming: boolean }>(
+    `SELECT
+       EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=$2) OR (b.blocker_id=$2 AND b.blocked_id=$1)) blocked,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.relationship='friend' AND r.active) friend,
+       (SELECT f.id FROM friend_requests f WHERE f.status='pending' AND ((f.requester_id=$1 AND f.addressee_id=$2) OR (f.requester_id=$2 AND f.addressee_id=$1)) LIMIT 1) request_id,
+       EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.requester_id=$2 AND f.addressee_id=$1) incoming`,
+    [viewerId, otherId],
+  );
+  const state = row.rows[0]!;
+  // Blocked outranks everything: whatever else is true, there is nothing to do
+  // with this person until the block goes.
+  if (state.blocked) return { relationship: 'blocked' as const, requestId: null };
+  if (state.friend) return { relationship: 'friends' as const, requestId: null };
+  if (state.request_id) return { relationship: state.incoming ? ('pendingIncoming' as const) : ('pendingOutgoing' as const), requestId: state.request_id };
+  return { relationship: 'none' as const, requestId: null };
+}
+
+/// Writes the friendship itself. Both directions, one transaction: a projection
+/// with only one row would mean A sees B's friends-only posts and B does not
+/// see A's, which is not what either of them agreed to.
+async function acceptFriendRequest(client: pg.PoolClient, requestId: string, addresseeId: string) {
+  const answered = await client.query<{ requester_id: string }>(
+    "UPDATE friend_requests SET status='accepted',updated_at=now() WHERE id=$1 AND addressee_id=$2 AND status='pending' RETURNING requester_id",
+    [requestId, addresseeId],
+  );
+  const accepted = answered.rows[0];
+  if (!accepted) return null;
+  await client.query(
+    `INSERT INTO relationship_projection(viewer_id,subject_id,relationship,active)
+     VALUES($1,$2,'friend',true),($2,$1,'friend',true)
+     ON CONFLICT (viewer_id,subject_id,relationship) DO UPDATE SET active=true,updated_at=now()`,
+    [addresseeId, accepted.requester_id],
+  );
+  // The other side may have asked too. Two people who both sent a request are
+  // not left with one of them still pending in an inbox.
+  await client.query(
+    "UPDATE friend_requests SET status='accepted',updated_at=now() WHERE status='pending' AND requester_id=$1 AND addressee_id=$2",
+    [addresseeId, accepted.requester_id],
+  );
+  return accepted.requester_id;
+}
+
+app.post('/v1/community/friends/requests', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const viewerId = await viewer(request.headers);
+    const restricted = await activeRestriction(viewerId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const { userId: targetId } = friendRequestBody.parse(request.body);
+    if (viewerId === targetId) return reply.code(400).send({ error: { code: 'FRIEND_SELF_NOT_ALLOWED', message: 'Kendinize arkadaşlık isteği gönderemezsiniz.' } });
+    const exists = await db.query('SELECT 1 FROM community_profile_projection WHERE user_id=$1', [targetId]);
+    if (!exists.rows[0]) return reply.code(404).send({ error: { code: 'MEMBER_NOT_FOUND', message: 'Üye bulunamadı.' } });
+    const standing = await relationshipWith(viewerId, targetId);
+    if (standing.relationship === 'blocked') return reply.code(403).send({ error: { code: 'BLOCKED', message: 'Bu üyeye istek gönderemezsiniz.' } });
+    if (standing.relationship === 'friends') return reply.code(409).send({ error: { code: 'ALREADY_FRIENDS', message: 'Zaten arkadaşsınız.' } });
+    await client.query('BEGIN');
+    // Both of you asked: that is a yes, not a second queue. The incoming
+    // request is accepted here rather than sitting in an inbox waiting for a
+    // tap that would say exactly what this request already said.
+    if (standing.relationship === 'pendingIncoming' && standing.requestId) {
+      await acceptFriendRequest(client, standing.requestId, viewerId);
+      await client.query('COMMIT');
+      return reply.code(200).send({ data: { relationship: 'friends', requestId: null } });
+    }
+    if (standing.relationship === 'pendingOutgoing') {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'REQUEST_PENDING', message: 'İsteğin zaten gönderildi.' } });
+    }
+    const inserted = await client.query<{ id: string }>(
+      'INSERT INTO friend_requests(requester_id,addressee_id) VALUES($1,$2) ON CONFLICT (requester_id,addressee_id) DO NOTHING RETURNING id',
+      [viewerId, targetId],
+    );
+    const created = inserted.rows[0];
+    if (!created) {
+      // The only row that can be here now is one this member already sent and
+      // that was declined. Asking again after a no is what the constraint is for.
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'REQUEST_ALREADY_ANSWERED', message: 'Bu üyeye daha önce istek gönderdin.' } });
+    }
+    await client.query('COMMIT');
+    notifyOwner('friend_request', created.id, viewerId);
+    return reply.code(201).send({ data: { relationship: 'pendingOutgoing', requestId: created.id } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIEND_REQUEST_FAILED', message: 'Arkadaşlık isteği gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+type FriendRequestRow = { id: string; user_id: string; display_name: string; avatar_url: string | null; created_at: Date; direction: 'incoming' | 'outgoing' };
+
+/// Both directions in one answer. A member who is waiting on somebody else and
+/// a member somebody else is waiting on are the same screen.
+app.get('/v1/community/friends/requests', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const rows = await db.query<FriendRequestRow>(
+      `SELECT f.id,f.created_at,
+              CASE WHEN f.addressee_id=$1 THEN 'incoming' ELSE 'outgoing' END direction,
+              CASE WHEN f.addressee_id=$1 THEN f.requester_id ELSE f.addressee_id END user_id,
+              COALESCE(p.display_name,'TurkSquare üyesi') display_name,
+              (SELECT m.safe_url FROM media_assets m JOIN member_profiles mp ON mp.avatar_media_id=m.id WHERE mp.user_id=p.user_id AND m.status='ready') avatar_url
+         FROM friend_requests f
+         LEFT JOIN community_profile_projection p
+           ON p.user_id = CASE WHEN f.addressee_id=$1 THEN f.requester_id ELSE f.addressee_id END
+        WHERE f.status='pending' AND (f.addressee_id=$1 OR f.requester_id=$1)
+        ORDER BY f.created_at DESC
+        LIMIT 100`,
+      [viewerId],
+    );
+    const data = await Promise.all(rows.rows.map(async (row) => ({
+      id: row.id,
+      direction: row.direction,
+      userId: row.user_id,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
+      createdAt: row.created_at.toISOString(),
+    })));
+    return { data };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIEND_REQUESTS_UNAVAILABLE', message: 'Arkadaşlık istekleri yüklenemedi.' } });
+  }
+});
+
+app.put('/v1/community/friends/requests/:id', async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const viewerId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = friendAnswerBody.parse(request.body);
+    await client.query('BEGIN');
+    if (input.status === 'declined') {
+      // The decline is kept, unlike a cancellation: it is the record that says
+      // this particular ask has been answered and cannot be repeated.
+      const declined = await client.query(
+        "UPDATE friend_requests SET status='declined',updated_at=now() WHERE id=$1 AND addressee_id=$2 AND status='pending' RETURNING id",
+        [id, viewerId],
+      );
+      if (!declined.rows[0]) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'REQUEST_NOT_FOUND', message: 'İstek bulunamadı.' } }); }
+      await client.query('COMMIT');
+      return { data: { relationship: 'none', requestId: null } };
+    }
+    const requesterId = await acceptFriendRequest(client, id, viewerId);
+    if (!requesterId) { await client.query('ROLLBACK'); return reply.code(404).send({ error: { code: 'REQUEST_NOT_FOUND', message: 'İstek bulunamadı.' } }); }
+    await client.query('COMMIT');
+    return { data: { relationship: 'friends', requestId: null } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIEND_ANSWER_FAILED', message: 'İstek güncellenemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+/// Withdrawing your own request. The row goes rather than being marked, so this
+/// is not held against the member later: changing your mind about asking is not
+/// the same as being told no.
+app.delete('/v1/community/friends/requests/:id', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const removed = await db.query("DELETE FROM friend_requests WHERE id=$1 AND requester_id=$2 AND status='pending' RETURNING id", [id, viewerId]);
+    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'REQUEST_NOT_FOUND', message: 'İstek bulunamadı.' } });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIEND_CANCEL_FAILED', message: 'İstek geri çekilemedi.' } });
+  }
+});
+
+app.get('/v1/community/friends', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const ownerId = z.string().uuid().optional().parse((request.query as { userId?: string }).userId) ?? viewerId;
+    // Somebody else's friend list obeys the same lock as their profile.
+    const access = await profileAccess(viewerId, ownerId);
+    if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    if (!access.full) return { data: [], meta: { locked: true } };
+    const rows = await db.query<{ user_id: string; display_name: string; city: string | null; region_code: string | null; avatar_url: string | null }>(
+      `SELECT p.user_id,COALESCE(p.display_name,'TurkSquare üyesi') display_name,p.city,p.region_code,
+              (SELECT m.safe_url FROM media_assets m JOIN member_profiles mp ON mp.avatar_media_id=m.id WHERE mp.user_id=p.user_id AND m.status='ready') avatar_url
+         FROM relationship_projection r
+         JOIN community_profile_projection p ON p.user_id=r.subject_id
+        WHERE r.viewer_id=$1 AND r.relationship='friend' AND r.active
+        ORDER BY p.display_name
+        LIMIT 200`,
+      [ownerId],
+    );
+    const data = await Promise.all(rows.rows.map(async (row) => ({
+      userId: row.user_id,
+      displayName: row.display_name,
+      city: row.city,
+      regionCode: row.region_code,
+      avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
+    })));
+    return { data, meta: { locked: false } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIENDS_UNAVAILABLE', message: 'Arkadaş listesi yüklenemedi.' } });
+  }
+});
+
+/// Unfriending. Both projection rows go inactive and the request record is
+/// removed entirely, so either of them may ask again one day.
+app.delete('/v1/community/friends/:userId', async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const viewerId = await viewer(request.headers);
+    const otherId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    await client.query('BEGIN');
+    await client.query(
+      'UPDATE relationship_projection SET active=false,updated_at=now() WHERE active AND relationship=$3 AND ((viewer_id=$1 AND subject_id=$2) OR (viewer_id=$2 AND subject_id=$1))',
+      [viewerId, otherId, 'friend'],
+    );
+    await client.query(
+      'DELETE FROM friend_requests WHERE (requester_id=$1 AND addressee_id=$2) OR (requester_id=$2 AND addressee_id=$1)',
+      [viewerId, otherId],
+    );
+    await client.query('COMMIT');
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'UNFRIEND_FAILED', message: 'Arkadaşlıktan çıkarılamadı.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/v1/community/friends/status/:userId', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const otherId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    return { data: await relationshipWith(viewerId, otherId) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FRIEND_STATUS_UNAVAILABLE', message: 'Arkadaşlık durumu okunamadı.' } });
   }
 });
 
@@ -1692,6 +1954,11 @@ const NOTIFICATION_SUBJECTS = {
   listing_save: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
   listing_like: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
   special_request: 'SELECT p.author_id,p.id FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL',
+  // The only kind whose $1 is not the subject: a friend request is looked up by
+  // its own id, and the subject it files itself under is the person who asked.
+  // One line per requester, so ten separate people are ten separate answers to
+  // give rather than one line saying "10".
+  friend_request: "SELECT r.addressee_id,r.requester_id FROM friend_requests r WHERE r.id=$1 AND r.status='pending'",
 } as const;
 type NotificationKind = keyof typeof NOTIFICATION_SUBJECTS;
 
@@ -1748,10 +2015,15 @@ app.get('/v1/notifications', async (request, reply) => {
            WHEN 'listing_like' THEN (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
            -- Only the ones still waiting. Once the owner has answered them all
            -- the line goes, because there is nothing left to act on.
-           ELSE (SELECT count(*) FROM post_special_requests r WHERE r.post_id=n.subject_id AND r.status='pending')
+           WHEN 'special_request' THEN (SELECT count(*) FROM post_special_requests r WHERE r.post_id=n.subject_id AND r.status='pending')
+           ELSE (SELECT count(*) FROM friend_requests f WHERE f.requester_id=n.subject_id AND f.addressee_id=n.user_id AND f.status='pending')
          END actor_count,
          CASE WHEN n.kind IN ('post_comment','post_like','special_request')
            THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
+           -- A friend request has no title of its own; who is asking is the
+           -- whole of it.
+           WHEN n.kind='friend_request'
+           THEN (SELECT f.display_name FROM community_profile_projection f WHERE f.user_id=n.subject_id)
            ELSE (SELECT l.title FROM marketplace_listings l WHERE l.id=n.subject_id AND l.status<>'draft')
          END subject_title
        FROM member_notifications n
@@ -1769,7 +2041,7 @@ app.get('/v1/notifications', async (request, reply) => {
         subjectId: row.subject_id,
         subjectTitle: row.subject_title,
         actorCount: Number(row.actor_count),
-        actorName: row.kind === 'post_comment' || row.kind === 'special_request' ? row.actor_name : null,
+        actorName: row.kind === 'post_comment' || row.kind === 'special_request' || row.kind === 'friend_request' ? row.actor_name : null,
         createdAt: row.updated_at.toISOString(),
         isRead: row.read_at !== null,
       }));

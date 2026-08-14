@@ -54,12 +54,13 @@ class AppNotificationDto {
       title: _titleOf(type),
       body: _bodyOf(type),
       createdAt: createdAt,
-      deepLink: Uri.parse(
-        type == AppNotificationType.listingSaved ||
-                type == AppNotificationType.listingLiked
-            ? 'turksquare://listing/$subjectId'
-            : 'turksquare://post/$subjectId',
-      ),
+      deepLink: Uri.parse(switch (type) {
+        AppNotificationType.listingSaved ||
+        AppNotificationType.listingLiked => 'turksquare://listing/$subjectId',
+        // Arkadaşlık isteğinde konu bir paylaşım değil, isteği gönderen üye.
+        AppNotificationType.friendRequest => 'turksquare://friend/$subjectId',
+        _ => 'turksquare://post/$subjectId',
+      }),
       isRead: isRead,
     );
   }
@@ -70,6 +71,7 @@ class AppNotificationDto {
     'listing_save' => AppNotificationType.listingSaved,
     'listing_like' => AppNotificationType.listingLiked,
     'special_request' => AppNotificationType.specialRequest,
+    'friend_request' => AppNotificationType.friendRequest,
     _ => AppNotificationType.system,
   };
 
@@ -79,6 +81,7 @@ class AppNotificationDto {
     AppNotificationType.listingSaved => 'İlanın kaydedildi',
     AppNotificationType.listingLiked => 'İlanın beğenildi',
     AppNotificationType.specialRequest => 'Yeni istek',
+    AppNotificationType.friendRequest => 'Arkadaşlık isteği',
     _ => 'Bildirim',
   };
 
@@ -103,6 +106,10 @@ class AppNotificationDto {
             ? '${actorName ?? 'Bir üye'} ve ${actorCount - 1} kişi daha '
                   '"$subject" paylaşımına istek gönderdi.'
             : '${actorName ?? 'Bir üye'} "$subject" paylaşımına istek gönderdi.',
+      // Konu başlığı isteği gönderenin adı; sayı ise ondan gelen bekleyen
+      // istek sayısı. Yanıtlandığında satır kayboluyor.
+      AppNotificationType.friendRequest =>
+        '${subject.isEmpty ? 'Bir üye' : subject} sana arkadaşlık isteği gönderdi.',
       _ => subject,
     };
   }

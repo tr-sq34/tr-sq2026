@@ -14,7 +14,9 @@ import '../../../journey/application/journey_controller.dart';
 import '../../../journey/domain/entities/journey.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
+import '../../application/friendship_controller.dart';
 import '../../application/profile_controller.dart';
+import '../../domain/entities/friendship.dart';
 import '../../domain/entities/user_profile.dart';
 import '../widgets/profile_badge_chip.dart';
 
@@ -28,6 +30,7 @@ class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
     required this.controller,
+    required this.friendshipController,
     required this.journeyController,
     required this.onSignOut,
     required this.memberCapabilitiesController,
@@ -37,6 +40,7 @@ class ProfileScreen extends StatefulWidget {
   });
 
   final ProfileController controller;
+  final FriendshipController friendshipController;
   final JourneyController journeyController;
   final Future<void> Function() onSignOut;
   final MemberCapabilitiesController memberCapabilitiesController;
@@ -62,6 +66,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     widget.journeyController.load();
     widget.memberCapabilitiesController.load();
     widget.storyController.loadHighlights();
+    widget.friendshipController.load();
   }
 
   @override
@@ -119,7 +124,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                 },
                 onDelete: _deletePost,
               ),
-              _FriendsTab(profile: profile),
+              _FriendsTab(
+                profile: profile,
+                controller: widget.friendshipController,
+                // Kabul edilen istek başlıktaki arkadaş sayısını da
+                // değiştiriyor; listede 3, başlıkta 2 yazmasın diye.
+                onFriendsChanged: widget.controller.load,
+              ),
             ],
           ),
         ),
@@ -1001,12 +1012,20 @@ class _PostTile extends StatelessWidget {
   }
 }
 
-/// The real list arrives with mutual friendships in Faz 3. Until then this tab
-/// tells the truth — locked, or empty — instead of showing invented names.
+/// Gelen kutusu ve arkadaş listesi.
+///
+/// Bu sekme uzun süre "bir sonraki güncellemede" diyordu; artık gerçek. Gelen
+/// istekler üstte duruyor, çünkü cevap bekleyen tek şey onlar.
 class _FriendsTab extends StatelessWidget {
-  const _FriendsTab({required this.profile});
+  const _FriendsTab({
+    required this.profile,
+    required this.controller,
+    required this.onFriendsChanged,
+  });
 
   final UserProfile profile;
+  final FriendshipController controller;
+  final Future<void> Function() onFriendsChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1017,19 +1036,248 @@ class _FriendsTab extends StatelessWidget {
         message: 'Arkadaş listesini yalnızca arkadaşları görebilir.',
       );
     }
-    if (profile.friendCount == 0) {
-      return _EmptyState(
-        icon: Icons.group_outlined,
-        title: 'Henüz arkadaş yok',
-        message: profile.isSelf
-            ? 'Yakınındaki üyelere arkadaşlık isteği göndererek başla.'
-            : 'Bu üyenin henüz arkadaşı yok.',
-      );
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        if (controller.isLoading && !controller.hasLoaded) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (controller.errorMessage != null && !controller.hasLoaded) {
+          return _ErrorState(
+            message: controller.errorMessage!,
+            onRetry: controller.load,
+          );
+        }
+        final incoming = controller.incomingRequests;
+        final outgoing = controller.outgoingRequests;
+        final friends = controller.friends;
+        if (incoming.isEmpty && outgoing.isEmpty && friends.isEmpty) {
+          return _EmptyState(
+            icon: Icons.group_outlined,
+            title: 'Henüz arkadaş yok',
+            message: profile.isSelf
+                ? 'Akıştaki bir paylaşımın menüsünden "Arkadaş ekle" diyerek başlayabilirsin.'
+                : 'Bu üyenin henüz arkadaşı yok.',
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: controller.load,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            children: [
+              if (incoming.isNotEmpty) ...[
+                const _FriendsSectionTitle('Gelen istekler'),
+                for (final request in incoming)
+                  _FriendRequestTile(
+                    request: request,
+                    onAccept: () => _respond(context, request, true),
+                    onDecline: () => _respond(context, request, false),
+                  ),
+                const SizedBox(height: 20),
+              ],
+              if (outgoing.isNotEmpty) ...[
+                const _FriendsSectionTitle('Gönderilen istekler'),
+                for (final request in outgoing)
+                  _FriendRequestTile(
+                    request: request,
+                    onCancel: () => controller.cancelRequest(request.id),
+                  ),
+                const SizedBox(height: 20),
+              ],
+              _FriendsSectionTitle('Arkadaşlar (${friends.length})'),
+              if (friends.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'Henüz kimseyle arkadaş değilsin.',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              for (final friend in friends)
+                _FriendTile(
+                  friend: friend,
+                  onRemove: profile.isSelf
+                      ? () => _confirmUnfriend(context, friend)
+                      : null,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _respond(
+    BuildContext context,
+    FriendRequest request,
+    bool accepted,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await controller.respond(request.id, accepted);
+    if (!ok) return;
+    if (accepted) await onFriendsChanged();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          accepted
+              ? '${request.displayName} artık arkadaşın.'
+              : 'İstek reddedildi.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmUnfriend(
+    BuildContext context,
+    FriendSummary friend,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Arkadaşlıktan çıkar'),
+        content: Text(
+          '${friend.displayName} arkadaş listenden çıkarılsın mı? Arkadaşa özel '
+          'paylaşımlarını artık göremez.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Çıkar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && await controller.unfriend(friend.userId)) {
+      await onFriendsChanged();
     }
-    return const _EmptyState(
-      icon: Icons.group_outlined,
-      title: 'Arkadaş listesi yolda',
-      message: 'Arkadaşlık istekleri bir sonraki güncellemede açılıyor.',
+  }
+}
+
+class _FriendsSectionTitle extends StatelessWidget {
+  const _FriendsSectionTitle(this.title);
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      title,
+      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+    ),
+  );
+}
+
+class _FriendRequestTile extends StatelessWidget {
+  const _FriendRequestTile({
+    required this.request,
+    this.onAccept,
+    this.onDecline,
+    this.onCancel,
+  });
+
+  final FriendRequest request;
+  final VoidCallback? onAccept;
+  final VoidCallback? onDecline;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final avatar = appImageProvider(request.avatarUrl);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.profileTint,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.profileBorder),
+      ),
+      // İsim üstte, düğmeler altta: uzun bir ad ile iki düğme aynı satıra
+      // dar ekranda sığmıyor.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: AppColors.profileBorder,
+                backgroundImage: avatar,
+                child: avatar == null
+                    ? const Icon(Icons.person_outline, size: 20)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  request.displayName,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (onCancel != null)
+                TextButton(onPressed: onCancel, child: const Text('Geri çek'))
+              else ...[
+                TextButton(onPressed: onDecline, child: const Text('Reddet')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: onAccept, child: const Text('Kabul et')),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FriendTile extends StatelessWidget {
+  const _FriendTile({required this.friend, this.onRemove});
+
+  final FriendSummary friend;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final avatar = appImageProvider(friend.avatarUrl);
+    final place = friend.placeLabel;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(
+        radius: 20,
+        backgroundColor: AppColors.profileTint,
+        backgroundImage: avatar,
+        child: avatar == null
+            ? const Icon(Icons.person_outline, size: 20)
+            : null,
+      ),
+      title: Text(
+        friend.displayName,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      subtitle: place.isEmpty
+          ? null
+          : Text(
+              place,
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+      trailing: onRemove == null
+          ? null
+          : IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.person_remove_outlined, size: 20),
+              tooltip: 'Arkadaşlıktan çıkar',
+            ),
     );
   }
 }

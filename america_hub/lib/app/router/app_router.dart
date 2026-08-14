@@ -9,6 +9,7 @@ import '../../features/community/domain/repositories/community_repository.dart';
 import '../../features/community/application/community_special_request_controller.dart';
 import '../../features/events/application/events_controller.dart';
 import '../../features/marketplace/application/marketplace_controller.dart';
+import '../../features/profile/application/friendship_controller.dart';
 import '../../features/profile/application/profile_controller.dart';
 import '../../features/journey/application/journey_controller.dart';
 import '../../features/messaging/application/direct_conversation_controller.dart';
@@ -46,6 +47,7 @@ class AppRouter {
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.friendshipController,
     required this.journeyController,
     required this.messagingController,
     required this.directMessageRepository,
@@ -71,6 +73,7 @@ class AppRouter {
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final FriendshipController friendshipController;
   final JourneyController journeyController;
   final MessagingController messagingController;
   final DirectMessageRepository directMessageRepository;
@@ -114,6 +117,7 @@ class AppRouter {
             eventsController: eventsController,
             marketplaceController: marketplaceController,
             profileController: profileController,
+            friendshipController: friendshipController,
             journeyController: journeyController,
             contentModerationRepository: contentModerationRepository,
             homeController: communityHomeController,

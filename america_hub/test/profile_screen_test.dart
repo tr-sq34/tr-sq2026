@@ -1,3 +1,7 @@
+import 'package:america_hub/features/profile/application/friendship_controller.dart';
+import 'package:america_hub/features/profile/data/repositories/mock_friendship_repository.dart';
+import 'package:america_hub/features/profile/domain/entities/friendship.dart';
+import 'package:america_hub/features/profile/domain/repositories/friendship_repository.dart';
 import 'package:america_hub/core/network/api_client.dart';
 import 'package:america_hub/core/storage/in_memory_token_store.dart';
 import 'package:america_hub/features/community/application/media_upload_controller.dart';
@@ -79,6 +83,59 @@ class _FakeProfileRepository implements ProfileRepository {
   Future<void> unarchivePost(String postId) async {}
 }
 
+/// Arkadaşlık deposu: gelen kutusunu ve listeyi testin dikte ettiği hâliyle
+/// verir, yanıtları kaydeder.
+class _FakeFriendships implements FriendshipRepository {
+  _FakeFriendships({this.requests = const [], this.friends = const []});
+
+  List<FriendRequest> requests;
+  List<FriendSummary> friends;
+  final List<String> answers = [];
+
+  @override
+  Future<FriendshipStatus> getStatus(String userId) async =>
+      FriendshipStatus.none;
+
+  @override
+  Future<FriendshipStatus> sendRequest(String userId) async =>
+      FriendshipStatus.pendingOutgoing;
+
+  @override
+  Future<FriendshipStatus> respond(String requestId, bool accepted) async {
+    answers.add('$requestId:$accepted');
+    final request = requests.firstWhere((item) => item.id == requestId);
+    requests = requests.where((item) => item.id != requestId).toList();
+    if (accepted) {
+      friends = [
+        ...friends,
+        FriendSummary(
+          userId: request.userId,
+          displayName: request.displayName,
+          city: 'Paterson',
+          regionCode: 'NJ',
+        ),
+      ];
+    }
+    return accepted ? FriendshipStatus.friends : FriendshipStatus.none;
+  }
+
+  @override
+  Future<void> cancelRequest(String requestId) async {}
+
+  @override
+  Future<void> unfriend(String userId) async {}
+
+  @override
+  Future<void> block(String userId) async {}
+
+  @override
+  Future<List<FriendRequest>> getRequests() async => List.of(requests);
+
+  @override
+  Future<List<FriendSummary>> getFriends([String? userId]) async =>
+      List.of(friends);
+}
+
 class _StubCapabilities extends MemberCapabilitiesController {
   _StubCapabilities(ApiClient client) : super(client, client);
 
@@ -90,6 +147,7 @@ Future<_FakeProfileRepository> _pumpProfile(
   WidgetTester tester,
   UserProfile profile, {
   List<ProfilePost> posts = const [],
+  FriendshipRepository? friendships,
 }) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
@@ -104,6 +162,9 @@ Future<_FakeProfileRepository> _pumpProfile(
     MaterialApp(
       home: ProfileScreen(
         controller: ProfileController(repository: repository),
+        friendshipController: FriendshipController(
+          repository: friendships ?? MockFriendshipRepository(),
+        ),
         journeyController: JourneyController(repository: const MockJourneyRepository()),
         onSignOut: () async {},
         memberCapabilitiesController: _StubCapabilities(apiClient),
@@ -252,5 +313,43 @@ void main() {
 
     expect(find.text('Bu profil gizli'), findsOneWidget);
     expect(find.text('Elif Demir'), findsNothing);
+  });
+
+  testWidgets('gelen istek yanitlanabiliyor ve listeye donusuyor', (
+    tester,
+  ) async {
+    final friendships = _FakeFriendships(
+      requests: [
+        FriendRequest(
+          id: 'r1',
+          userId: 'member-1',
+          displayName: 'Elif Demir',
+          createdAt: DateTime(2026, 8, 13),
+          isIncoming: true,
+        ),
+      ],
+    );
+    await _pumpProfile(tester, _base, friendships: friendships);
+
+    await tester.tap(find.text('Arkadaşlar'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+    expect(find.text('Gelen istekler'), findsOneWidget);
+    expect(find.text('Elif Demir'), findsOneWidget);
+
+    // NestedScrollView icindeki dokunma noktasi testte govdeye degil basliga
+    // dusuyor; dugmenin kendi geri cagrisi cagriliyor.
+    tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, 'Kabul et'))
+        .onPressed!();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+
+    expect(friendships.answers, ['r1:true']);
+    expect(find.text('Gelen istekler'), findsNothing);
+    expect(find.text('Arkadaşlar (1)'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Elif Demir'), findsOneWidget);
   });
 }

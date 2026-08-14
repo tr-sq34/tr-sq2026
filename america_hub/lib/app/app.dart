@@ -9,6 +9,7 @@ import '../features/community/domain/repositories/community_repository.dart';
 import '../features/community/application/community_special_request_controller.dart';
 import '../features/events/application/events_controller.dart';
 import '../features/marketplace/application/marketplace_controller.dart';
+import '../features/profile/application/friendship_controller.dart';
 import '../features/profile/application/profile_controller.dart';
 import '../features/journey/application/journey_controller.dart';
 import '../features/messaging/application/messaging_controller.dart';
@@ -39,6 +40,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.friendshipController,
     required this.journeyController,
     required this.messagingController,
     required this.directMessageRepository,
@@ -67,6 +69,10 @@ class AmericaHubApp extends StatelessWidget {
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+
+  /// Arkadaşlık: profildeki gelen kutusu ile akıştaki "Arkadaş ekle" aynı
+  /// denetleyiciyi okuyor, iki yerde iki farklı durum görünmesin diye.
+  final FriendshipController friendshipController;
   final JourneyController journeyController;
   final MessagingController messagingController;
 
@@ -120,6 +126,7 @@ class AmericaHubApp extends StatelessWidget {
         eventsController: eventsController,
         marketplaceController: marketplaceController,
         profileController: profileController,
+        friendshipController: friendshipController,
         journeyController: journeyController,
         messagingController: messagingController,
         directMessageRepository: directMessageRepository,
