@@ -15,8 +15,10 @@ Map<String, dynamic> post({
   Object? purpose,
   Object? travelerMatch,
   bool isAuthor = false,
+  Object? authorId,
 }) => {
   'id': 'post-1',
+  'authorId': authorId,
   'authorName': 'Elif Demir',
   'location': 'Queens, NY',
   'createdAtLabel': '2026-08-13T10:00:00.000Z',
@@ -83,6 +85,19 @@ void main() {
       CommunityPostDto.fromJson(post(isAuthor: true)).toDomain().isAuthor,
       isTrue,
     );
+  });
+
+  test('yazanın kimliği ownerId olarak yerleşiyor', () {
+    final domain = CommunityPostDto.fromJson(
+      post(authorId: 'cccccccc-cccc-cccc-cccc-cccccccccccc'),
+    ).toDomain();
+    expect(domain.ownerId, 'cccccccc-cccc-cccc-cccc-cccccccccccc');
+  });
+
+  test('kimlik gelmezse eski varsayılan bozulmuyor', () {
+    // Sahte kip hâlâ 'local-user' üzerinden çalışıyor; sunucu alanı
+    // göndermediğinde o dünyayı bozmuyoruz.
+    expect(CommunityPostDto.fromJson(post()).toDomain().ownerId, 'local-user');
   });
 
   test('yolculuk sunucuya rota, tarih ve paketle gidiyor', () async {

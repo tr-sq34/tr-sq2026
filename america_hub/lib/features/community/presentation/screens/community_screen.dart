@@ -357,7 +357,11 @@ class _FeedState extends State<_Feed> {
                 onToggleLike: widget.controller.toggleLike,
                 specialRequestController: widget.specialRequestController,
                 moderationRepository: widget.moderationRepository,
-                onDelete: post.ownerId == _viewerId
+                // Sunucu artık hem yazanın kimliğini hem de doğrudan cevabı
+                // gönderiyor. İkisi de duruyor çünkü ikisi ayrı soruya cevap
+                // veriyor: `isAuthor` oturum henüz okunmamışken de doğru,
+                // `ownerId` ise sahte kipteki paylaşımlar için tek ölçü.
+                onDelete: post.isAuthor || post.ownerId == _viewerId
                     ? () => _deletePost(post)
                     : null,
                 onOpenComments: () => _openComments(post),
