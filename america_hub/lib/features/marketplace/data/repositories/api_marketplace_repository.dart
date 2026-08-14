@@ -115,15 +115,40 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
     );
   }
 
+  /// Kaydetme ve beğeni bir durum, bir artış değil: kopan bağlantıda tekrarlanan
+  /// dokunuş ilk dokunuşla aynı sonuca varıyor. Sunucu güncel ilanı geri
+  /// döndürüyor, sayacı burada tahmin etmiyoruz.
+  Future<MarketplaceListing> _react(
+    String listingId,
+    String kind,
+    bool value,
+  ) async {
+    final response = await _client.put<Map<String, dynamic>>(
+      '/marketplace/listings/$listingId/reactions/$kind',
+      data: {'enabled': value},
+    );
+    return MarketplaceListingDto.fromJson(
+      response.data!['data'] as Map<String, dynamic>,
+    ).toDomain();
+  }
+
   @override
   Future<MarketplaceListing> setSaved(String listingId, bool value) =>
-      throw UnimplementedError('Save listing endpoint is not configured.');
+      _react(listingId, 'save', value);
   @override
   Future<MarketplaceListing> setLiked(String listingId, bool value) =>
-      throw UnimplementedError('Like listing endpoint is not configured.');
+      _react(listingId, 'like', value);
+
   @override
-  Future<MarketplaceListing> registerShare(String listingId) =>
-      throw UnimplementedError('Share listing endpoint is not configured.');
+  Future<MarketplaceListing> registerShare(String listingId) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      '/marketplace/listings/$listingId/shares',
+    );
+    return MarketplaceListingDto.fromJson(
+      response.data!['data'] as Map<String, dynamic>,
+    ).toDomain();
+  }
+
   @override
   Future<MarketplaceOffer> createOffer({
     required String listingId,

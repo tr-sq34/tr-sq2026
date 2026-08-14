@@ -195,14 +195,47 @@ class MarketplaceFeedView extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          // Açık süzgeç ekranda görünüyor ve kapatması tek dokunuş: aksi halde
+          // üye boş bir listeye bakıp Çarşı'da hiç ilan yok sanıyor.
+          if (controller.savedOnly) ...[
+            Row(
+              children: [
+                const Icon(
+                  Icons.bookmark_rounded,
+                  size: 18,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    'Kaydedilenler',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      controller.updateFilters(savedOnly: false),
+                  child: const Text('Tüm ilanlar'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
           if (listings.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 80),
-              child: AppEmptyState(
-                icon: Icons.location_off_outlined,
-                title: 'İlan bulunamadı',
-                message: 'Yeni ilanlar eklendiğinde burada görünecek.',
-              ),
+            Padding(
+              padding: const EdgeInsets.only(top: 80),
+              child: controller.savedOnly
+                  ? const AppEmptyState(
+                      icon: Icons.bookmark_border_rounded,
+                      title: 'Kaydedilen ilan yok',
+                      message:
+                          'Beğendiğin ilanı kaydet, buradan kolayca geri dön.',
+                    )
+                  : const AppEmptyState(
+                      icon: Icons.location_off_outlined,
+                      title: 'İlan bulunamadı',
+                      message: 'Yeni ilanlar eklendiğinde burada görünecek.',
+                    ),
             )
           else
             LayoutBuilder(
@@ -366,9 +399,13 @@ class MarketplaceCategoriesScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          const _CategoryRow(
+          _CategoryRow(
             label: 'Kaydedilenler',
             icon: Icons.bookmark_outline_rounded,
+            onTap: () {
+              controller.updateFilters(savedOnly: true);
+              Navigator.of(context).pop();
+            },
           ),
           const _CategoryRow(
             label: 'Etkinlik biletleri',

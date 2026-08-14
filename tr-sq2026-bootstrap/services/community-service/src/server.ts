@@ -698,7 +698,74 @@ app.put('/v1/community/comments/:id/likes', { config: { rateLimit: { max: 60, ti
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_LIKE_FAILED', message: 'Beğenin kaydedilemedi.' } });
   }
 });
-app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+/**
+ * Saving, liking and sharing a listing.
+ *
+ * The three buttons on the listing card had no table behind them: the card sent
+ * `isSaved:false` to every member on every request, and the app's repository
+ * threw for all three writes. The icon filled in, the catch emptied it again,
+ * and a saved listing was gone by the next refresh.
+ *
+ * The card also carried nobody's identity - `sellerId` was left at its default,
+ * so every listing in production appeared to belong to the same fictional
+ * member and no screen could tell the seller's own listing from a stranger's.
+ *
+ * Counts are counts. The seller learns that eleven people saved the listing,
+ * never which eleven: wanting a used sofa is not an introduction the buyer
+ * agreed to make.
+ */
+const listingColumns = (viewerParam: string) => `l.id,l.owner_id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,
+  COALESCE(cp.display_name,'TurkSquare üyesi') seller_name,
+  (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.kind='like') like_count,
+  (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.kind='share') share_count,
+  EXISTS(SELECT 1 FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.actor_id=${viewerParam} AND x.kind='save') is_saved,
+  EXISTS(SELECT 1 FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.actor_id=${viewerParam} AND x.kind='like') is_liked`;
+
+type ListingRow = { id: string; owner_id: string; title: string; description: string; price: string; city: string | null; region_code: string | null; created_at: Date; seller_name: string; like_count: string; share_count: string; is_saved: boolean; is_liked: boolean };
+
+// Category and condition are still the app's own vocabulary; the table has no
+// column for either, so the card falls back rather than inventing one here.
+const listingJson = (l: ListingRow) => ({ id:l.id, sellerId:l.owner_id, title:l.title, description:l.description, price:Number(l.price), category:'Diğer', condition:'', location:[l.city,l.region_code].filter(Boolean).join(', '), sellerName:l.seller_name, imageUrl:'', isSaved:l.is_saved, isLiked:l.is_liked, likeCount:Number(l.like_count), shareCount:Number(l.share_count), createdAt:l.created_at.toISOString() });
+
+const readListing = async (listingId: string, userId: string) => {
+  const row = await db.query<ListingRow>(`SELECT ${listingColumns('$2')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id WHERE l.id=$1 AND l.status='active'`, [listingId, userId]);
+  return row.rows[0] ?? null;
+};
+
+app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map(listingJson),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+
+app.put('/v1/marketplace/listings/:id/reactions/:kind', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const listingId = z.string().uuid().parse((request.params as { id: string }).id);
+    const kind = z.enum(['save','like']).parse((request.params as { kind: string }).kind);
+    const input = z.object({ enabled: z.boolean() }).parse(request.body);
+    // State, not delta: a retried tap on a flaky connection lands on the same
+    // answer as the first one.
+    if (input.enabled) await db.query("INSERT INTO marketplace_listing_reactions(listing_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND status='active') ON CONFLICT DO NOTHING", [listingId, userId, kind]);
+    else await db.query('DELETE FROM marketplace_listing_reactions WHERE listing_id=$1 AND actor_id=$2 AND kind=$3', [listingId, userId, kind]);
+    const listing = await readListing(listingId, userId);
+    if (!listing) return reply.code(404).send({ error: { code: 'LISTING_NOT_AVAILABLE', message: 'İlan bulunamadı.' } });
+    return { data: listingJson(listing) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'LISTING_REACTION_FAILED', message: 'İşlem kaydedilemedi.' } });
+  }
+});
+
+app.post('/v1/marketplace/listings/:id/shares', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const listingId = z.string().uuid().parse((request.params as { id: string }).id);
+    // Sharing the same listing twice is still one member telling their circle
+    // about it, so the count follows people rather than taps.
+    await db.query("INSERT INTO marketplace_listing_reactions(listing_id,actor_id,kind) SELECT $1,$2,'share' WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND status='active') ON CONFLICT DO NOTHING", [listingId, userId]);
+    const listing = await readListing(listingId, userId);
+    if (!listing) return reply.code(404).send({ error: { code: 'LISTING_NOT_AVAILABLE', message: 'İlan bulunamadı.' } });
+    return { data: listingJson(listing) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'LISTING_SHARE_FAILED', message: 'Paylaşım kaydedilemedi.' } });
+  }
+});
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/listings/:id/auction',async(request,reply)=>{try{const userId=await viewer(request.headers);const listingId=z.string().uuid().parse((request.params as {id:string}).id);const input=auctionBody.parse(request.body);const eligible=await db.query('SELECT 1 FROM member_capabilities WHERE user_id=$1 AND auction_seller_eligible',[userId]);if(!eligible.rows[0])return reply.code(403).send({error:{code:'VERIFICATION_REQUIRED',message:'İhale açmak için Onaylı Hesap rozeti gerekir.'}});const row=await db.query<{id:string}>('INSERT INTO marketplace_auctions(listing_id,seller_id,starting_price,minimum_increment,starts_at,ends_at) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND owner_id=$2 AND status=\'active\') RETURNING id',[listingId,userId,input.startingPrice,input.minimumIncrement,input.startsAt,input.endsAt]);if(!row.rows[0])return reply.code(404).send({error:{code:'LISTING_NOT_AVAILABLE'}});return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'AUCTION_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/auctions/:id/bids',async(request,reply)=>{const client=await db.connect();try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=bidBody.parse(request.body);await client.query('BEGIN');const auction=await client.query<{seller_id:string;starting_price:string;minimum_increment:string;starts_at:Date;ends_at:Date;status:string}>('SELECT seller_id,starting_price,minimum_increment,starts_at,ends_at,status FROM marketplace_auctions WHERE id=$1 FOR UPDATE',[id]);const a=auction.rows[0];
