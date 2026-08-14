@@ -37,8 +37,11 @@ import 'features/marketplace/data/repositories/mock_marketplace_repository.dart'
 import 'features/marketplace/data/repositories/api_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/cached_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer.dart';
+import 'features/profile/application/friendship_controller.dart';
 import 'features/profile/application/profile_controller.dart';
+import 'features/profile/data/repositories/api_friendship_repository.dart';
 import 'features/profile/data/repositories/api_profile_repository.dart';
+import 'features/profile/data/repositories/mock_friendship_repository.dart';
 import 'features/profile/data/repositories/mock_profile_repository.dart';
 import 'features/profile/domain/repositories/profile_repository.dart';
 import 'features/journey/application/journey_controller.dart';
@@ -268,6 +271,15 @@ Future<void> main() async {
       : ApiProfileRepository(client: communityApiClient);
   final profileController = ProfileController(repository: profileRepository);
 
+  // Arkadaşlık, profildeki sayıdan ibaret değil: sunucuda kimin hangi
+  // paylaşımı gördüğü, kimin Story'sinin çıktığı ve kimin kiminle
+  // mesajlaşabildiği bu ilişkiye bakıyor.
+  final friendshipController = FriendshipController(
+    repository: useMockServices
+        ? MockFriendshipRepository()
+        : ApiFriendshipRepository(client: communityApiClient),
+  );
+
   final JourneyRepository journeyRepository = useMockServices
       ? const MockJourneyRepository()
       : ApiJourneyRepository(client: communityApiClient);
@@ -357,6 +369,7 @@ Future<void> main() async {
       eventsController: eventsController,
       marketplaceController: marketplaceController,
       profileController: profileController,
+      friendshipController: friendshipController,
       journeyController: journeyController,
       messagingController: messagingController,
       directMessageRepository: directMessageRepository,

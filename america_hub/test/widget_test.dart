@@ -1,3 +1,5 @@
+import 'package:america_hub/features/profile/application/friendship_controller.dart';
+import 'package:america_hub/features/profile/data/repositories/mock_friendship_repository.dart';
 import 'package:america_hub/app/app.dart';
 import 'package:america_hub/core/network/api_client.dart';
 import 'package:america_hub/core/storage/in_memory_session_store.dart';
@@ -72,6 +74,9 @@ void main() {
         eventsController: EventsController(repository: MockEventsRepository()),
         marketplaceController: MarketplaceController(repository: MockMarketplaceRepository()),
         profileController: ProfileController(repository: MockProfileRepository()),
+        friendshipController: FriendshipController(
+          repository: MockFriendshipRepository(),
+        ),
         journeyController: JourneyController(repository: const MockJourneyRepository()),
         messagingController: MessagingController(repository: MockMessagingRepository()),
         directMessageRepository: MockDirectMessageRepository(),

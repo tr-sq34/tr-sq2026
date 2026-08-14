@@ -147,6 +147,7 @@ class _NotificationTile extends StatelessWidget {
 
   static IconData _iconFor(AppNotificationType type) => switch (type) {
     AppNotificationType.specialRequest => Icons.volunteer_activism_rounded,
+    AppNotificationType.friendRequest => Icons.person_add_alt_1_outlined,
     AppNotificationType.postComment => Icons.mode_comment_outlined,
     AppNotificationType.postLike => Icons.favorite_border_rounded,
     AppNotificationType.listingSaved => Icons.bookmark_border_rounded,

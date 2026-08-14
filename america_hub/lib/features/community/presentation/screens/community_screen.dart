@@ -16,6 +16,8 @@ import '../../application/story_controller.dart';
 import '../../application/community_comments_controller.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
+import '../../../profile/application/friendship_controller.dart';
+import '../../../profile/domain/entities/friendship.dart';
 import '../../../promotions/application/promotions_controller.dart';
 import '../widgets/comments_sheet.dart';
 import '../widgets/post_requests_sheet.dart';
@@ -38,6 +40,7 @@ class CommunityScreen extends StatefulWidget {
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
+    required this.friendshipController,
     required this.moderationRepository,
     required this.promotionsController,
     this.viewer,
@@ -48,6 +51,10 @@ class CommunityScreen extends StatefulWidget {
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+
+  /// Arkadaşlık isteği akıştan gönderiliyor: uygulamada başka bir üyenin
+  /// profilini açan hiçbir ekran yok, karşılaşma yeri burası.
+  final FriendshipController friendshipController;
 
   /// Story oluşturma akışındaki "Tanıtım Yap" adımı buradan gönderilir:
   /// paylaşılan görsel, sponsorlu alan talebinin de görseli olur.
@@ -118,6 +125,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         commentsController: widget.commentsController,
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
+        friendshipController: widget.friendshipController,
         moderationRepository: widget.moderationRepository,
         promotionsController: widget.promotionsController,
         viewer: widget.viewer,
@@ -134,6 +142,7 @@ class _Feed extends StatefulWidget {
     required this.commentsController,
     required this.mediaUploadController,
     required this.specialRequestController,
+    required this.friendshipController,
     required this.moderationRepository,
     required this.promotionsController,
     this.viewer,
@@ -144,6 +153,7 @@ class _Feed extends StatefulWidget {
   final CommunityCommentsController commentsController;
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
+  final FriendshipController friendshipController;
   final ContentModerationRepository moderationRepository;
   final PromotionsController promotionsController;
   final AppUser? viewer;
@@ -255,6 +265,37 @@ class _FeedState extends State<_Feed> {
     if (shouldDelete == true) await widget.controller.deletePost(post.id);
   }
 
+  /// Arkadaşlık isteği. Karşı taraf da istek göndermişse sunucu bunu doğrudan
+  /// arkadaşlığa çeviriyor, o yüzden mesaj dönen duruma bakıyor.
+  Future<void> _addFriend(CommunityPost post) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final sent = await widget.friendshipController.send(post.ownerId);
+    if (!mounted) return;
+    if (!sent) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.friendshipController.errorMessage ??
+                'İstek şu anda gönderilemedi.',
+          ),
+        ),
+      );
+      return;
+    }
+    final becameFriends =
+        widget.friendshipController.statusOf(post.ownerId) ==
+        FriendshipStatus.friends;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          becameFriends
+              ? '${post.authorName} ile artık arkadaşsınız.'
+              : 'Arkadaşlık isteği gönderildi.',
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -356,6 +397,16 @@ class _FeedState extends State<_Feed> {
                 post: post,
                 onToggleLike: widget.controller.toggleLike,
                 specialRequestController: widget.specialRequestController,
+                friendshipController: widget.friendshipController,
+                // Kendi paylaşımına arkadaşlık isteği gönderilemez ve kimliği
+                // bilinmeyen bir yazara da: sunucu ikisini de reddeder.
+                onAddFriend:
+                    post.isAuthor ||
+                        post.ownerId == _viewerId ||
+                        post.ownerId.isEmpty ||
+                        post.ownerId == 'local-user'
+                    ? null
+                    : () => _addFriend(post),
                 moderationRepository: widget.moderationRepository,
                 // Sunucu artık hem yazanın kimliğini hem de doğrudan cevabı
                 // gönderiyor. İkisi de duruyor çünkü ikisi ayrı soruya cevap
@@ -879,9 +930,11 @@ class _PostCard extends StatelessWidget {
     required this.onToggleLike,
     required this.onOpenComments,
     required this.specialRequestController,
+    required this.friendshipController,
     required this.moderationRepository,
     required this.onVote,
     this.onDelete,
+    this.onAddFriend,
   });
   final CommunityPost post;
   final ValueChanged<String> onToggleLike;
@@ -892,8 +945,12 @@ class _PostCard extends StatelessWidget {
   final void Function(String postId, String pollId, Set<String> optionIds)
   onVote;
   final CommunitySpecialRequestController specialRequestController;
+  final FriendshipController friendshipController;
   final ContentModerationRepository moderationRepository;
   final VoidCallback? onDelete;
+
+  /// Null: kendi paylaşımı ya da yazarı belli olmayan bir paylaşım.
+  final VoidCallback? onAddFriend;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -948,39 +1005,63 @@ class _PostCard extends StatelessWidget {
                 ],
               ),
             ),
-            PopupMenuButton<String>(
-              icon: const Icon(
-                Icons.more_horiz_rounded,
-                color: AppColors.textMuted,
+            AnimatedBuilder(
+              animation: friendshipController,
+              builder: (context, _) => PopupMenuButton<String>(
+                icon: const Icon(
+                  Icons.more_horiz_rounded,
+                  color: AppColors.textMuted,
+                ),
+                onSelected: (value) {
+                  if (value == 'delete') onDelete?.call();
+                  if (value == 'friend') onAddFriend?.call();
+                  // Was a snackbar that promised a review nobody was doing. It
+                  // now files a real report against the post id, which is what
+                  // the moderation queue and the 24-hour deadline hang off.
+                  if (value == 'report')
+                    showContentReportSheet(
+                      context,
+                      repository: moderationRepository,
+                      targetType: ContentReportTarget.post,
+                      targetId: post.id,
+                      subjectLabel: post.authorName,
+                    );
+                },
+                itemBuilder: (_) => [
+                  if (onDelete != null)
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Text('Paylaşımı sil'),
+                    ),
+                  // Durumu bilinen bir ilişkide "Arkadaş ekle" yazmak yanlış
+                  // olurdu: zaten arkadaşsanız ya da istek beklemedeyse
+                  // düğme bunu söylüyor ve tıklanmıyor.
+                  if (onAddFriend != null)
+                    PopupMenuItem(
+                      value: 'friend',
+                      enabled:
+                          friendshipController.statusOf(post.ownerId) ==
+                          FriendshipStatus.none,
+                      child: Text(
+                        switch (friendshipController.statusOf(post.ownerId)) {
+                          FriendshipStatus.friends => 'Arkadaşınız',
+                          FriendshipStatus.pendingOutgoing => 'İstek gönderildi',
+                          FriendshipStatus.pendingIncoming =>
+                            'Sana istek gönderdi',
+                          FriendshipStatus.blocked => 'Engellendi',
+                          FriendshipStatus.none => 'Arkadaş ekle',
+                        },
+                      ),
+                    ),
+                  // Only offered on someone else's post: the service rejects a
+                  // self-report, so showing it there would be a dead end.
+                  if (onDelete == null)
+                    const PopupMenuItem(
+                      value: 'report',
+                      child: Text('Şikâyet et'),
+                    ),
+                ],
               ),
-              onSelected: (value) {
-                if (value == 'delete') onDelete?.call();
-                // Was a snackbar that promised a review nobody was doing. It
-                // now files a real report against the post id, which is what
-                // the moderation queue and the 24-hour deadline hang off.
-                if (value == 'report')
-                  showContentReportSheet(
-                    context,
-                    repository: moderationRepository,
-                    targetType: ContentReportTarget.post,
-                    targetId: post.id,
-                    subjectLabel: post.authorName,
-                  );
-              },
-              itemBuilder: (_) => [
-                if (onDelete != null)
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Text('Paylaşımı sil'),
-                  ),
-                // Only offered on someone else's post: the service rejects a
-                // self-report, so showing it there would be a dead end.
-                if (onDelete == null)
-                  const PopupMenuItem(
-                    value: 'report',
-                    child: Text('Şikâyet et'),
-                  ),
-              ],
             ),
           ],
         ),

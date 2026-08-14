@@ -11,6 +11,7 @@ import '../../../community/domain/repositories/community_repository.dart';
 import '../../../community/application/community_special_request_controller.dart';
 import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
+import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../journey/application/journey_controller.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
@@ -56,6 +57,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.eventsController,
     required this.marketplaceController,
     required this.profileController,
+    required this.friendshipController,
     required this.journeyController,
     required this.onSignOut,
     required this.homeController,
@@ -78,6 +80,7 @@ class MainLayoutScreen extends StatefulWidget {
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
   final ProfileController profileController;
+  final FriendshipController friendshipController;
   final JourneyController journeyController;
   final Future<void> Function() onSignOut;
   final CommunityHomeController homeController;
@@ -141,6 +144,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         commentsController: widget.commentsController,
         mediaUploadController: widget.mediaUploadController,
         specialRequestController: widget.specialRequestController,
+        friendshipController: widget.friendshipController,
         moderationRepository: widget.contentModerationRepository,
         promotionsController: widget.promotionsController,
         viewer: widget.authController.user,
@@ -153,6 +157,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
     ProfileScreen(
       controller: widget.profileController,
+      friendshipController: widget.friendshipController,
       journeyController: widget.journeyController,
       onSignOut: widget.onSignOut,
       memberCapabilitiesController: widget.memberCapabilitiesController,
@@ -360,7 +365,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   /// tazeleniyor.
   void _selectPage(int index) {
     setState(() => _currentIndex = index);
-    if (index == 3) widget.profileController.load();
+    if (index == 3) {
+      widget.profileController.load();
+      // Gelen kutusu profille birlikte tazeleniyor: kabul edilen bir istek
+      // hem listeyi hem başlıktaki arkadaş sayısını değiştiriyor.
+      widget.friendshipController.load();
+    }
     if (index == 0) widget.homeController.load();
   }
 
