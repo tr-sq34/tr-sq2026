@@ -25,6 +25,27 @@ export type EventRow = {
   cancellationReason: string | null;
 };
 
+/**
+ * Uygulamanın etkinlik kategorileri. Değerler İngilizce çünkü uygulama bu
+ * anahtarlara göre hem süzüyor hem de her birine ait kapak görselini çiziyor;
+ * listedeki olmayan bir kategori, kimsenin ulaşamadığı bir etkinlik demek.
+ * Bu yüzden panelde serbest metin değil, seçim.
+ */
+export const EVENT_CATEGORIES: ReadonlyArray<[value: string, label: string]> = [
+  ['Community', 'Topluluk'],
+  ['Culture', 'Kültür'],
+  ['Cinema', 'Sinema'],
+  ['Exhibition', 'Sergi'],
+  ['Music', 'Konser'],
+  ['Travel', 'Gezi'],
+  ['Workshop', 'Atölye'],
+  ['Food', 'Lezzet'],
+  ['Festival', 'Festival'],
+  ['Family', 'Aile'],
+];
+
+export const categoryLabel = (value: string) => EVENT_CATEGORIES.find(([key]) => key === value)?.[1] ?? value;
+
 export const EVENT_STATUS_LABELS: Record<string, string> = {
   draft: 'Taslak',
   published: 'Yayında',

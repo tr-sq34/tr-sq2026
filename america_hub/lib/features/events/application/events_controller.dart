@@ -39,6 +39,15 @@ class EventsController extends PagedController<CommunityEvent> {
     return filtered;
   }
 
+  /// Süzgeç listesi elde ne varsa ondan çıkıyor. Sabit bir liste, panelden yeni
+  /// bir kategori yayınlandığı gün onu görünmez yapardı; ekranın kapak
+  /// görselleri olan dokuz kategori ise zaten bu listenin içinden geliyor.
+  List<String> get availableCategories =>
+      (items.map((event) => event.category).toSet().toList()..sort());
+
+  List<String> get availableCities =>
+      (items.map((event) => event.city).where((city) => city.isNotEmpty).toSet().toList()..sort());
+
   void updateFilters({String? category, String? city, EventDateFilter? dateFilter, EventSort? sort}) {
     _category = category ?? _category;
     _city = city ?? _city;

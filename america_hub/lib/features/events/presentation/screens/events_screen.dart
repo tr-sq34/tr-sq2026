@@ -36,7 +36,7 @@ class _EventsScreenState extends State<EventsScreen> {
   }
 
   Future<void> _pickCategory() async {
-    final value = await showModalBottomSheet<String>(context: context, builder: (_) => _FilterSheet<String>(title: 'Kategori sec', values: const ['all', 'Culture', 'Cinema', 'Exhibition', 'Music', 'Travel', 'Workshop', 'Food', 'Festival', 'Family', 'Community'], label: _categoryLabel));
+    final value = await showModalBottomSheet<String>(context: context, builder: (_) => _FilterSheet<String>(title: 'Kategori sec', values: ['all', ...widget.controller.availableCategories], label: _categoryLabel));
     if (value != null && mounted) widget.controller.updateFilters(category: value);
   }
 
