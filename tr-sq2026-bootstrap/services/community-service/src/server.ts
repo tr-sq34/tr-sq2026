@@ -122,6 +122,44 @@ app.post('/v1/internal/gatework/system-accounts', { config: { rateLimit: { max: 
   }
 });
 
+/// The official accounts, for the console to pick from.
+///
+/// Creating one returned an id and nothing ever listed them again, so an editor
+/// had to keep a UUID somewhere outside the product and paste it into every
+/// publish form. A wrong paste was not caught by the form - it was caught by
+/// the publish endpoint, after the article had been written - and a UUID does
+/// not tell you which account you got.
+///
+/// The counts travel with the row because "which account is this" is answered
+/// by what it has published, not by its id.
+app.get('/v1/internal/gatework/system-accounts', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const rows = await db.query<{ user_id: string; display_name: string | null; active: boolean; created_at: Date; news_count: string; post_count: string }>(
+      `SELECT s.user_id,p.display_name,s.active,s.created_at,
+              (SELECT count(*) FROM news_articles a WHERE a.author_id=s.user_id AND a.deleted_at IS NULL) news_count,
+              (SELECT count(*) FROM community_posts c WHERE c.author_id=s.user_id AND c.deleted_at IS NULL) post_count
+         FROM community_system_accounts s
+         LEFT JOIN community_profile_projection p ON p.user_id=s.user_id
+        WHERE s.role='official'
+        ORDER BY s.active DESC, p.display_name ASC`,
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.user_id,
+        displayName: row.display_name,
+        active: row.active,
+        createdAt: row.created_at.toISOString(),
+        newsCount: Number(row.news_count),
+        postCount: Number(row.post_count),
+      })),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNTS_UNAVAILABLE', message: 'Resmî hesaplar okunamadı.' } });
+  }
+});
+
 app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
   try {
     const actor = await gateworkActor(request.headers);
@@ -2921,6 +2959,65 @@ app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWin
     } finally { client.release(); }
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_REJECTED' } });
+  }
+});
+
+/// What the console shows an editor after they publish.
+///
+/// The public listing is not usable here: it hides anything scheduled for later
+/// and carries the viewer's own reaction, which an operator does not have. This
+/// one shows scheduled pieces too - an article dated for tomorrow is invisible
+/// everywhere else, so the only way to notice a wrong date was to wait for it.
+///
+/// Read-only, and it never returns the body: the list is for deciding which
+/// piece to act on, not for reading them in the panel.
+const gateworkNewsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  category: z.enum(newsCategories).optional(),
+});
+
+app.get('/v1/internal/gatework/news', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'auditor']);
+    const input = gateworkNewsQuery.parse(request.query);
+    const rows = await db.query<{
+      id: string; title: string; summary: string; category: string; author_id: string; author_name: string;
+      region_code: string | null; published_at: Date; headline_rank: number | null; comments_enabled: boolean;
+      hero_url: string | null; comment_count: string; reaction_count: string;
+    }>(
+      `SELECT a.id,a.title,a.summary,a.category,a.author_id,a.author_name,a.region_code,a.published_at,
+              a.headline_rank,a.comments_enabled,m.safe_url hero_url,
+              (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
+              (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id) reaction_count
+         FROM news_articles a
+         LEFT JOIN media_assets m ON m.id=a.hero_media_id AND m.status='ready'
+        WHERE a.deleted_at IS NULL AND ($2::text IS NULL OR a.category=$2)
+        ORDER BY a.published_at DESC, a.id DESC
+        LIMIT $1`,
+      [input.limit, input.category ?? null],
+    );
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        id: row.id,
+        title: row.title,
+        summary: row.summary,
+        category: row.category,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        regionCode: row.region_code,
+        publishedAt: row.published_at.toISOString(),
+        // The distinction the public list erases: written, but not yet readable.
+        live: row.published_at.getTime() <= Date.now(),
+        headlineRank: row.headline_rank,
+        commentsEnabled: row.comments_enabled,
+        imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
+        commentCount: Number(row.comment_count),
+        reactionCount: Number(row.reaction_count),
+      }))),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
   }
 });
 
