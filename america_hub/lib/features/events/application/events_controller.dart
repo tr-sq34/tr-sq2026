@@ -2,15 +2,23 @@ import '../../../core/pagination/paged_controller.dart';
 import '../domain/entities/community_event.dart';
 import '../domain/repositories/events_repository.dart';
 
-enum EventDateFilter { all, next30Days, august }
+/// Süzgeçteki üçüncü seçenek `august` idi ve tam olarak ağustos ayını
+/// süzüyordu: yazıldığı ay. Aralıkta açan birine "Ağustos" diye bir seçenek
+/// gösterip her seferinde boş liste veriyordu. Yerine bulunulan ay geçti.
+enum EventDateFilter { all, next30Days, thisMonth }
 enum EventSort { soonest, popular }
 
 class EventsController extends PagedController<CommunityEvent> {
-  EventsController({required EventsRepository repository})
+  EventsController({required EventsRepository repository, DateTime Function()? now})
       : _repository = repository,
+        _now = now ?? DateTime.now,
         super(dataSource: repository, pageSize: 20);
 
   final EventsRepository _repository;
+
+  /// Tarih süzgeçleri "şimdi"ye bakıyor; testin onu sabitleyebilmesi için
+  /// dışarıdan verilebiliyor.
+  final DateTime Function() _now;
   String _category = 'all';
   String _city = 'all';
   EventDateFilter _dateFilter = EventDateFilter.all;
@@ -25,9 +33,12 @@ class EventsController extends PagedController<CommunityEvent> {
     final filtered = items.where((event) {
       if (_category != 'all' && event.category != _category) return false;
       if (_city != 'all' && event.city != _city) return false;
-      if (_dateFilter == EventDateFilter.august && event.startsAt.month != 8) return false;
+      if (_dateFilter == EventDateFilter.thisMonth) {
+        final now = _now();
+        if (event.startsAt.year != now.year || event.startsAt.month != now.month) return false;
+      }
       if (_dateFilter == EventDateFilter.next30Days) {
-        final now = DateTime.now();
+        final now = _now();
         final until = now.add(const Duration(days: 30));
         if (event.startsAt.isBefore(now) || event.startsAt.isAfter(until)) return false;
       }

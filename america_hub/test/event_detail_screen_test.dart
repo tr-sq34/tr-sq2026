@@ -82,7 +82,7 @@ void main() {
 
     expect(find.text('Bu etkinlik iptal edildi'), findsOneWidget);
     expect(find.text('Mekan son anda kapandı.'), findsOneWidget);
-    expect(find.text('Katilacagim'), findsNothing);
+    expect(find.text('Katılacağım'), findsNothing);
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNull);
   });
@@ -91,7 +91,7 @@ void main() {
   testWidgets('kalan kontenjan yaziyor', (tester) async {
     await pumpDetail(tester, buildEvent(capacity: 20, attendeeCount: 12));
 
-    expect(find.text('8 kisilik yer kaldi'), findsOneWidget);
+    expect(find.text('8 kişilik yer kaldı'), findsOneWidget);
   });
 
   testWidgets('kontenjan dolunca katilim dugmesi kapali', (tester) async {
@@ -107,7 +107,7 @@ void main() {
     await pumpDetail(tester, buildEvent());
 
     expect(find.textContaining('yer kaldi'), findsNothing);
-    expect(find.text('Katilacagim'), findsOneWidget);
+    expect(find.text('Katılacağım'), findsOneWidget);
   });
 
   // Katilim reddedilirse eskiden hicbir sey gorunmuyordu: yazi eski haline
@@ -115,7 +115,7 @@ void main() {
   testWidgets('katilim kaydedilemezse kullaniciya soyleniyor', (tester) async {
     await pumpDetail(tester, buildEvent(), failRsvp: true);
 
-    await tester.tap(find.text('Katilacagim'));
+    await tester.tap(find.text('Katılacağım'));
     await tester.pumpAndSettle();
 
     expect(find.text('Katılım kaydedilemedi, tekrar dene.'), findsOneWidget);
@@ -127,13 +127,13 @@ void main() {
       buildEvent(externalUrl: 'https://etkinlik.example/bilet'),
     );
 
-    expect(find.text('Bilet ve kayit sayfasi'), findsOneWidget);
+    expect(find.text('Bilet ve kayıt sayfası'), findsOneWidget);
   });
 
   testWidgets('baglantisi olmayan etkinlikte uydurma vaat yok', (tester) async {
     await pumpDetail(tester, buildEvent());
 
-    expect(find.text('Bilet ve kayit sayfasi'), findsNothing);
+    expect(find.text('Bilet ve kayıt sayfası'), findsNothing);
     // Uc satirlik sabit "avantaj" listesi kaldirildi: ucu de her etkinlikte
     // ayni yaziyordu ve hicbirinin karsiligi yoktu.
     expect(find.text('Mobil etkinlik bileti'), findsNothing);
