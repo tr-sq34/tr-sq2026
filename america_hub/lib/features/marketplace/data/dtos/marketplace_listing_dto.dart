@@ -1,3 +1,4 @@
+import '../../domain/entities/marketplace_category.dart';
 import '../../domain/entities/marketplace_listing.dart';
 
 class MarketplaceListingDto {
@@ -40,7 +41,9 @@ class MarketplaceListingDto {
       MarketplaceListingDto(
         id: json['id'] as String,
         title: json['title'] as String,
-        category: json['category'] as String? ?? 'Diğer',
+        // Kategori anahtar olarak geliyor; ekrandaki söz [MarketplaceCategory]
+        // içinde duruyor. Eski ilanlar 'other' ile kayıtlı.
+        category: json['category'] as String? ?? MarketplaceCategory.other.key,
         price: (json['price'] as num?)?.toDouble() ?? 0,
         condition: json['condition'] as String? ?? '',
         location: json['location'] as String? ?? '',

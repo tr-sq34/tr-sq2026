@@ -106,14 +106,9 @@ class MarketplaceListingDraft {
   MarketplaceListingDraft copyWith({String? title, double? price, String? description, String? category, String? location, List<String>? mediaUrls, List<String>? mediaIds, Map<String, String>? fields, bool? hideExactLocation, bool? commentsEnabled, bool? autoReplyEnabled}) => MarketplaceListingDraft(type: type, title: title ?? this.title, price: price ?? this.price, description: description ?? this.description, category: category ?? this.category, location: location ?? this.location, mediaUrls: mediaUrls ?? this.mediaUrls, mediaIds: mediaIds ?? this.mediaIds, fields: fields ?? this.fields, hideExactLocation: hideExactLocation ?? this.hideExactLocation, commentsEnabled: commentsEnabled ?? this.commentsEnabled, autoReplyEnabled: autoReplyEnabled ?? this.autoReplyEnabled);
 }
 
-class MarketplaceAnalysisSuggestion {
-  const MarketplaceAnalysisSuggestion({required this.title, required this.category, required this.suggestedPrice, required this.description});
-  final String title;
-  final String category;
-  final double suggestedPrice;
-  final String description;
-}
-
-abstract interface class MarketplaceListingAnalyzer {
-  Future<MarketplaceAnalysisSuggestion> analyze({required MarketplaceListingType type, required List<String> mediaUrls});
-}
+// Burada bir "MarketplaceListingAnalyzer" vardı: ilan düzenleyicisindeki "AI
+// ile taslağı doldur" düğmesi ona bağlıydı ve arkasındaki tek gerçekleştirim,
+// ilan türüne bakıp başlık, kategori, fiyat ve açıklama uyduran yerel bir
+// sınıftı. Fotoğrafa hiç bakmadığı halde "Fotoğrafa göre oluşturulan taslak
+// açıklama" yazıyor, satılık bir araca kendiliğinden 8500 fiyat koyuyordu.
+// Böyle bir servis yok; olduğu gün geri gelir.

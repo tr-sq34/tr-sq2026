@@ -5,6 +5,7 @@ import '../../../core/pagination/paged_controller.dart';
 import '../../community/domain/entities/community_post.dart';
 import '../../community/domain/entities/post_media_upload.dart';
 import '../../community/domain/repositories/media_upload_repository.dart';
+import '../domain/entities/marketplace_category.dart';
 import '../domain/entities/marketplace_listing.dart';
 import '../domain/entities/marketplace_seller.dart';
 import '../domain/repositories/marketplace_repository.dart';
@@ -13,13 +14,12 @@ enum MarketplaceSort { newest, priceLowToHigh, priceHighToLow }
 enum MarketplaceFeed { forYou, local }
 
 class MarketplaceController extends PagedController<MarketplaceListing> {
-  MarketplaceController({required MarketplaceRepository repository, MarketplaceListingAnalyzer? analyzer, CacheStore? draftStore, MediaUploadRepository? mediaUploads}) : _repository = repository, _analyzer = analyzer, _draftStore = draftStore, _mediaUploads = mediaUploads, super(dataSource: repository, pageSize: 20);
+  MarketplaceController({required MarketplaceRepository repository, CacheStore? draftStore, MediaUploadRepository? mediaUploads}) : _repository = repository, _draftStore = draftStore, _mediaUploads = mediaUploads, super(dataSource: repository, pageSize: 20);
   final MarketplaceRepository _repository;
 
   /// Bildirimden açılan ilan listede olmayabilir; sunucudan tek tek isteniyor.
   Future<MarketplaceListing> getListing(String listingId) =>
       _repository.getListing(listingId);
-  final MarketplaceListingAnalyzer? _analyzer;
   final CacheStore? _draftStore;
   final MediaUploadRepository? _mediaUploads;
   String _query = '';
@@ -41,7 +41,9 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
   List<MarketplaceListing> get visibleItems {
     final query = _query.trim().toLowerCase();
     final result = items.where((listing) {
-      final matches = query.isEmpty || listing.title.toLowerCase().contains(query) || listing.location.toLowerCase().contains(query) || listing.category.toLowerCase().contains(query);
+        // Arama ekrandaki sözle eşleşiyor, sunucudaki anahtarla değil: kimse
+      // "vehicle" yazmıyor, "araç" yazıyor.
+      final matches = query.isEmpty || listing.title.toLowerCase().contains(query) || listing.location.toLowerCase().contains(query) || MarketplaceCategory.labelOf(listing.category).toLowerCase().contains(query);
       final local = _feed != MarketplaceFeed.local || listing.location.contains('New York') || listing.location.contains('Paterson') || listing.location.contains('Jersey');
       return matches && local && (_category == 'all' || listing.category == _category) && (!_savedOnly || listing.isSaved);
     }).toList(growable: false);
@@ -88,9 +90,12 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
   Future<void> loadSellerDashboard() async { try { dashboard = await _repository.getSellerDashboard(); } catch (_) { return; } notifyListeners(); }
   Future<MarketplaceSellerProfile> sellerProfile(String sellerId) => _repository.getSellerProfile(sellerId);
   Future<List<MarketplaceListing>> sellerListings(String sellerId) => _repository.getSellerListings(sellerId);
-  Future<void> beginDraft(MarketplaceListingType type) async { draft = MarketplaceListingDraft(type: type); await _restoreDraft(); notifyListeners(); }
+  /// Taslak, satıcının seçtiği ilan türüne uyan bölümde başlıyor: "Araç"
+  /// seçtiyse bölüm de Araçlar, bu bir tahmin değil aynı sorunun cevabı.
+  /// Diğer türlerde tür bölümü belirlemiyor, o yüzden "Diğer" başlıyorlar ve
+  /// satıcı düzenleyicide değiştiriyor.
+  Future<void> beginDraft(MarketplaceListingType type) async { draft = MarketplaceListingDraft(type: type, category: type == MarketplaceListingType.vehicle ? MarketplaceCategory.vehicle.key : MarketplaceCategory.other.key); await _restoreDraft(); notifyListeners(); }
   Future<void> updateDraft(MarketplaceListingDraft value) async { draft = value; await _persistDraft(); notifyListeners(); }
-  Future<MarketplaceAnalysisSuggestion?> analyzeDraft() async { final value = draft; if (value == null || _analyzer == null) return null; final suggestion = await _analyzer.analyze(type: value.type, mediaUrls: value.mediaUrls); await updateDraft(value.copyWith(title: value.title.isEmpty ? suggestion.title : value.title, category: value.category.isEmpty ? suggestion.category : value.category, price: value.price ?? suggestion.suggestedPrice, description: value.description.isEmpty ? suggestion.description : value.description)); return suggestion; }
   String? validateDraft() { final value = draft; if (value == null) return 'Taslak bulunamadi.'; if (value.title.trim().isEmpty) return 'Baslik zorunludur.'; if (value.price == null || value.price! <= 0) return 'Gecerli bir fiyat girin.'; if (value.type == MarketplaceListingType.vehicle && (value.fields['make'] ?? '').trim().isEmpty) return 'Arac markasi zorunludur.'; if (value.type == MarketplaceListingType.home && (value.fields['propertyType'] ?? '').trim().isEmpty) return 'Mulk turu zorunludur.'; return null; }
   /// İlana fotoğraf ekleme. Yükleme akışı Topluluk'takiyle aynı akış: dosya
   /// önce karantinaya çıkıyor, taraması bitene kadar bekleniyor, ancak "ready"

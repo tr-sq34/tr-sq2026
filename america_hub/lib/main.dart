@@ -36,7 +36,6 @@ import 'features/marketplace/application/marketplace_controller.dart';
 import 'features/marketplace/data/repositories/mock_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/api_marketplace_repository.dart';
 import 'features/marketplace/data/repositories/cached_marketplace_repository.dart';
-import 'features/marketplace/data/repositories/mock_marketplace_listing_analyzer.dart';
 import 'features/profile/application/friendship_controller.dart';
 import 'features/profile/application/profile_controller.dart';
 import 'features/profile/data/repositories/api_friendship_repository.dart';
@@ -156,7 +155,8 @@ Future<void> main() async {
   // üyenin kendi paylaşımını başkasının adıyla görmesi demekti.
   final mockCommunityRemote = MockCommunityRepository(
     viewer: () => authController.user,
-    viewerRegion: () async => (await mockAuthRepository.getOnboarding()).regionCode,
+    viewerRegion: () async =>
+        (await mockAuthRepository.getOnboarding()).regionCode,
   );
   final CommunityRepository communityRemote = useMockServices
       ? mockCommunityRemote
@@ -252,7 +252,6 @@ Future<void> main() async {
           : ApiMarketplaceRepository(client: communityApiClient),
       cacheStore: cacheStore,
     ),
-    analyzer: MockMarketplaceListingAnalyzer(),
     draftStore: cacheStore,
     // İlan fotoğrafları Topluluk'takiyle aynı yükleme akışını kullanıyor:
     // dosya karantinaya çıkıyor, taraması bitmeden ilana yazılmıyor.

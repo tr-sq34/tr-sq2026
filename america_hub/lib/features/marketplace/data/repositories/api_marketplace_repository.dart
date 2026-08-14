@@ -2,6 +2,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/network/api_endpoints.dart';
 import '../../../../core/network/api_response.dart';
 import '../../../../core/pagination/cursor_page.dart';
+import '../../domain/entities/marketplace_category.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/repositories/marketplace_repository.dart';
 import '../dtos/marketplace_listing_dto.dart';
@@ -50,6 +51,7 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
     );
     return envelope.data;
   }
+
   /// Satış merkezinin sayıları. Buradaki her şey daha önce sabit sıfır
   /// döndüren yerel bir karşılıktı: üç ilanına on bir kaydetme gelmiş bir
   /// üyeye "hiç yok" yazıyordu ve bu, boş bir panelden daha kötü, çünkü bir
@@ -144,6 +146,7 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
         'title': draft.title,
         'description': draft.description,
         'price': draft.price,
+        'category': draft.category,
         'city': draft.location.isEmpty ? null : draft.location,
         // Sunucuya adres değil kimlik gidiyor: hangi fotoğrafın kime ait
         // olduğuna ve taramadan geçip geçmediğine orada bakılıyor.
@@ -154,7 +157,9 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
     return MarketplaceListing(
       id: data['id'] as String,
       title: draft.title,
-      category: draft.category.isEmpty ? 'Diğer' : draft.category,
+      category: draft.category.isEmpty
+          ? MarketplaceCategory.other.key
+          : draft.category,
       price: draft.price ?? 0,
       condition: draft.fields['condition'] ?? '',
       location: draft.location,
