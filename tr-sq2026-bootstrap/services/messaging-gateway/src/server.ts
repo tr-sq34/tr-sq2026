@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -39,6 +39,30 @@ const app = Fastify({
       'req.body.body',
     ],
   },
+});
+
+/**
+ * The last stop for anything a handler did not catch. Whatever slips past the
+ * per-route try/catch went out as Fastify's default 500 with the exception's
+ * own message in it - a ZodError's dump of the schema, or a Matrix client error
+ * carrying the homeserver's own wording. Neither belongs in a response, and
+ * neither is a sentence a screen can show.
+ */
+app.setErrorHandler((error: FastifyError, request, reply) => {
+  if (error instanceof z.ZodError) {
+    request.log.warn({ url: request.url, issues: error.issues }, 'request body rejected by schema');
+    return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'Gönderilen bilgiler geçersiz.' } });
+  }
+  const status = error.statusCode ?? 500;
+  if (status === 429) {
+    return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Çok fazla istek gönderildi. Lütfen biraz sonra tekrar deneyin.' } });
+  }
+  if (status >= 400 && status < 500) {
+    request.log.warn({ url: request.url, err: error }, 'request rejected');
+    return reply.code(status).send({ error: { code: 'BAD_REQUEST', message: 'İstek işlenemedi.' } });
+  }
+  request.log.error({ url: request.url, err: error }, 'unhandled error');
+  return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
 });
 
 const directConversationBody = z.object({ targetUserId: z.string().uuid() });

@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -20,6 +20,33 @@ const identityVerificationKey = await (async () => {
   return importJWK(jwk, 'RS256');
 })();
 const app = Fastify({ logger: { redact: ['req.headers.authorization'] } });
+
+/**
+ * The last stop for anything a handler did not catch.
+ *
+ * Most routes wrap themselves in try/catch, but "most" is the problem: whatever
+ * slips past — a `schema.parse` outside a try, a driver error — went out as
+ * Fastify's default 500 with the exception's own message in it. That message is
+ * a ZodError's full dump of the schema, or a Postgres error naming columns.
+ * Neither belongs in a response, and neither is a sentence the app can show.
+ */
+app.setErrorHandler((error: FastifyError, request, reply) => {
+  if (error instanceof z.ZodError) {
+    request.log.warn({ url: request.url, issues: error.issues }, 'request body rejected by schema');
+    return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'Gönderilen bilgiler geçersiz.' } });
+  }
+  const status = error.statusCode ?? 500;
+  if (status === 429) {
+    return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Çok fazla istek gönderildi. Lütfen biraz sonra tekrar deneyin.' } });
+  }
+  if (status >= 400 && status < 500) {
+    request.log.warn({ url: request.url, err: error }, 'request rejected');
+    return reply.code(status).send({ error: { code: 'BAD_REQUEST', message: 'İstek işlenemedi.' } });
+  }
+  request.log.error({ url: request.url, err: error }, 'unhandled error');
+  return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
+});
+
 const feedQuery = z.object({ mode: z.enum(['forYou', 'nearby', 'following']).default('forYou'), cursor: z.string().max(128).optional(), limit: z.coerce.number().int().min(1).max(50).default(20) });
 const interactionBody = z.object({ enabled: z.boolean(), idempotencyKey: z.string().uuid() });
 const shareBody = z.object({ idempotencyKey: z.string().uuid() });
