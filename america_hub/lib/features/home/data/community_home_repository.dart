@@ -1,4 +1,5 @@
 import '../../../core/network/api_client.dart';
+import '../../../core/network/api_exception.dart';
 import '../../auth/domain/entities/onboarding_profile.dart';
 import '../../community/domain/repositories/community_repository.dart';
 
@@ -46,7 +47,13 @@ class ApiCommunityHomeRepository implements CommunityHomeRepository {
     final response = await _client.get<Map<String, dynamic>>(
       '/community/home/summary',
     );
-    final payload = response.data?['data'] as Map<String, dynamic>? ?? const {};
+    final payload = response.data?['data'];
+    // Boş gövde `const {}`e düşürülüyordu: `fromJson` her sayacı sıfır sayıp
+    // ekrana "0 Bağlantın · 0 Çevrende paylaşım" yazdırıyordu. Sunucu sayı
+    // vermediyse üyeye sıfır göstermek yerine yükleme başarısız sayılır.
+    if (payload is! Map<String, dynamic>) {
+      throw const ApiException(message: 'Ana sayfa özeti okunamadı.');
+    }
     return CommunityHomeSummary.fromJson(payload);
   }
 }
