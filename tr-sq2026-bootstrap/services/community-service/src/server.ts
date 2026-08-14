@@ -4000,6 +4000,7 @@ const gateworkListingsQuery = z.object({
   status: z.enum(['all', 'draft', 'active', 'reserved', 'sold', 'inactive']).default('all'),
   query: z.string().trim().min(2).max(140).optional(),
   regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  category: z.enum(['vehicle', 'rental', 'home', 'electronics', 'collectible', 'art', 'other']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
@@ -4022,13 +4023,75 @@ const gateworkAuctionCancel = z.object({ reason: z.string().trim().min(5).max(50
 // disagree about what 'active' means.
 const AUCTION_STATE_SQL = `CASE WHEN a.status='cancelled' THEN 'cancelled' WHEN a.ends_at<=now() THEN 'closed' WHEN a.starts_at>now() THEN 'scheduled' ELSE 'active' END`;
 
+/**
+ * What is measurably unusual about a listing.
+ *
+ * A member-to-member marketplace is where fraud lands first, and until now the
+ * console showed a listing exactly as its seller wrote it: a title, a price and
+ * a name. Nothing on that card distinguishes an honest $400 sofa from a $400
+ * car, or a neighbour's second listing from the fortieth one an account opened
+ * this morning under forty different titles that are all the same sentence.
+ *
+ * These are measurements, not a verdict. No score is stored, no listing is
+ * hidden automatically, and the thresholds that turn a number into a warning
+ * live in the console next to the sentence an operator reads - a rule about
+ * what counts as "too cheap" should be arguable without a migration, and a
+ * takedown should always be a person's decision with a reason attached.
+ *
+ * The median deliberately excludes the listing itself and is only meaningful
+ * with enough comparable rows; `categorySample` is returned so the console can
+ * say "not enough listings to compare" instead of quietly comparing against
+ * two.
+ */
+type ListingSignals = {
+  categoryMedianPrice: number | null;
+  categorySample: number;
+  sellerListingsLast24h: number;
+  sellerActiveListings: number;
+  sellerOpenReports: number;
+  sellerFraudReports: number;
+  sellerVerified: boolean;
+  duplicateTitleOwners: number;
+};
+
+async function listingRiskSignals(ids: string[]): Promise<Map<string, ListingSignals>> {
+  const rows = await db.query<{ id: string; category_median: string | null; category_sample: string; seller_listings_24h: string; seller_active_listings: string; seller_open_reports: string; seller_fraud_reports: string; seller_verified: boolean; duplicate_title_owners: string }>(
+    `SELECT l.id,
+            med.median category_median,med.sample category_sample,
+            (SELECT count(*) FROM marketplace_listings s WHERE s.owner_id=l.owner_id AND s.created_at>now()-interval '24 hours') seller_listings_24h,
+            (SELECT count(*) FROM marketplace_listings s WHERE s.owner_id=l.owner_id AND s.status='active') seller_active_listings,
+            (SELECT count(*) FROM content_reports r WHERE r.reported_user_id=l.owner_id AND r.status IN ('open','in_review')) seller_open_reports,
+            (SELECT count(*) FROM content_reports r WHERE r.reported_user_id=l.owner_id AND r.category IN ('scam_fraud','illegal_goods') AND r.created_at>now()-interval '180 days') seller_fraud_reports,
+            COALESCE((SELECT c.identity_verified FROM member_capabilities c WHERE c.user_id=l.owner_id),false) seller_verified,
+            (SELECT count(DISTINCT o.owner_id) FROM marketplace_listings o WHERE lower(o.title)=lower(l.title) AND o.owner_id<>l.owner_id) duplicate_title_owners
+       FROM marketplace_listings l
+       LEFT JOIN LATERAL (
+         SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s.price) median,count(*) sample
+           FROM marketplace_listings s
+          WHERE s.category=l.category AND s.status='active' AND s.id<>l.id
+       ) med ON true
+      WHERE l.id=ANY($1::uuid[])`,
+    [ids],
+  );
+  return new Map(rows.rows.map((row) => [row.id, {
+    categoryMedianPrice: row.category_median === null ? null : Number(row.category_median),
+    categorySample: Number(row.category_sample),
+    sellerListingsLast24h: Number(row.seller_listings_24h),
+    sellerActiveListings: Number(row.seller_active_listings),
+    sellerOpenReports: Number(row.seller_open_reports),
+    sellerFraudReports: Number(row.seller_fraud_reports),
+    sellerVerified: row.seller_verified,
+    duplicateTitleOwners: Number(row.duplicate_title_owners),
+  }]));
+}
+
 app.get('/v1/internal/gatework/marketplace/listings', async (request, reply) => {
   try {
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
     const input = gateworkListingsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; title: string; description: string; price: string; status: string; city: string | null; region_code: string | null; owner_id: string; owner_name: string | null; created_at: Date; updated_at: Date; auction_id: string | null; auction_state: string | null; bid_count: string }>(
-      `SELECT l.id,l.title,l.description,l.price,l.status,l.city,l.region_code,l.owner_id,
+    const rows = await db.query<{ id: string; title: string; description: string; price: string; status: string; category: string; city: string | null; region_code: string | null; owner_id: string; owner_name: string | null; created_at: Date; updated_at: Date; auction_id: string | null; auction_state: string | null; bid_count: string }>(
+      `SELECT l.id,l.title,l.description,l.price,l.status,l.category,l.city,l.region_code,l.owner_id,
               p.display_name owner_name,l.created_at,l.updated_at,
               a.id auction_id,${AUCTION_STATE_SQL} auction_state,
               (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count
@@ -4038,17 +4101,21 @@ app.get('/v1/internal/gatework/marketplace/listings', async (request, reply) => 
         WHERE ($1::text = 'all' OR l.status=$1)
           AND ($2::text IS NULL OR l.title ILIKE '%'||$2||'%')
           AND ($3::text IS NULL OR l.region_code=$3)
+          AND ($6::text IS NULL OR l.category=$6)
         ORDER BY l.created_at DESC,l.id DESC
         LIMIT $4 OFFSET $5`,
-      [input.status, input.query ?? null, input.regionCode?.toUpperCase() ?? null, input.limit + 1, input.offset],
+      [input.status, input.query ?? null, input.regionCode?.toUpperCase() ?? null, input.limit + 1, input.offset, input.category ?? null],
     );
     const page = rows.rows.slice(0, input.limit);
+    const signals = page.length > 0 ? await listingRiskSignals(page.map((row) => row.id)) : new Map<string, ListingSignals>();
     return {
       data: page.map((row) => ({
         id: row.id, title: row.title, description: row.description, price: Number(row.price), status: row.status,
+        category: row.category,
         city: row.city, regionCode: row.region_code, ownerId: row.owner_id, ownerName: row.owner_name,
         createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
         auction: row.auction_id ? { id: row.auction_id, state: row.auction_state!, bidCount: Number(row.bid_count) } : null,
+        signals: signals.get(row.id) ?? null,
       })),
       meta: { nextOffset: rows.rows.length > input.limit ? input.offset + input.limit : null },
     };
@@ -4107,14 +4174,19 @@ app.get('/v1/internal/gatework/marketplace/auctions', async (request, reply) => 
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
     const input = gateworkAuctionsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; listing_id: string; listing_title: string; listing_status: string; seller_id: string; seller_name: string | null; starting_price: string; minimum_increment: string; starts_at: Date; ends_at: Date; stored_status: string; state: string; bid_count: string; top_bid: string | null; top_bidder_id: string | null; top_bidder_name: string | null; created_at: Date }>(
+    const rows = await db.query<{ id: string; listing_id: string; listing_title: string; listing_status: string; seller_id: string; seller_name: string | null; seller_eligible: boolean; starting_price: string; minimum_increment: string; starts_at: Date; ends_at: Date; stored_status: string; state: string; bid_count: string; top_bid: string | null; top_bidder_id: string | null; top_bidder_name: string | null; created_at: Date }>(
       `SELECT a.id,a.listing_id,l.title listing_title,l.status listing_status,a.seller_id,p.display_name seller_name,
               a.starting_price,a.minimum_increment,a.starts_at,a.ends_at,a.status stored_status,
               ${AUCTION_STATE_SQL} state,a.created_at,
+              -- The badge is checked when the auction opens and never again. A
+              -- running auction whose seller has since lost it is the row an
+              -- operator most needs to see, and it looked identical to the rest.
+              COALESCE(c.auction_seller_eligible,false) seller_eligible,
               (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count,
               top.amount top_bid,top.bidder_id top_bidder_id,bp.display_name top_bidder_name
          FROM marketplace_auctions a
          JOIN marketplace_listings l ON l.id=a.listing_id
+         LEFT JOIN member_capabilities c ON c.user_id=a.seller_id
          LEFT JOIN community_profile_projection p ON p.user_id=a.seller_id
          LEFT JOIN LATERAL (
            SELECT b.amount,b.bidder_id FROM marketplace_auction_bids b
@@ -4130,7 +4202,7 @@ app.get('/v1/internal/gatework/marketplace/auctions', async (request, reply) => 
     return {
       data: page.map((row) => ({
         id: row.id, listingId: row.listing_id, listingTitle: row.listing_title, listingStatus: row.listing_status,
-        sellerId: row.seller_id, sellerName: row.seller_name,
+        sellerId: row.seller_id, sellerName: row.seller_name, sellerEligible: row.seller_eligible,
         startingPrice: Number(row.starting_price), minimumIncrement: Number(row.minimum_increment),
         startsAt: row.starts_at.toISOString(), endsAt: row.ends_at.toISOString(),
         storedStatus: row.stored_status, state: row.state,
