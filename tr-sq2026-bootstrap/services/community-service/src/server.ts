@@ -786,6 +786,62 @@ app.get('/v1/marketplace/sellers/:id', async (request, reply) => {
   }
 });
 
+/**
+ * The seller's own panel.
+ *
+ * "Satış merkezim" drew four boxes and a performance card entirely from local
+ * placeholders that returned zero: a member with eleven saves on three listings
+ * was told they had none, which is worse than an empty panel because it reads
+ * as an answer.
+ *
+ * What is counted here is what the marketplace actually records: listings by
+ * status, and saves, likes and shares on those listings. Views, messages and
+ * offers are absent on purpose - nothing in this system tracks a listing view,
+ * messages live in another service, and there is no offers table at all. They
+ * are left out of the payload rather than sent as zero, so the app can tell
+ * "none yet" apart from "not counted".
+ */
+app.get('/v1/marketplace/me/overview', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const totals = await db.query<{ active: string; reserved: string; sold: string; draft: string; saves: string; likes: string; shares: string; saves_7d: string; likes_7d: string; shares_7d: string }>(
+      `WITH mine AS (SELECT id,status FROM marketplace_listings WHERE owner_id=$1),
+            reactions AS (SELECT x.kind,x.created_at FROM marketplace_listing_reactions x JOIN mine ON mine.id=x.listing_id)
+       SELECT (SELECT count(*) FROM mine WHERE status='active') active,
+              (SELECT count(*) FROM mine WHERE status='reserved') reserved,
+              (SELECT count(*) FROM mine WHERE status='sold') sold,
+              (SELECT count(*) FROM mine WHERE status='draft') draft,
+              (SELECT count(*) FROM reactions WHERE kind='save') saves,
+              (SELECT count(*) FROM reactions WHERE kind='like') likes,
+              (SELECT count(*) FROM reactions WHERE kind='share') shares,
+              (SELECT count(*) FROM reactions WHERE kind='save' AND created_at > now() - interval '7 days') saves_7d,
+              (SELECT count(*) FROM reactions WHERE kind='like' AND created_at > now() - interval '7 days') likes_7d,
+              (SELECT count(*) FROM reactions WHERE kind='share' AND created_at > now() - interval '7 days') shares_7d`,
+      [userId]);
+    // The listing most people saved, not the one posted last. A seller reading
+    // this wants to know which one is working.
+    const top = await db.query<{ id: string; title: string; saves: string }>(
+      `SELECT l.id,l.title,count(x.*) saves
+         FROM marketplace_listings l
+         LEFT JOIN marketplace_listing_reactions x ON x.listing_id=l.id AND x.kind='save'
+        WHERE l.owner_id=$1 AND l.status='active'
+        GROUP BY l.id,l.title
+        ORDER BY saves DESC,l.created_at DESC
+        LIMIT 1`, [userId]);
+    const t = totals.rows[0]!;
+    const best = top.rows[0];
+    return { data: {
+      sellerId: userId,
+      activeListings: Number(t.active), reservedListings: Number(t.reserved), soldListings: Number(t.sold), draftListings: Number(t.draft),
+      saves: Number(t.saves), likes: Number(t.likes), shares: Number(t.shares),
+      saves7d: Number(t.saves_7d), likes7d: Number(t.likes_7d), shares7d: Number(t.shares_7d),
+      topListing: best ? { id: best.id, title: best.title, saves: Number(best.saves) } : null,
+    } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'SELLER_OVERVIEW_UNAVAILABLE', message: 'Satış merkezi bilgileri alınamadı.' } });
+  }
+});
+
 app.put('/v1/marketplace/listings/:id/reactions/:kind', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);

@@ -80,14 +80,19 @@ class _StubRepository implements MarketplaceRepository {
   }
 
   @override
-  Future<MarketplaceSellerOverview> getSellerOverview() async =>
-      const MarketplaceSellerOverview(
+  Future<MarketplaceSellerDashboard> getSellerDashboard() async =>
+      const MarketplaceSellerDashboard(
+        sellerId: 'user-demo',
         activeListings: 0,
-        views: 0,
+        reservedListings: 0,
+        soldListings: 0,
+        draftListings: 0,
         saves: 0,
-        pendingOffers: 0,
-        pendingMessages: 0,
-        totalSales: 0,
+        likes: 0,
+        shares: 0,
+        saves7d: 0,
+        likes7d: 0,
+        shares7d: 0,
       );
 
   @override
@@ -211,5 +216,67 @@ void main() {
     expect(data['mediaIds'], ['media-1', 'media-2']);
     // İmzalı adresler süreli; sunucuya gitmelerinin bir anlamı yok.
     expect(data.containsKey('mediaUrls'), isFalse);
+  });
+
+  test('satis merkezi sayilari sunucudan geliyor', () async {
+    final adapter = RecordingAdapter({
+      'data': {
+        'sellerId': '22222222-2222-4222-8222-222222222222',
+        'activeListings': 3,
+        'reservedListings': 1,
+        'soldListings': 2,
+        'draftListings': 0,
+        'saves': 11,
+        'likes': 4,
+        'shares': 2,
+        'saves7d': 5,
+        'likes7d': 1,
+        'shares7d': 0,
+        'topListing': {'id': 'l-9', 'title': 'Vintage kilim', 'saves': 7},
+      },
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'https://community.test/v1/'))
+      ..httpClientAdapter = adapter;
+    final repository = ApiMarketplaceRepository(
+      client: ApiClient(tokenStore: InMemoryTokenStore(), dio: dio),
+    );
+
+    final dashboard = await repository.getSellerDashboard();
+
+    expect(adapter.requests.single.path, '/marketplace/me/overview');
+    expect(dashboard.sellerId, '22222222-2222-4222-8222-222222222222');
+    expect(dashboard.activeListings, 3);
+    expect(dashboard.saves, 11);
+    expect(dashboard.topListing!.title, 'Vintage kilim');
+    expect(dashboard.hasWeeklyActivity, isTrue);
+  });
+
+  test('hareketsiz hafta bos gecti diye isaretleniyor', () async {
+    final adapter = RecordingAdapter({
+      'data': {
+        'sellerId': '22222222-2222-4222-8222-222222222222',
+        'activeListings': 1,
+        'reservedListings': 0,
+        'soldListings': 0,
+        'draftListings': 0,
+        'saves': 0,
+        'likes': 0,
+        'shares': 0,
+        'saves7d': 0,
+        'likes7d': 0,
+        'shares7d': 0,
+        'topListing': null,
+      },
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'https://community.test/v1/'))
+      ..httpClientAdapter = adapter;
+    final repository = ApiMarketplaceRepository(
+      client: ApiClient(tokenStore: InMemoryTokenStore(), dio: dio),
+    );
+
+    final dashboard = await repository.getSellerDashboard();
+
+    expect(dashboard.hasWeeklyActivity, isFalse);
+    expect(dashboard.topListing, isNull);
   });
 }

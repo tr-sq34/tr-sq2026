@@ -37,39 +37,38 @@ class MarketplaceSellerProfile {
   final List<MarketplaceSellerBadge> badges;
 }
 
-class MarketplaceListingInsight {
-  const MarketplaceListingInsight({required this.listingId, required this.title, required this.message, required this.actionLabel, required this.priority});
-  final String listingId;
+/// İlanı en çok kaydedilen ilan. Kaydeden yoksa gösterilecek bir şey de yok.
+class MarketplaceTopListing {
+  const MarketplaceTopListing({required this.id, required this.title, required this.saves});
+  final String id;
   final String title;
-  final String message;
-  final String actionLabel;
-  final int priority;
-}
-
-class MarketplaceSellerAnalytics {
-  const MarketplaceSellerAnalytics({required this.active, required this.reserved, required this.sold, required this.draft, required this.views7d, required this.views30d, required this.saves7d, required this.messages7d, required this.offers7d, required this.shareCount, required this.topListingTitle, required this.insights});
-  final int active;
-  final int reserved;
-  final int sold;
-  final int draft;
-  final int views7d;
-  final int views30d;
-  final int saves7d;
-  final int messages7d;
-  final int offers7d;
-  final int shareCount;
-  final String topListingTitle;
-  final List<MarketplaceListingInsight> insights;
-}
-
-class MarketplaceSellerOverview {
-  const MarketplaceSellerOverview({required this.activeListings, required this.views, required this.saves, required this.pendingOffers, required this.pendingMessages, required this.totalSales});
-  final int activeListings;
-  final int views;
   final int saves;
-  final int pendingOffers;
-  final int pendingMessages;
-  final double totalSales;
+}
+
+/// Satış merkezinin sayıları.
+///
+/// Burada yalnızca Çarşı'nın gerçekten tuttuğu şeyler var: duruma göre ilan
+/// sayıları ve o ilanlara gelen kaydetme, beğeni, paylaşım. Görüntülenme,
+/// mesaj ve teklif yok - bu sistemde ilan görüntülenmesini sayan bir yer
+/// bulunmuyor, mesajlar başka bir serviste duruyor, teklif için ise hiç tablo
+/// yok. Bunlar sıfır olarak gösterilmiyor; ekranda hiç yer almıyorlar, çünkü
+/// "sıfır" bir cevaptır ve yanlış bir cevaptır.
+class MarketplaceSellerDashboard {
+  const MarketplaceSellerDashboard({required this.sellerId, required this.activeListings, required this.reservedListings, required this.soldListings, required this.draftListings, required this.saves, required this.likes, required this.shares, required this.saves7d, required this.likes7d, required this.shares7d, this.topListing});
+  final String sellerId;
+  final int activeListings;
+  final int reservedListings;
+  final int soldListings;
+  final int draftListings;
+  final int saves;
+  final int likes;
+  final int shares;
+  final int saves7d;
+  final int likes7d;
+  final int shares7d;
+  final MarketplaceTopListing? topListing;
+
+  bool get hasWeeklyActivity => saves7d > 0 || likes7d > 0 || shares7d > 0;
 }
 
 class MarketplaceOffer {

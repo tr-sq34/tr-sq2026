@@ -36,16 +36,39 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
   @override
   Future<List<MarketplaceListing>> getListings() async =>
       (await fetchPage()).items;
+  /// Satış merkezinin sayıları. Buradaki her şey daha önce sabit sıfır
+  /// döndüren yerel bir karşılıktı: üç ilanına on bir kaydetme gelmiş bir
+  /// üyeye "hiç yok" yazıyordu ve bu, boş bir panelden daha kötü, çünkü bir
+  /// cevap gibi okunuyordu.
   @override
-  Future<MarketplaceSellerOverview> getSellerOverview() async =>
-      const MarketplaceSellerOverview(
-        activeListings: 0,
-        views: 0,
-        saves: 0,
-        pendingOffers: 0,
-        pendingMessages: 0,
-        totalSales: 0,
-      );
+  Future<MarketplaceSellerDashboard> getSellerDashboard() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      '/marketplace/me/overview',
+    );
+    final data = response.data!['data'] as Map<String, dynamic>;
+    int count(String key) => (data[key] as num?)?.toInt() ?? 0;
+    final top = data['topListing'] as Map<String, dynamic>?;
+    return MarketplaceSellerDashboard(
+      sellerId: data['sellerId'] as String? ?? '',
+      activeListings: count('activeListings'),
+      reservedListings: count('reservedListings'),
+      soldListings: count('soldListings'),
+      draftListings: count('draftListings'),
+      saves: count('saves'),
+      likes: count('likes'),
+      shares: count('shares'),
+      saves7d: count('saves7d'),
+      likes7d: count('likes7d'),
+      shares7d: count('shares7d'),
+      topListing: top == null
+          ? null
+          : MarketplaceTopListing(
+              id: top['id'] as String,
+              title: top['title'] as String,
+              saves: (top['saves'] as num?)?.toInt() ?? 0,
+            ),
+    );
+  }
 
   /// Sunucu yalnızca bildiğini gönderiyor: ad, seçilen şehir, açık ilan sayısı
   /// ve kimlik doğrulaması. Puan, yanıt süresi ve satış sayısı bu sistemde
@@ -75,23 +98,6 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
       emailStatus: MarketplaceVerificationStatus.unverified,
     );
   }
-
-  @override
-  Future<MarketplaceSellerAnalytics> getSellerAnalytics() async =>
-      const MarketplaceSellerAnalytics(
-        active: 0,
-        reserved: 0,
-        sold: 0,
-        draft: 0,
-        views7d: 0,
-        views30d: 0,
-        saves7d: 0,
-        messages7d: 0,
-        offers7d: 0,
-        shareCount: 0,
-        topListingTitle: 'Henüz ilan yok',
-        insights: [],
-      );
 
   /// Satıcının kendi ilanları. Burası bugüne kadar tüm Çarşı'yı döndürüyordu:
   /// yabancının sayfası TurkSquare'deki her ilanı onunmuş gibi gösteriyordu.
