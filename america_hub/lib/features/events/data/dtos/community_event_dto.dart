@@ -1,12 +1,16 @@
 import '../../domain/entities/community_event.dart';
 
 class CommunityEventDto {
-  const CommunityEventDto({required this.id, required this.title, required this.category, required this.startsAt, this.endsAt, required this.location, required this.city, required this.attendeeCount, required this.priceLabel, required this.imageUrl, this.description = '', this.rsvpStatus = EventRsvpStatus.none});
+  const CommunityEventDto({required this.id, required this.title, required this.category, required this.startsAt, this.endsAt, required this.location, required this.city, required this.attendeeCount, required this.priceLabel, required this.imageUrl, this.description = '', this.rsvpStatus = EventRsvpStatus.none, this.status = EventStatus.published, this.cancellationReason, this.capacity, this.externalUrl, this.interestedCount = 0});
   final String id, title, category, location, city, priceLabel, imageUrl, description;
   final DateTime startsAt;
   final DateTime? endsAt;
   final int attendeeCount;
   final EventRsvpStatus rsvpStatus;
+  final EventStatus status;
+  final String? cancellationReason, externalUrl;
+  final int? capacity;
+  final int interestedCount;
 
   factory CommunityEventDto.fromJson(Map<String, dynamic> json) => CommunityEventDto(
         id: json['id'] as String,
@@ -27,7 +31,18 @@ class CommunityEventDto {
           'interested' => EventRsvpStatus.interested,
           _ => EventRsvpStatus.none,
         },
+        // Panelden iptal edilen etkinlik listeden düşüyor ama tek tek okunmaya
+        // devam ediyor: takviminde duran kişi 404 değil gerekçe görmeli.
+        // Bilinmeyen bir durum "yayında" sayılıyor, çünkü listeye giren her
+        // etkinlik zaten yayında olan; taslak buraya hiç ulaşmıyor.
+        status: json['status'] == 'cancelled' ? EventStatus.cancelled : EventStatus.published,
+        cancellationReason: json['cancellationReason'] as String?,
+        // Kapasite ile bilet bağlantısı sunucuda ta ilk günden beri var, panel
+        // ikisini de yazıyor; uygulama bugüne kadar ikisini de yok sayıyordu.
+        capacity: (json['capacity'] as num?)?.toInt(),
+        externalUrl: json['externalUrl'] as String?,
+        interestedCount: (json['interestedCount'] as num?)?.toInt() ?? 0,
       );
 
-  CommunityEvent toDomain() => CommunityEvent(id: id, title: title, category: category, startsAt: startsAt, endsAt: endsAt, location: location, city: city, attendeeCount: attendeeCount, priceLabel: priceLabel, imageUrl: imageUrl, description: description, rsvpStatus: rsvpStatus);
+  CommunityEvent toDomain() => CommunityEvent(id: id, title: title, category: category, startsAt: startsAt, endsAt: endsAt, location: location, city: city, attendeeCount: attendeeCount, priceLabel: priceLabel, imageUrl: imageUrl, description: description, rsvpStatus: rsvpStatus, status: status, cancellationReason: cancellationReason, capacity: capacity, externalUrl: externalUrl, interestedCount: interestedCount);
 }

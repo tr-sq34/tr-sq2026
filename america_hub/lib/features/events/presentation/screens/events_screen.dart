@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/pagination/paged_controller.dart';
@@ -357,24 +358,29 @@ class EventDetailScreen extends StatelessWidget {
                 Expanded(
                   child: ListView(padding: EdgeInsets.zero, children: [
                     SizedBox(height: 230, width: double.infinity, child: AppRemoteImage(imageUrl: current.imageUrl, semanticLabel: current.title)),
+                    if (current.isCancelled) _CancelledNotice(reason: current.cancellationReason),
                     _DetailSummary(event: current),
                     const Divider(height: 1, color: AppColors.surfaceBorder),
                     _PriceAndAttendance(event: current),
                     const Divider(height: 1, color: AppColors.surfaceBorder),
-                    const Padding(padding: EdgeInsets.fromLTRB(18, 16, 18, 14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      _EventBenefit(icon: Icons.confirmation_number_outlined, label: 'Mobil etkinlik bileti'),
-                      SizedBox(height: 11),
-                      _EventBenefit(icon: Icons.people_outline_rounded, label: 'Toplulukla birlikte katil'),
-                      SizedBox(height: 11),
-                      _EventBenefit(icon: Icons.bookmark_border_rounded, label: 'Planin degisirse kaydedebilirsin'),
-                    ])),
-                    const Divider(height: 1, color: AppColors.surfaceBorder),
+                    // Burada uc satirlik bir "avantajlar" bloğu vardi: "Mobil
+                    // etkinlik bileti", "Toplulukla birlikte katil", "Planin
+                    // degisirse kaydedebilirsin". Ucu de her etkinlikte aynen
+                    // yaziyordu ve ucunun de karsiligi yoktu: uygulamada bilet
+                    // diye bir sey hic olmadi, kaydetme de yok. Bilet gercekten
+                    // varsa sunucu onu externalUrl olarak gonderiyor; asagidaki
+                    // baglanti tam olarak o.
+                    if (current.externalUrl != null) _ExternalLinkRow(url: current.externalUrl!),
                     Padding(padding: const EdgeInsets.fromLTRB(18, 18, 18, 120), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Row(children: [Icon(Icons.verified_user_outlined, color: AppColors.primary), SizedBox(width: 8), Text('Guvenli katilim', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15))]),
+                      const Text('Etkinlik hakkinda', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
                       const SizedBox(height: 10),
-                      Text(current.description, style: const TextStyle(color: AppColors.textSecondary, height: 1.45)),
+                      Text(current.description.isEmpty ? 'Bu etkinlik icin ayrintili bir aciklama yazilmamis.' : current.description, style: const TextStyle(color: AppColors.textSecondary, height: 1.45)),
                       const SizedBox(height: 12),
-                      const Text('Katilim bilgilerin etkinlik sahibiyle guvenli bicimde paylasilir. Etkinlik detaylari degisirse sana bildirim gondeririz.', style: TextStyle(color: AppColors.textSecondary, height: 1.45)),
+                      // Onceki metin ayrica "etkinlik detaylari degisirse sana
+                      // bildirim gondeririz" diyordu. Etkinlikler icin tek bir
+                      // bildirim turu yazilmadi; soz veremeyecegimiz seyi
+                      // soylemektense ne oldugunu soyluyoruz.
+                      const Text('Katilacagini soylemek etkinligi duzenleyene yalnizca kac kisi geldigini gosterir; adin listelenmez.', style: TextStyle(color: AppColors.textSecondary, height: 1.45)),
                     ])),
                   ]),
                 ),
@@ -401,7 +407,9 @@ class _DetailSummary extends StatelessWidget {
             const SizedBox(height: 5),
             Text('${event.attendeeCount} kisi katilmayi planliyor', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
           ])),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: const Color(0xFFE7F5E9), borderRadius: BorderRadius.circular(6)), child: const Text('Topluluk', style: TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w800, fontSize: 12))),
+          // Burada her etkinlikte ayni yesil "Topluluk" rozeti duruyordu.
+          // Kategori zaten solda yaziyor; rozet hicbir sey soylemiyordu.
+          if (event.interestedCount > 0) Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: const Color(0xFFE7F5E9), borderRadius: BorderRadius.circular(6)), child: Text('${event.interestedCount} ilgileniyor', style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w800, fontSize: 12))),
         ]),
       );
 }
@@ -419,33 +427,124 @@ class _PriceAndAttendance extends StatelessWidget {
             const SizedBox(height: 3),
             Text(event.priceLabel, style: const TextStyle(color: Color(0xFF1D7A45), fontSize: 19, fontWeight: FontWeight.w800)),
             const SizedBox(height: 2),
-            const Text('Tum ucretler dahil', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+            // Onceden burada "Tum ucretler dahil" yaziyordu. Uygulamada odeme
+            // diye bir sey yok; ucret bilgisi etkinligi yayimlayanin yazdigi
+            // duz metinden ibaret ve odeme kapida yapiliyor.
+            const Text('Ucret etkinlik yerinde odenir', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
           ])),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             const Text('Katilim', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
             const SizedBox(height: 4),
             Text('${event.attendeeCount} kisi', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            // Kontenjan sunucuda ilk gunden beri var ve katilim aninda orada
+            // uygulaniyor; uygulama bugune kadar hic gostermiyordu, dolayisiyla
+            // "Katilacagim" dugmesi dolmus bir etkinlikte de acik duruyordu.
+            if (event.remainingSeats != null) ...[
+              const SizedBox(height: 2),
+              Text(event.isFull ? 'Kontenjan doldu' : '${event.remainingSeats} kisilik yer kaldi', style: TextStyle(color: event.isFull ? AppColors.accentRose : AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w700)),
+            ],
           ]),
         ]),
       );
 }
 
-class _EventBenefit extends StatelessWidget {
-  const _EventBenefit({required this.icon, required this.label});
-  final IconData icon;
-  final String label;
+/// Panelden iptal edilen etkinlik listeden dusuyor ama tek tek okunabiliyor:
+/// takvimine yazan kisi 404 degil gerekcesini gormeli. Uygulama bugune kadar
+/// iptali hic okumuyordu, yani panelden basilan "Iptal et" uyeye ulasmiyordu.
+class _CancelledNotice extends StatelessWidget {
+  const _CancelledNotice({required this.reason});
+  final String? reason;
+
   @override
-  Widget build(BuildContext context) => Row(children: [Icon(icon, size: 19, color: AppColors.textPrimary), const SizedBox(width: 10), Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))]);
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+        color: const Color(0xFFFDECEF),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(children: [
+            Icon(Icons.event_busy_rounded, size: 19, color: AppColors.accentRose),
+            SizedBox(width: 8),
+            Text('Bu etkinlik iptal edildi', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppColors.accentRose)),
+          ]),
+          if (reason != null && reason!.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(reason!, style: const TextStyle(color: AppColors.textSecondary, height: 1.4, fontSize: 13)),
+          ],
+        ]),
+      );
 }
 
-class _DetailBottomBar extends StatelessWidget {
+/// Kayit her zaman uygulamada olmuyor. Sunucu bu durumda etkinligin kendi
+/// bilet/kayit adresini gonderiyor -yalnizca https kabul ediliyor- ve bugune
+/// kadar hicbir yerde gosterilmiyordu.
+class _ExternalLinkRow extends StatelessWidget {
+  const _ExternalLinkRow({required this.url});
+  final String url;
+
+  Future<void> _open(BuildContext context) async {
+    final uri = Uri.tryParse(url);
+    final opened = uri != null && uri.scheme == 'https' && await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (opened || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bağlantı açılamadı.')));
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+        child: OutlinedButton.icon(
+          onPressed: () => _open(context),
+          icon: const Icon(Icons.open_in_new_rounded, size: 18),
+          label: const Text('Bilet ve kayit sayfasi'),
+          style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 46), foregroundColor: AppColors.primary, side: const BorderSide(color: AppColors.surfaceBorder), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        ),
+      );
+}
+
+class _DetailBottomBar extends StatefulWidget {
   const _DetailBottomBar({required this.event, required this.controller});
   final CommunityEvent event;
   final EventsController controller;
+
   @override
-  Widget build(BuildContext context) => SafeArea(top: false, child: Container(padding: const EdgeInsets.fromLTRB(18, 12, 18, 14), decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.surfaceBorder))), child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [const Text('Katilim', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)), Text(event.priceLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))])),
-        const SizedBox(width: 12),
-        FilledButton(onPressed: () => controller.setRsvp(event, event.isGoing ? EventRsvpStatus.none : EventRsvpStatus.going), style: FilledButton.styleFrom(minimumSize: const Size(148, 46), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text(event.isGoing ? 'Katilmiyorum' : 'Katilacagim')),
-      ])));
+  State<_DetailBottomBar> createState() => _DetailBottomBarState();
+}
+
+class _DetailBottomBarState extends State<_DetailBottomBar> {
+  var _busy = false;
+
+  /// Sunucu kontenjan dolu oldugunda 409 donuyor ve denetleyici iyimser
+  /// degisikligi geri aliyor. Onceden bu hata hicbir yerde yakalanmiyordu:
+  /// dugmeye basiliyor, yazi eski haline donuyor ve kullaniciya neden
+  /// katilamadigi hic soylenmiyordu.
+  Future<void> _toggle() async {
+    setState(() => _busy = true);
+    try {
+      await widget.controller.setRsvp(widget.event, widget.event.isGoing ? EventRsvpStatus.none : EventRsvpStatus.going);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.event.isFull ? 'Kontenjan doldu, katılım kaydedilemedi.' : 'Katılım kaydedilemedi, tekrar dene.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final event = widget.event;
+    // Iptal edilmis ya da kontenjani dolmus etkinlikte dugme kapali: ikisinde
+    // de sunucu zaten reddediyor, acik birakmak bos bir vaat oluyordu.
+    final blocked = event.isCancelled || (event.isFull && !event.isGoing);
+    return SafeArea(top: false, child: Container(padding: const EdgeInsets.fromLTRB(18, 12, 18, 14), decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.surfaceBorder))), child: Row(children: [
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [const Text('Katilim', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)), Text(event.priceLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))])),
+      const SizedBox(width: 12),
+      FilledButton(
+        onPressed: blocked || _busy ? null : _toggle,
+        style: FilledButton.styleFrom(minimumSize: const Size(148, 46), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        child: Text(event.isCancelled ? 'Iptal edildi' : event.isFull && !event.isGoing ? 'Kontenjan doldu' : event.isGoing ? 'Katilmiyorum' : 'Katilacagim'),
+      ),
+    ])));
+  }
 }
