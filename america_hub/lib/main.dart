@@ -21,6 +21,7 @@ import 'features/community/data/repositories/mock_community_repository.dart';
 import 'features/community/data/repositories/api_community_repository.dart';
 import 'features/community/domain/repositories/community_repository.dart';
 import 'features/community/data/repositories/mock_community_comments_repository.dart';
+import 'features/community/data/repositories/api_community_comments_repository.dart';
 import 'features/community/data/repositories/mock_media_upload_repository.dart';
 import 'features/community/data/repositories/api_media_upload_repository.dart';
 import 'features/community/domain/repositories/media_upload_repository.dart';
@@ -206,7 +207,9 @@ Future<void> main() async {
   );
 
   final commentsController = CommunityCommentsController(
-    repository: MockCommunityCommentsRepository(),
+    repository: useMockServices
+        ? MockCommunityCommentsRepository()
+        : ApiCommunityCommentsRepository(client: communityApiClient),
   );
 
   // Shared with the profile repository, which needs it to turn an upload id

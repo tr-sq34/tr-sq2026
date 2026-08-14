@@ -64,6 +64,12 @@ abstract final class ApiEndpoints {
       '/community/profiles/$userId/posts';
   static String communityPostArchive(String postId) =>
       '/community/posts/$postId/archive';
+  // Akış yorumları. Silme ucu paylaşımı değil yorumu adresliyor; sunucu yorumu
+  // ya yazanın ya da paylaşım sahibinin kaldırabileceğini oradan çözüyor.
+  static String communityPostComments(String postId) =>
+      '/community/posts/$postId/comments';
+  static String communityPostComment(String commentId) =>
+      '/community/comments/$commentId';
   static const communityJourney = '/community/me/journey';
   static const communityBadges = '/community/badges';
   static String communityUserBadges(String userId) =>
