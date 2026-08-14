@@ -71,5 +71,11 @@ class EventsController extends PagedController<CommunityEvent> {
     }
   }
 
-  Future<void> load() => loadInitial();
+  /// Ana sayfadaki şerit ve Etkinlikler ekranı aynı denetleyiciyi paylaşıyor,
+  /// ikisi de açılırken bunu çağırıyor. Elde liste varken baştan yüklemek hem
+  /// gereksiz hem de açılan ekranın çizimi sırasında öbür ekranı uyandırdığı
+  /// için hataya yol açıyordu. Liste boşsa -ilk açılış ya da yükleme hatası-
+  /// yeniden deneniyor.
+  Future<void> load() =>
+      items.isEmpty ? loadInitial() : Future<void>.value();
 }

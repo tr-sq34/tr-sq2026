@@ -11,6 +11,8 @@ import '../../../community/application/media_upload_controller.dart';
 import '../../../community/domain/repositories/community_repository.dart';
 import '../../../community/application/community_special_request_controller.dart';
 import '../../../events/application/events_controller.dart';
+import '../../../events/domain/entities/community_event.dart';
+import '../../../events/presentation/screens/events_screen.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
 import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../profile/application/friendship_controller.dart';
@@ -141,6 +143,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       forumController: widget.forumController,
       onOpenForum: (categoryId) => _openForum(categoryId: categoryId),
       onOpenForumTopic: _openForumTopic,
+      eventsController: widget.eventsController,
+      onOpenEvents: _openEvents,
+      onOpenEvent: _openEvent,
     ),
     // The pages are built once, but the composer inside the feed names the
     // member, and that name can still arrive on a token refresh. Listening
@@ -316,6 +321,25 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         moderationRepository: widget.contentModerationRepository,
         viewerId: widget.authController.user?.id ?? 'local-user',
       ),
+    ),
+  );
+
+  /// Etkinlikler ekrani uygulamada yazilmis ama hicbir yerden acilmiyordu:
+  /// denetleyicisi buraya kadar geliyor, sonra hicbir sey yapmiyordu. Menuden
+  /// ve ana sayfadaki seritten aciliyor artik.
+  void _openEvents() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => EventsScreen(controller: widget.eventsController),
+    ),
+  );
+
+  /// Ana sayfadaki serit dogrudan etkinligin kendisini aciyor; listeden
+  /// gecmeye gerek yok. Ayni denetleyici okundugu icin katilma yaniti iki
+  /// yerde de ayni.
+  void _openEvent(CommunityEvent event) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) =>
+          EventDetailScreen(event: event, controller: widget.eventsController),
     ),
   );
 
@@ -826,7 +850,22 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 4. TURKSQUARE YAYIN (SESLİ SOHBET SİSTEMİ)
+                  // 4. ETKİNLİKLER
+                  _buildDrawerItem(
+                    title: 'Etkinlikler',
+                    subtitle: 'Çevrendeki buluşmalar, konserler ve festivaller',
+                    icon: Icons.event_available_rounded,
+                    iconBg: AppColors.primary.withValues(alpha: 0.15),
+                    iconColor: const Color(0xFF818CF8),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openEvents();
+                    },
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // 5. TURKSQUARE YAYIN (SESLİ SOHBET SİSTEMİ)
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -925,7 +964,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 5. PROFİL VE HESAP
+                  // 6. PROFİL VE HESAP
                   _buildDrawerItem(
                     title: 'Profil ve Hesap',
                     subtitle: 'Üyelik & kişisel veriler',
@@ -946,7 +985,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     ),
                   ),
 
-                  // 6. BİLDİRİM TERCİHLERİ
+                  // 7. BİLDİRİM TERCİHLERİ
                   _buildDrawerItem(
                     title: 'Bildirim Tercihleri',
                     subtitle: 'Anlık bildirim & e-posta',
@@ -959,7 +998,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 7. YARDIM & DESTEK
+                  // 8. YARDIM & DESTEK
                   _buildDrawerItem(
                     title: 'Yardım & Destek',
                     subtitle: 'SSS ve canlı destek',

@@ -4,7 +4,6 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_badge.dart';
 import '../../../../core/widgets/app_remote_image.dart';
-import '../../../../core/widgets/app_screen_header.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../application/events_controller.dart';
 import '../../domain/entities/community_event.dart';
@@ -47,15 +46,29 @@ class _EventsScreenState extends State<EventsScreen> {
 
   void _openCategory(String category, String label) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => EventsCategoryScreen(controller: widget.controller, category: category, title: label)));
 
+  // Ekranin kendi Scaffold'u var: menuden acilan bir sayfa, geri dugmesi
+  // olmadan acilamaz. Onceden yalnizca bir sekmenin govdesi olacak sekilde
+  // yazilmisti, ama onu sekmeye koyan bir yer hic olmadi.
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          elevation: 0,
+          title: const Text('Etkinlikler', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+        ),
+        body: _buildBody(),
+      );
+
+  Widget _buildBody() => AnimatedBuilder(
         animation: widget.controller,
         builder: (context, child) {
           if (widget.controller.isInitialLoading) {
-            return const Column(children: [AppScreenHeader(title: 'Etkinlikler', subtitle: 'Cevrendeki bulusmalari kesfet.'), Expanded(child: AppLoadingView(label: 'Etkinlikler yukleniyor...'))]);
+            return const AppLoadingView(label: 'Etkinlikler yukleniyor...');
           }
           if (widget.controller.state == PagedLoadState.failure) {
-            return Column(children: [const AppScreenHeader(title: 'Etkinlikler', subtitle: 'Cevrendeki bulusmalari kesfet.'), Expanded(child: AppErrorState(message: 'Etkinlikler yuklenemedi.', onRetry: widget.controller.load))]);
+            return AppErrorState(message: 'Etkinlikler yuklenemedi.', onRetry: widget.controller.load);
           }
           final allEvents = widget.controller.items;
           final events = widget.controller.visibleItems;
