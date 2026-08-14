@@ -75,6 +75,9 @@ export const ACTION_LABELS: Record<string, string> = {
   'news_article.retract': 'Haberi geri çekti',
   'official_post.publish': 'Resmî paylaşım yaptı',
   'promotion.place': 'Tanıtım yerleştirdi',
+  'event.draft': 'Etkinlik taslağı yazdı',
+  'event.publish': 'Etkinlik yayınladı',
+  'event.cancel': 'Etkinliği iptal etti',
 };
 
 export const actionLabel = (action: string) => ACTION_LABELS[action] ?? action;

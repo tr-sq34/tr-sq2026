@@ -21,9 +21,18 @@ class ApiEventsRepository implements EventsRepository {
   Future<List<CommunityEvent>> getUpcomingEvents() async => (await fetchPage()).items;
 
   @override
-  Future<CommunityEvent> updateRsvp({required String eventId, required EventRsvpStatus status}) {
-    // Endpoint contract is intentionally isolated here; UI/controller remain
-    // unchanged when the live RSVP endpoint is connected.
-    throw UnimplementedError('RSVP endpoint henüz yapılandırılmadı.');
+  Future<CommunityEvent> updateRsvp({required String eventId, required EventRsvpStatus status}) async {
+    // Vazgecmek 'none' olarak gidiyor: sunucu kaydi siliyor. Katilim gecmisi
+    // tutulmuyor, cunku birinin hangi aksam neredeyse oldugunun listesi tam da
+    // bu servisin tutmamak icin kurulduğu kayit.
+    final response = await _client.put<Map<String, dynamic>>(
+      ApiEndpoints.eventRsvp(eventId),
+      data: {'status': status.name},
+    );
+    final envelope = ApiResponse<CommunityEvent>.fromJson(
+      response.data!,
+      (raw) => CommunityEventDto.fromJson(raw as Map<String, dynamic>).toDomain(),
+    );
+    return envelope.data;
   }
 }
