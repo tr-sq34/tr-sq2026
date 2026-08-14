@@ -6,8 +6,11 @@ import '../../domain/entities/app_notification.dart';
 
 /// The bell's destination.
 ///
-/// Until friend requests, comments and badges publish events, the honest thing
-/// to show is that there is nothing here — not a demo item dressed up as news.
+/// The list is now fed by `member_notifications`: a comment on your post, a
+/// like on it, someone saving or liking your listing. Everything else — friend
+/// requests, badges, event reminders — still has no publisher, so it still does
+/// not appear. An empty list remains the honest answer for a member nobody has
+/// reacted to yet, rather than a demo item dressed up as news.
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key, required this.controller});
 
@@ -35,6 +38,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         'Bildirimler',
         style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
       ),
+      actions: [
+        AnimatedBuilder(
+          animation: widget.controller,
+          builder: (context, _) => widget.controller.unreadCount == 0
+              ? const SizedBox.shrink()
+              : TextButton(
+                  onPressed: widget.controller.markAllRead,
+                  child: const Text(
+                    'Tümünü okundu işaretle',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                  ),
+                ),
+        ),
+      ],
     ),
     body: AnimatedBuilder(
       animation: widget.controller,
@@ -91,8 +108,8 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Arkadaşlık istekleri, gönderilerine gelen yorumlar ve kazandığın '
-            'rozetler burada görünecek.',
+            'Paylaşımlarına gelen yorumlar ve beğeniler, ilanlarına gelen ilgi '
+            'burada görünecek.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Color(0xFF64748B), height: 1.4),
           ),
@@ -132,6 +149,8 @@ class _NotificationTile extends StatelessWidget {
     AppNotificationType.specialRequest => Icons.volunteer_activism_rounded,
     AppNotificationType.postComment => Icons.mode_comment_outlined,
     AppNotificationType.postLike => Icons.favorite_border_rounded,
+    AppNotificationType.listingSaved => Icons.bookmark_border_rounded,
+    AppNotificationType.listingLiked => Icons.storefront_outlined,
     AppNotificationType.eventReminder => Icons.event_outlined,
     AppNotificationType.system => Icons.info_outline_rounded,
   };

@@ -23,11 +23,34 @@ class NotificationsController extends ChangeNotifier {
     try { items = await _repository.getNotifications(); } finally { isLoading = false; notifyListeners(); }
   }
 
-  Future<AppDeepLink> open(AppNotification notification) async {
-    if (!notification.isRead) {
-      await _repository.markRead(notification.id);
-      items = [for (final item in items) if (item.id == notification.id) item.copyWith(isRead: true) else item];
+  /// Hepsini okundu işaretle. Depoda bu yöntem başından beri vardı ama hiçbir
+  /// yerden çağrılmıyordu: on iki bildirimi temizlemenin tek yolu on ikisine
+  /// tek tek dokunmaktı.
+  Future<void> markAllRead() async {
+    if (unreadCount == 0) return;
+    final previous = items;
+    items = [for (final item in items) item.copyWith(isRead: true)];
+    notifyListeners();
+    try {
+      await _repository.markAllRead();
+    } catch (_) {
+      // Sunucu kabul etmediyse rozet geri geliyor: temizlenmiş gibi görünüp
+      // uygulama yeniden açılınca geri dönen bir sayaç daha kötü.
+      items = previous;
       notifyListeners();
+    }
+  }
+
+  Future<AppDeepLink> open(AppNotification notification) async {
+    // Okundu bilgisi sunucuya ulaşmazsa satır okunmamış kalıyor - ama açılış
+    // yine de oluyor. Kopan bağlantı yüzünden dokunulan bildirimin hiçbir şey
+    // yapmaması, sayacın bir fazla kalmasından daha kötü.
+    if (!notification.isRead) {
+      try {
+        await _repository.markRead(notification.id);
+        items = [for (final item in items) if (item.id == notification.id) item.copyWith(isRead: true) else item];
+        notifyListeners();
+      } catch (_) {}
     }
     return AppDeepLink.parse(notification.deepLink);
   }
