@@ -124,6 +124,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             ),
             _CommunityPulse(
               summary: summary,
+              failure: widget.controller.error,
+              loading: widget.controller.loading,
+              onRetry: widget.controller.load,
               onOpenMarketplace: widget.onOpenMarketplace,
             ),
             const SizedBox(height: 20),
@@ -401,10 +404,23 @@ class _StoryItem extends StatelessWidget {
 /// Buradaki her sayı `/community/home/summary`den gelir. Özet yüklenmeden ya da
 /// alınamadan sayaç satırı hiç çizilmez: uydurulmuş bir "8 aktif ilan", boş
 /// bırakılmış bir satırdan çok daha kötüdür.
+///
+/// Satır kaybolduğunda ekran sağlıklı ama sessiz görünüyordu — üye, topluluğun
+/// gerçekten boş olduğunu sanıyordu. Artık özet alınamadıysa nedeni yazıyor ve
+/// yeniden denemek için bir düğme duruyor.
 class _CommunityPulse extends StatelessWidget {
-  const _CommunityPulse({required this.summary, required this.onOpenMarketplace});
+  const _CommunityPulse({
+    required this.summary,
+    required this.failure,
+    required this.loading,
+    required this.onRetry,
+    required this.onOpenMarketplace,
+  });
 
   final CommunityHomeSummary? summary;
+  final String? failure;
+  final bool loading;
+  final VoidCallback onRetry;
   final VoidCallback onOpenMarketplace;
 
   @override
@@ -537,7 +553,10 @@ class _CommunityPulse extends StatelessWidget {
             ),
           ),
         ),
-        if (summary case final value?) ...[
+        if (failure != null) ...[
+          const SizedBox(height: 16),
+          _PulseFailure(message: failure!, loading: loading, onRetry: onRetry),
+        ] else if (summary case final value?) ...[
           const SizedBox(height: 16),
           Row(
             children: [
@@ -570,6 +589,77 @@ class _CommunityPulse extends StatelessWidget {
             ],
           ),
         ],
+      ],
+    ),
+  );
+}
+
+/// Nabız alınamadığında sayaçların yerine duran satır. Sunucunun söylediği neden
+/// olduğu gibi yazılır; "bir şeyler ters gitti" cümlesi üyeye giriş mi yapması
+/// yoksa ağını mı kontrol etmesi gerektiğini söylemiyordu.
+class _PulseFailure extends StatelessWidget {
+  const _PulseFailure({
+    required this.message,
+    required this.loading,
+    required this.onRetry,
+  });
+
+  final String message;
+  final bool loading;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.05),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: const Color(0xFFF43F5E).withValues(alpha: 0.35)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(
+          Icons.cloud_off_rounded,
+          size: 18,
+          color: Color(0xFFF43F5E),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            message,
+            style: const TextStyle(
+              color: Color(0xFFE2E8F0),
+              fontSize: 12,
+              height: 1.35,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        if (loading)
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF94A3B8),
+            ),
+          )
+        else
+          TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              'Yeniden dene',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+          ),
       ],
     ),
   );

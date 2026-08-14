@@ -77,6 +77,7 @@ Future<AuthController> pumpShell(
   WidgetTester tester, {
   String? signUpName,
   NotificationRepository notifications = const EmptyNotificationRepository(),
+  CommunityHomeRepository? homeRepository,
 }) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
@@ -145,7 +146,7 @@ Future<AuthController> pumpShell(
           repository: const MockJourneyRepository(),
         ),
         homeController: CommunityHomeController(
-          _StubHomeRepository(),
+          homeRepository ?? _StubHomeRepository(),
         ),
         memberCapabilitiesController: _StubCapabilitiesController(apiClient),
         authController: authController,

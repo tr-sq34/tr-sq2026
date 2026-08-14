@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../data/community_home_repository.dart';
 
 class CommunityHomeController extends ChangeNotifier {
@@ -25,8 +26,17 @@ class CommunityHomeController extends ChangeNotifier {
     notifyListeners();
     try {
       _summary = await _repository.fetch();
+    } on ApiException catch (error) {
+      // "Sunucu seni tanımadı" ile "sunucuya ulaşılamadı" aynı cümleyle
+      // geçiştirilirse üye neyi düzelteceğini bilemez: biri yeniden giriş,
+      // diğeri ağ sorunu. Sayaç satırı bu ikisinde de çizilmiyor, çünkü
+      // gelmeyen bir sayının yerine "0" yazmak sessizce yanlış bilgi vermek
+      // olur.
+      _error = error.statusCode == 401
+          ? 'Oturumun sona ermiş. Nabzı görmek için yeniden giriş yap.'
+          : 'Topluluk nabzı yüklenemedi: ${error.message}';
     } catch (_) {
-      _error = 'Ana sayfa bilgileri yüklenemedi.';
+      _error = 'Topluluk nabzı yüklenemedi.';
     } finally {
       _loading = false;
       notifyListeners();
