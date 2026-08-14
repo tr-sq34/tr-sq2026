@@ -288,22 +288,6 @@ class EventsCategoryScreen extends StatelessWidget {
       );
 }
 
-// Legacy visual reference retained temporarily while the event filter actions are wired.
-// ignore: unused_element
-class _LegacyDiscoveryPanel extends StatelessWidget {
-  const _LegacyDiscoveryPanel();
-  @override
-  Widget build(BuildContext context) {
-    const data = [('Kultur', Icons.palette_outlined), ('Sinema', Icons.local_movies_outlined), ('Sergiler', Icons.museum_outlined), ('Konserler', Icons.music_note_outlined), ('Geziler', Icons.explore_outlined), ('Atolyeler', Icons.auto_awesome_outlined), ('Lezzet', Icons.restaurant_outlined), ('Festival', Icons.celebration_outlined), ('Aile', Icons.family_restroom_outlined)];
-    return Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Wrap(spacing: 8, runSpacing: 8, children: [for (final item in const [(Icons.calendar_today_outlined, 'Tarih'), (Icons.grid_view_rounded, 'Kategori'), (Icons.swap_vert_rounded, 'Sirala')]) OutlinedButton.icon(onPressed: () {}, icon: Icon(item.$1, size: 16), label: Text(item.$2), style: OutlinedButton.styleFrom(foregroundColor: AppColors.textPrimary, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7), visualDensity: VisualDensity.compact, shape: const StadiumBorder()))]),
-      const SizedBox(height: 18), const Text('Etkinlik kategorileri', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary)), const SizedBox(height: 12),
-      LayoutBuilder(builder: (_, c) { final w = (c.maxWidth - 24) / 3; return Wrap(spacing: 12, runSpacing: 14, children: [for (final item in data) SizedBox(width: w, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 88, decoration: BoxDecoration(color: const Color(0xFFF0ECFF), borderRadius: BorderRadius.circular(13)), alignment: Alignment.center, child: Icon(item.$2, color: AppColors.primary, size: 28)), const SizedBox(height: 6), Text(item.$1, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700))]))]); }),
-    ]));
-  }
-}
-
-// ignore: unused_element
 class _EventCard extends StatelessWidget {
   const _EventCard({required this.event, required this.controller});
   final CommunityEvent event; final EventsController controller;
@@ -353,7 +337,7 @@ class EventDetailScreen extends StatelessWidget {
                       Text(_eventDate(current.startsAt.toLocal()), style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                       Text('${current.location}, ${current.city}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Color(0xFF2477A7), fontWeight: FontWeight.w700)),
                     ])),
-                    IconButton(onPressed: () {}, icon: const Icon(Icons.info_outline_rounded, size: 21)),
+                    // Basliktaki bilgi dugmesi buradaydi; basilinca hicbir sey acmiyordu.
                   ]),
                 ),
                 const Divider(height: 1, color: AppColors.surfaceBorder),
