@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
 import argon2 from 'argon2';
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
@@ -45,6 +45,46 @@ const OUTBOX_ROUTES: ReadonlyArray<{ queue: OutboxQueue; eventType: string }> = 
   { queue: 'messaging-projection', eventType: 'messaging.user_upserted' },
 ];
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
+
+/**
+ * Every error leaves through here in the shape the app expects.
+ *
+ * Handlers validate with `schema.parse(request.body)`, and a ZodError thrown out
+ * of a handler was reaching Fastify's default: HTTP 500, with the entire schema
+ * failure serialised into `message`. A member who left one field blank on the
+ * sign-up form got a server error instead of "bu bilgi eksik", and the response
+ * published the field names and types of the schema to anyone who posted an
+ * empty body.
+ *
+ * The bodies are deliberately short and identical per class. Which field failed
+ * is in the service log, where it helps; in the response it is a description of
+ * the validation rules, and the client already knows its own form.
+ */
+app.setErrorHandler((error: FastifyError, request, reply) => {
+  if (error instanceof z.ZodError) {
+    request.log.warn({ url: request.url, issues: error.issues }, 'request body rejected by schema');
+    return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'Gönderilen bilgiler geçersiz.' } });
+  }
+
+  const status = error.statusCode ?? 500;
+
+  // The rate limiter answers through the error handler too, and its default
+  // body is not the envelope the app parses - a throttled member saw an
+  // unreadable error rather than "biraz sonra tekrar deneyin".
+  if (status === 429) {
+    return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Çok fazla deneme yapıldı. Lütfen biraz sonra tekrar deneyin.' } });
+  }
+
+  if (status >= 400 && status < 500) {
+    request.log.warn({ url: request.url, err: error }, 'request rejected');
+    return reply.code(status).send({ error: { code: 'BAD_REQUEST', message: 'İstek işlenemedi.' } });
+  }
+
+  // Anything else is ours, not the caller's. It is logged in full and answered
+  // with a sentence that says nothing about the inside of the service.
+  request.log.error({ url: request.url, err: error }, 'unhandled error');
+  return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
+});
 
 const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128) });
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(128) });
