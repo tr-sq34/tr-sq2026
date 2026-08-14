@@ -25,6 +25,18 @@ route on it returns 404, and the same operator email has a different user id
 there than on Azure. It is a separate deployment with a separate database, not
 a copy.
 
+It keeps drifting further behind, and the gap is the whole point of this
+runbook. Checked again on 2026-08-13, after the Çarşı reaction work shipped to
+Azure in `06b25c7`:
+
+```
+PUT https://community-api.turksquare.com/v1/marketplace/.../reactions/save  -> 404 Route not found
+PUT https://ca-community-prod.bravesea-...azurecontainerapps.io/.../reactions/save -> 401 (route exists, wants a token)
+```
+
+Same request, same minute. Everything merged to main is live on Azure and
+invisible to anything built against the public hostnames.
+
 Gatework itself is not in this table and does not belong in it. The console has
 no ingress at all; it is reached only through the cloudflared sidecar in its own
 container app, and that stays as it is.
@@ -39,7 +51,7 @@ At the time of writing the Azure identity database holds **3 accounts**, all of
 them ours - read it back at any time from the console's Analitik screen, or:
 
 ```sh
-curl -s https://ca-identity-prod.<env>.centralus.azurecontainerapps.io/v1/auth/gatework/analytics \
+curl -s https://ca-identity-prod.bravesea-9c47c081.centralus.azurecontainerapps.io/v1/auth/gatework/analytics \
   -H "authorization: Bearer $OPERATOR_TOKEN"
 ```
 
@@ -51,7 +63,14 @@ piece of work with its own runbook.
 ## 1. Read the domain verification id
 
 One value for the whole Container App environment, so all four hostnames use the
-same one:
+same one. Read as of 2026-08-13:
+
+```
+D7C533E6C49CC876FE6A8CBEB3E7CAD52C3479A913DCBEFF370E5B3D2266C84D
+```
+
+It is not a secret - it is published in DNS on purpose, so that only someone who
+controls the zone can claim the hostname. Read it back at any time with:
 
 ```sh
 az containerapp show -n ca-identity-prod -g rg-turksquare-prod-centralus \
@@ -67,6 +86,11 @@ for app in ca-identity-prod ca-community-prod ca-messaging-gateway-prod ca-verif
 done
 ```
 
+The environment's domain suffix is `bravesea-9c47c081.centralus.azurecontainerapps.io`.
+It is fixed for the lifetime of the Container App environment, so the table below
+is already filled in - but if that environment is ever rebuilt, re-read both
+values before touching DNS.
+
 ## 2. Create the Cloudflare records
 
 Two records per hostname. **Proxy off (grey cloud)** for now: Azure issues the
@@ -75,14 +99,14 @@ container app, not Cloudflare's edge.
 
 | Type | Name | Content |
 | --- | --- | --- |
-| CNAME | `api` | `ca-identity-prod.<env>.centralus.azurecontainerapps.io` |
-| TXT | `asuid.api` | the verification id from step 1 |
-| CNAME | `community-api` | `ca-community-prod.<env>.centralus.azurecontainerapps.io` |
-| TXT | `asuid.community-api` | the verification id |
-| CNAME | `messages-api` | `ca-messaging-gateway-prod.<env>.centralus.azurecontainerapps.io` |
-| TXT | `asuid.messages-api` | the verification id |
-| CNAME | `verify` | `ca-verification-vault-prod.<env>.centralus.azurecontainerapps.io` |
-| TXT | `asuid.verify` | the verification id |
+| CNAME | `api` | `ca-identity-prod.bravesea-9c47c081.centralus.azurecontainerapps.io` |
+| TXT | `asuid.api` | `D7C533E6C49CC876FE6A8CBEB3E7CAD52C3479A913DCBEFF370E5B3D2266C84D` |
+| CNAME | `community-api` | `ca-community-prod.bravesea-9c47c081.centralus.azurecontainerapps.io` |
+| TXT | `asuid.community-api` | `D7C533E6C49CC876FE6A8CBEB3E7CAD52C3479A913DCBEFF370E5B3D2266C84D` |
+| CNAME | `messages-api` | `ca-messaging-gateway-prod.bravesea-9c47c081.centralus.azurecontainerapps.io` |
+| TXT | `asuid.messages-api` | `D7C533E6C49CC876FE6A8CBEB3E7CAD52C3479A913DCBEFF370E5B3D2266C84D` |
+| CNAME | `verify` | `ca-verification-vault-prod.bravesea-9c47c081.centralus.azurecontainerapps.io` |
+| TXT | `asuid.verify` | `D7C533E6C49CC876FE6A8CBEB3E7CAD52C3479A913DCBEFF370E5B3D2266C84D` |
 
 Delete the old `api` and `community-api` records that point at the AWS load
 balancers in the same edit. Two records for one name is not a migration, it is
