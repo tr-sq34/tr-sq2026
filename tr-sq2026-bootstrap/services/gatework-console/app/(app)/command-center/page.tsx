@@ -1,89 +1,289 @@
-import Link from 'next/link';
-import { Activity, Clock3, ShieldCheck, TriangleAlert } from 'lucide-react';
+import {
+  Activity, BadgeCheck, Gavel, Megaphone, MessageSquare, Radio, ShieldAlert, Siren, TrendingUp, Wrench,
+} from 'lucide-react';
 import { canReviewReports, moderationOverview, type ModerationOverview } from '@/lib/moderation';
-import { canSeeServiceHealth, healthSummary, serviceHealth, type ServiceHealth } from '@/lib/health';
+import { contentOverview, type ContentOverview } from '@/lib/content-moderation';
+import { canSeeServiceHealth, serviceHealth, type ServiceHealth } from '@/lib/health';
 import { canSeeSafety, isOpen, safetyPage, waitedFor } from '@/lib/safety';
+import { canSeeVerification, verificationPage } from '@/lib/verification';
+import { canSeeMarketplace, marketplacePage } from '@/lib/marketplace';
+import { listPromotions } from '@/lib/promotions';
 import { getSession } from '@/lib/session';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page';
+import { StatCard } from '@/components/ui/stat-card';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Komuta Merkezi.
+ *
+ * The rule this page is built on has not changed: every number is one a service
+ * answered with, and a service that did not answer produces a sentence saying
+ * so rather than a stale figure. A "0 bekleyen" that is really "the messaging
+ * gateway is down" is the most expensive wrong answer a console can give, since
+ * it reads as "nothing to do".
+ *
+ * What changed is coverage. The page used to ask three services and show four
+ * cards, two of which were prose. An operator opening the console still had to
+ * visit six sections to find out whether anything was waiting. Every queue in
+ * the console now reports here.
+ *
+ * The two cards at the bottom are the exception that proves the rule: real-time
+ * presence and daily transaction volume are on the specification but have no
+ * backend at all - no presence tracking, no wallet, no ledger. They are drawn
+ * as explicitly unavailable instead of being quietly dropped, so the gap stays
+ * visible to whoever picks the work up.
+ */
 export default async function CommandCenter() {
   const session = await getSession();
   const roles = session?.member.roles ?? [];
 
-  // Nothing on this page is hard-coded any more. Every card is either a number
-  // a service answered with, or a sentence saying which service did not answer;
-  // a stale "0 waiting" is worse than no card, and a permanent "not connected
-  // yet" on a module that has been live for weeks is worse than both.
-  const [overview, health, safety] = await Promise.all([
+  const [messaging, content, health, safety, verification, marketplace, promotions] = await Promise.all([
     canReviewReports(roles) ? moderationOverview().catch(() => null) : Promise.resolve(null),
+    canReviewReports(roles) ? contentOverview().catch(() => null) : Promise.resolve(null),
     canSeeServiceHealth(roles) ? serviceHealth().catch(() => null) : Promise.resolve(null),
     canSeeSafety(roles) ? safetyPage() : Promise.resolve(null),
-  ]) as [ModerationOverview | null, ServiceHealth[] | null, Awaited<ReturnType<typeof safetyPage>> | null];
-
-  const queueDescription = !canReviewReports(roles)
-    ? 'Bu rol için moderasyon verisi gösterilmez'
-    : overview
-      ? `${overview.openReports} bekleyen · ${overview.overdueReports} süresi geçen`
-      : 'Mesajlaşma servisine ulaşılamadı';
-
-  const healthDescription = !canSeeServiceHealth(roles)
-    ? 'Bu rol için servis durumu gösterilmez'
-    : health
-      ? healthSummary(health)
-      : 'Servis durumu okunamadı';
-  const healthUrgent = (health ?? []).some((check) => !check.healthy);
+    canSeeVerification(roles) ? verificationPage() : Promise.resolve(null),
+    canSeeMarketplace(roles) ? marketplacePage() : Promise.resolve(null),
+    listPromotions('pending').catch(() => null),
+  ]) as [
+    ModerationOverview | null,
+    ContentOverview | null,
+    ServiceHealth[] | null,
+    Awaited<ReturnType<typeof safetyPage>> | null,
+    Awaited<ReturnType<typeof verificationPage>> | null,
+    Awaited<ReturnType<typeof marketplacePage>> | null,
+    Awaited<ReturnType<typeof listPromotions>> | null,
+  ];
 
   // The alert that has been waiting longest is the only number here that gets
   // worse while nobody looks at it, so it is the one the card carries.
   const openAlerts = (safety?.alerts ?? []).filter(isOpen);
-  const oldest = openAlerts.reduce<string | null>(
+  const oldestAlert = openAlerts.reduce<string | null>(
     (waiting, alert) => (waiting === null || alert.createdAt < waiting ? alert.createdAt : waiting),
     null,
   );
-  const safetyDescription = !canSeeSafety(roles)
-    ? 'Bu rol için güvenlik verisi gösterilmez'
-    : safety?.failure
-      ? 'Güvenlik servisine ulaşılamadı'
-      : openAlerts.length === 0
-        ? 'Açık çağrı yok'
-        : `${openAlerts.length} açık çağrı · en eskisi ${waitedFor(oldest!, Date.now())} bekliyor`;
 
-  const cards = [
-    ['Servis sağlığı', healthDescription, Activity, canSeeServiceHealth(roles) ? '/system' : null, healthUrgent],
-    ['İnceleme kuyruğu', queueDescription, ShieldCheck, '/moderation', (overview?.overdueReports ?? 0) > 0],
-    ['Kritik olay', safetyDescription, TriangleAlert, canSeeSafety(roles) ? '/safety' : null, openAlerts.length > 0],
-    ['Son işlem', overview ? `Son 7 günde ${overview.resolvedLast7Days} şikâyet sonuçlandı` : 'Henüz audit olayı yok', Clock3, '/communications', false],
-  ] as const;
+  const down = (health ?? []).filter((check) => !check.healthy);
+  const pendingVerification =
+    (verification?.overview?.counts.created ?? 0) + (verification?.overview?.counts.requires_input ?? 0);
+
+  /** A queue card: the count when a service answered, and why not when it did not. */
+  const queue = (
+    allowed: boolean,
+    data: unknown,
+    count: number,
+    detail: string,
+    urgentCount: number,
+  ) => {
+    if (!allowed) return { value: '—', detail: 'Bu rol için gösterilmez', unavailable: true, tone: 'neutral' as const };
+    if (data === null || data === undefined) return { value: '—', detail: 'Servise ulaşılamadı', unavailable: true, tone: 'warning' as const };
+    return {
+      value: String(count),
+      detail,
+      unavailable: false,
+      tone: urgentCount > 0 ? ('danger' as const) : count > 0 ? ('warning' as const) : ('success' as const),
+    };
+  };
+
+  const messagingCard = queue(
+    canReviewReports(roles), messaging, messaging?.openReports ?? 0,
+    messaging ? `${messaging.overdueReports} süresi geçen · son 7 günde ${messaging.resolvedLast7Days} sonuçlandı` : '',
+    messaging?.overdueReports ?? 0,
+  );
+  const contentCard = queue(
+    canReviewReports(roles), content, content?.openReports ?? 0,
+    content ? `${content.urgentReports} acil · ${content.overdueReports} süresi geçen` : '',
+    content?.overdueReports ?? 0,
+  );
+  const safetyCard = queue(
+    canSeeSafety(roles), safety?.failure ? null : safety, openAlerts.length,
+    openAlerts.length === 0 ? 'Açık çağrı yok' : `En eskisi ${waitedFor(oldestAlert!, Date.now())} bekliyor`,
+    openAlerts.length,
+  );
+  const verificationCard = queue(
+    canSeeVerification(roles), verification?.failure ? null : verification?.overview, pendingVerification,
+    verification?.overview ? `${verification.overview.total} başvurunun ${pendingVerification} tanesi sırada` : '',
+    0,
+  );
 
   return (
-    <main>
-      <div className="mb-8">
-        <p className="text-sm text-emerald-400">Operasyon görünümü</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Komuta Merkezi</h1>
-        <p className="mt-2 max-w-2xl text-zinc-400">Buradaki her sayı bir servisin verdiği yanıttır. Servis yanıt vermediğinde kart eski sayıyı göstermez, ulaşılamadığını söyler.</p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map(([title, description, Icon, href, urgent]) => {
-          const body = (
-            <article className={`h-full rounded-xl border p-5 ${urgent ? 'border-rose-500/40 bg-rose-500/10' : 'border-white/10 bg-zinc-900/50'} ${href ? 'transition hover:border-emerald-400/40' : ''}`}>
-              <Icon size={20} className={urgent ? 'text-rose-300' : 'text-emerald-400'} />
-              <h2 className="mt-5 font-medium">{title}</h2>
-              <p className="mt-2 text-sm text-zinc-500">{description}</p>
-            </article>
-          );
-          return href ? <Link key={title} href={href}>{body}</Link> : <div key={title}>{body}</div>;
-        })}
-      </div>
-      <section className="mt-8 rounded-xl border border-white/10 bg-zinc-900/30 p-6">
-        <h2 className="font-semibold">Güvenlik durumu</h2>
-        <ul className="mt-4 grid gap-3 text-sm text-zinc-300">
-          <li>✓ Gatework uygulama verileri önbelleğe alınmaz.</li>
-          <li>✓ Yüksek riskli işlemler için step-up doğrulama zorunludur.</li>
-          <li>✓ Normal kullanıcı taklidi yerine resmî sistem hesapları kullanılır.</li>
-          <li>✓ Şikâyet edilen mesajlar yalnızca donmuş kanıt kopyası olarak görüntülenir; canlı özel konuşma okunamaz.</li>
-        </ul>
+    <>
+      <PageHeader
+        eyebrow="Operasyon görünümü"
+        title="Komuta Merkezi"
+        description="Buradaki her sayı bir servisin verdiği yanıttır. Servis yanıt vermediğinde kart eski sayıyı göstermez, ulaşılamadığını söyler."
+        actions={
+          <>
+            {/* Both actions are on the specification and neither has a backend:
+                there is no announcement fan-out and no maintenance switch in any
+                service. Disabled and labelled beats a button that silently does
+                nothing. */}
+            <Button variant="outline" size="sm" disabled title="Duyuru servisi henüz yok">
+              <Megaphone size={15} /> Global duyuru geç
+            </Button>
+            <Button variant="outline" size="sm" disabled title="Bakım modu anahtarı henüz yok">
+              <Wrench size={15} /> Bakım modu
+            </Button>
+          </>
+        }
+      />
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Mesaj şikâyetleri" value={messagingCard.value} detail={messagingCard.detail}
+          icon={MessageSquare} tone={messagingCard.tone} unavailable={messagingCard.unavailable}
+          href={canReviewReports(roles) ? '/moderation' : null}
+        />
+        <StatCard
+          label="İçerik şikâyetleri" value={contentCard.value} detail={contentCard.detail}
+          icon={ShieldAlert} tone={contentCard.tone} unavailable={contentCard.unavailable}
+          href={canReviewReports(roles) ? '/moderation' : null}
+        />
+        <StatCard
+          label="Açık SOS çağrısı" value={safetyCard.value} detail={safetyCard.detail}
+          icon={Siren} tone={safetyCard.tone} unavailable={safetyCard.unavailable}
+          href={canSeeSafety(roles) ? '/safety' : null}
+        />
+        <StatCard
+          label="Bekleyen doğrulama" value={verificationCard.value} detail={verificationCard.detail}
+          icon={BadgeCheck} tone={verificationCard.tone} unavailable={verificationCard.unavailable}
+          href={canSeeVerification(roles) ? '/verification' : null}
+        />
       </section>
-    </main>
+
+      <section className="mt-4 grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <div>
+              <CardTitle>Servis sağlığı</CardTitle>
+              <CardDescription>Her servisin kendi /health ucu, üç saniyelik zaman aşımıyla. Yavaş servis, düşmüş servis sayılır.</CardDescription>
+            </div>
+            {health && (
+              <Badge tone={down.length === 0 ? 'success' : 'danger'} dot>
+                {down.length === 0 ? 'Tümü ayakta' : `${down.length} servis düşük`}
+              </Badge>
+            )}
+          </CardHeader>
+          <CardContent>
+            {!canSeeServiceHealth(roles) ? (
+              <p className="text-sm text-ink-faint">Bu rol için servis durumu gösterilmez.</p>
+            ) : !health ? (
+              <p className="text-sm text-warning">Servis durumu okunamadı.</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {health.map((check) => (
+                  <div
+                    key={check.name}
+                    className={`flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3 ${
+                      check.healthy ? 'border-hairline bg-surface-raised' : 'border-danger/40 bg-danger-soft'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2.5 text-sm text-ink">
+                      <Activity size={15} className={check.healthy ? 'text-success' : 'text-danger'} />
+                      {check.name}
+                    </span>
+                    <Badge tone={check.healthy ? 'success' : 'danger'} dot>
+                      {check.healthy ? 'Ayakta' : 'Yanıt yok'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Onay bekleyenler</CardTitle>
+              <CardDescription>Bir yetkilinin karar vermesini bekleyen kuyruklar.</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-2.5">
+            <PendingRow
+              icon={Megaphone} label="Tanıtım talebi" href="/promotions"
+              value={promotions === null ? null : promotions.length}
+            />
+            <PendingRow
+              icon={Gavel} label="Biten ihale" href="/marketplace"
+              value={!canSeeMarketplace(roles) ? undefined : marketplace?.overview ? marketplace.overview.endingSoon : null}
+            />
+            <PendingRow
+              icon={TrendingUp} label="Son 7 günde yeni ilan" href="/marketplace"
+              value={!canSeeMarketplace(roles) ? undefined : marketplace?.overview ? marketplace.overview.newListingsLast7Days : null}
+              neutral
+            />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="mt-4 grid gap-4 sm:grid-cols-2">
+        <StatCard
+          label="Anlık aktif kullanıcı" value="—" icon={Radio} tone="warning" unavailable
+          badge="Servis yok"
+          detail="Hiçbir serviste oturum/varlık takibi yok; sayının kaynağı olmadan kart doldurulamaz."
+        />
+        <StatCard
+          label="Günlük işlem hacmi" value="—" icon={TrendingUp} tone="warning" unavailable
+          badge="Servis yok"
+          detail="Çip ya da cüzdan sistemi henüz yok. Bilet geliri, Etkinlikler ve Biletleme bitince buraya bağlanacak."
+        />
+      </section>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <div>
+            <CardTitle>Bu konsolun uymak zorunda olduğu kurallar</CardTitle>
+            <CardDescription>Tasarım değil, davranış: aşağıdakiler servis tarafında zorlanır.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <ul className="grid gap-2.5 text-sm text-ink-muted">
+            {[
+              'Gatework uygulama verilerini önbelleğe almaz.',
+              'Yüksek riskli işlemler için step-up doğrulama zorunludur.',
+              'Normal kullanıcı taklidi yerine resmî sistem hesapları kullanılır.',
+              'Şikâyet edilen mesajlar yalnızca donmuş kanıt kopyası olarak görüntülenir; canlı özel konuşma okunamaz.',
+              'Konum ekranları üyenin canlı konumunu değil, yalnızca kendi yayımladığı şehri toplulaştırır.',
+            ].map((rule) => (
+              <li key={rule} className="flex gap-2.5">
+                <span className="mt-2 size-1.5 shrink-0 rounded-full bg-success" aria-hidden />
+                {rule}
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+    </>
+  );
+}
+
+/**
+ * `undefined` means the role may not see it, `null` means the service did not
+ * answer, and a number means the service answered. Collapsing the first two
+ * into "0" is exactly the failure this page exists to avoid.
+ */
+function PendingRow({ icon: Icon, label, value, href, neutral = false }: {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  value: number | null | undefined;
+  href: string;
+  neutral?: boolean;
+}) {
+  const tone = value === undefined || value === null ? 'neutral' : neutral || value === 0 ? 'neutral' : 'warning';
+  return (
+    <a href={href} className="flex items-center justify-between gap-3 rounded-lg border border-hairline bg-surface-raised px-3.5 py-3 transition hover:border-brand-400/50">
+      <span className="flex items-center gap-2.5 text-sm text-ink-muted">
+        <Icon size={15} className="text-ink-faint" />
+        {label}
+      </span>
+      <Badge tone={tone}>
+        {value === undefined ? 'Gösterilmez' : value === null ? 'Ulaşılamadı' : value}
+      </Badge>
+    </a>
   );
 }
