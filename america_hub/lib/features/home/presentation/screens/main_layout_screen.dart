@@ -23,6 +23,7 @@ import '../../../community/domain/entities/community_post.dart';
 import '../../../community/presentation/screens/post_composer_screen.dart';
 import '../../../community/presentation/widgets/post_comments.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
+import '../../../messaging/presentation/messaging_launcher.dart';
 import '../../../forum/application/forum_controller.dart';
 import '../../../forum/domain/entities/forum.dart';
 import '../../../forum/presentation/screens/forum_screen.dart';
@@ -72,6 +73,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.promotionsController,
     required this.forumController,
     required this.sosController,
+    required this.messaging,
   });
   final CommunityFeedController communityController;
   final StoryController storyController;
@@ -82,6 +84,10 @@ class MainLayoutScreen extends StatefulWidget {
   final ContentModerationRepository contentModerationRepository;
   final EventsController eventsController;
   final MarketplaceController marketplaceController;
+
+  /// Satıcıyla sohbeti açan taraf. Çarşı'nın kendi içinde bir mesajlaşma
+  /// deposu yok; kabuk sahip olduğu tek nesneyi aşağıya veriyor.
+  final MessagingLauncher messaging;
   final ProfileController profileController;
   final FriendshipController friendshipController;
   final JourneyController journeyController;
@@ -157,6 +163,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     MarketplaceScreen(
       controller: widget.marketplaceController,
       memberCapabilitiesController: widget.memberCapabilitiesController,
+      messaging: widget.messaging,
     ),
     ProfileScreen(
       controller: widget.profileController,
@@ -421,6 +428,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         builder: (_) => MarketplaceDetailScreen(
           listing: listing,
           controller: widget.marketplaceController,
+          messaging: widget.messaging,
         ),
       ),
     );
@@ -428,7 +436,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
   void _notifyMissing(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// The compose sheet, reachable from the ➕ in the middle of the nav bar.
@@ -513,10 +523,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                     },
                   ),
                   Expanded(
-                    child: IndexedStack(
-                      index: _currentIndex,
-                      children: _pages,
-                    ),
+                    child: IndexedStack(index: _currentIndex, children: _pages),
                   ),
                 ],
               ),
@@ -542,9 +549,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   static String _titleFor(int index, String? displayName) => switch (index) {
     1 => 'Akış',
     2 => 'Çarşı',
-    3 => (displayName?.trim().isNotEmpty ?? false)
-        ? displayName!.trim()
-        : 'Profil',
+    3 =>
+      (displayName?.trim().isNotEmpty ?? false)
+          ? displayName!.trim()
+          : 'Profil',
     _ => 'TurkSquare',
   };
 
@@ -1052,40 +1060,45 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       child: Opacity(
         opacity: comingSoon ? 0.55 : 1,
         child: ListTile(
-        onTap: comingSoon ? null : onTap,
-        enabled: !comingSoon,
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        leading: Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: iconBg,
-            borderRadius: BorderRadius.circular(10),
+          onTap: comingSoon ? null : onTap,
+          enabled: !comingSoon,
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 2,
           ),
-          child: Icon(icon, size: 17, color: iconColor),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-            color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
           ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
-        ),
-        trailing: comingSoon
-            ? const _ComingSoonChip()
-            : badgeWidget ??
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 16,
-                    color: Color(0xFF475569),
-                  ),
+          leading: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 17, color: iconColor),
+          ),
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
+          ),
+          trailing: comingSoon
+              ? const _ComingSoonChip()
+              : badgeWidget ??
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 16,
+                      color: Color(0xFF475569),
+                    ),
         ),
       ),
     );

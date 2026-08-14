@@ -43,6 +43,7 @@ import 'package:america_hub/features/safety/application/sos_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'fake_image_http.dart';
+import 'test_messaging.dart';
 import 'fake_sos.dart';
 
 /// Lets overflow reports through without failing the test.
@@ -164,6 +165,7 @@ Future<AuthController> pumpShell(
           repository: MockForumRepository(viewer: () => authController.user),
         ),
         sosController: SosController(repository: FakeSosRepository()),
+        messaging: testMessaging(viewerId: authController.user?.id ?? 'me'),
         onSignOut: () async {},
       ),
     ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../application/marketplace_controller.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/entities/marketplace_seller.dart';
+import '../../../messaging/presentation/messaging_launcher.dart';
 import 'marketplace_screen.dart';
 
 class MarketplaceSellerProfileScreen extends StatefulWidget {
@@ -10,11 +11,13 @@ class MarketplaceSellerProfileScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.sellerId,
+    required this.messaging,
     this.embedded = false,
   });
 
   final MarketplaceController controller;
   final String sellerId;
+  final MessagingLauncher messaging;
   final bool embedded;
 
   @override
@@ -28,7 +31,7 @@ class _MarketplaceSellerProfileScreenState
   List<MarketplaceListing>? _listings;
   bool _loading = true;
   String? _error;
-  bool _isFollowing = false;
+  bool _opening = false;
 
   @override
   void initState() {
@@ -63,6 +66,24 @@ class _MarketplaceSellerProfileScreenState
           _loading = false;
         });
       }
+    }
+  }
+
+  /// Vitrindeki "Mesaj Gönder" de bir şey yapmıyordu. Satıcıyla sohbet
+  /// ilandakiyle aynı yerden açılıyor.
+  Future<void> _message() async {
+    final userId = _profile?.userId ?? widget.sellerId;
+    setState(() => _opening = true);
+    final opened = await widget.messaging.openWithMember(
+      context,
+      userId: userId,
+    );
+    if (!mounted) return;
+    setState(() => _opening = false);
+    if (!opened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Satıcıyla sohbet şu anda açılamadı.')),
+      );
     }
   }
 
@@ -107,7 +128,7 @@ class _MarketplaceSellerProfileScreenState
                 colors: [
                   Color(0xFF1E1A47),
                   Color(0xFF3B3383),
-                  Color(0xFF6355D8)
+                  Color(0xFF6355D8),
                 ],
               ),
               borderRadius: BorderRadius.only(
@@ -142,10 +163,7 @@ class _MarketplaceSellerProfileScreenState
                         letterSpacing: 1.5,
                       ),
                     ),
-                    _CircleIconBtn(
-                      icon: Icons.more_vert_rounded,
-                      onTap: () {},
-                    ),
+                    _CircleIconBtn(icon: Icons.more_vert_rounded, onTap: () {}),
                   ],
                 ),
                 const SizedBox(height: 24),
@@ -164,7 +182,7 @@ class _MarketplaceSellerProfileScreenState
                               colors: [
                                 Color(0xFFFBBF24),
                                 Color(0xFFF43F5E),
-                                Color(0xFF6355D8)
+                                Color(0xFF6355D8),
                               ],
                             ),
                           ),
@@ -174,7 +192,8 @@ class _MarketplaceSellerProfileScreenState
                             backgroundImage: (p.avatarUrl?.isNotEmpty ?? false)
                                 ? NetworkImage(p.avatarUrl!)
                                 : null,
-                            onBackgroundImageError: (p.avatarUrl?.isNotEmpty ?? false)
+                            onBackgroundImageError:
+                                (p.avatarUrl?.isNotEmpty ?? false)
                                 ? (exception, stackTrace) {}
                                 : null,
                             child: (p.avatarUrl?.isEmpty ?? true)
@@ -218,19 +237,24 @@ class _MarketplaceSellerProfileScreenState
                               const SizedBox(width: 6),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 3),
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.amber.withValues(alpha: 0.2),
                                   borderRadius: BorderRadius.circular(20),
                                   border: Border.all(
-                                      color:
-                                          Colors.amber.withValues(alpha: 0.5)),
+                                    color: Colors.amber.withValues(alpha: 0.5),
+                                  ),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.shield_outlined,
-                                        size: 10, color: Colors.amber),
+                                    Icon(
+                                      Icons.shield_outlined,
+                                      size: 10,
+                                      color: Colors.amber,
+                                    ),
                                     SizedBox(width: 4),
                                     Text(
                                       'Onaylı Satıcı',
@@ -265,15 +289,20 @@ class _MarketplaceSellerProfileScreenState
                               children: [
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.white.withValues(alpha: 0.1),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Row(
                                     children: [
-                                      const Icon(Icons.star_rounded,
-                                          color: Colors.amber, size: 14),
+                                      const Icon(
+                                        Icons.star_rounded,
+                                        color: Colors.amber,
+                                        size: 14,
+                                      ),
                                       const SizedBox(width: 4),
                                       Text(
                                         '${p.rating}',
@@ -304,31 +333,18 @@ class _MarketplaceSellerProfileScreenState
                 ),
                 const SizedBox(height: 24),
                 // Actions
-                Row(
-                  children: [
-                    Expanded(
-                      child: _HeaderBtn(
-                        label: 'Mesaj Gönder',
-                        icon: Icons.send_rounded,
-                        onTap: () {},
-                        primary: true,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _HeaderBtn(
-                        label: _isFollowing ? 'Takip Ediliyor' : 'Takip Et',
-                        icon: _isFollowing
-                            ? Icons.check_rounded
-                            : Icons.person_add_rounded,
-                        onTap: () =>
-                            setState(() => _isFollowing = !_isFollowing),
-                        primary: false,
-                        active: _isFollowing,
-                      ),
-                    ),
-                  ],
-                ),
+                //
+                // Yanındaki "Takip Et" düğmesi kaldırıldı: bu sistemde takip
+                // diye bir şey yok, düğme yalnızca kendi rengini değiştirip
+                // ekran kapanınca unutuyordu. Kalan tek düğme gerçekten
+                // satıcıya götürüyor.
+                if (widget.messaging.canMessage(p.userId))
+                  _HeaderBtn(
+                    label: 'Mesaj Gönder',
+                    icon: Icons.send_rounded,
+                    onTap: _opening ? () {} : _message,
+                    primary: true,
+                  ),
               ],
             ),
           ),
@@ -348,7 +364,8 @@ class _MarketplaceSellerProfileScreenState
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                        color: const Color(0xFFD9D6FE).withValues(alpha: 0.3)),
+                      color: const Color(0xFFD9D6FE).withValues(alpha: 0.3),
+                    ),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.02),
@@ -372,27 +389,33 @@ class _MarketplaceSellerProfileScreenState
                                     color: const Color(0xFFF5F3FF),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Icon(Icons.analytics_outlined,
-                                      color: Color(0xFF6355D8), size: 18),
+                                  child: const Icon(
+                                    Icons.analytics_outlined,
+                                    color: Color(0xFF6355D8),
+                                    size: 18,
+                                  ),
                                 ),
                                 const SizedBox(width: 12),
                                 const Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         'Güven & Performans Özeti',
                                         style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                            color: Color(0xFF0F172A)),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                          color: Color(0xFF0F172A),
+                                        ),
                                       ),
                                       Text(
                                         'Son 30 günlük satıcı verileri',
                                         style: TextStyle(
-                                            color: Color(0xFF94A3B8),
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w500),
+                                          color: Color(0xFF94A3B8),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w500,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -406,19 +429,23 @@ class _MarketplaceSellerProfileScreenState
                             const SizedBox(width: 8),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFECFDF5),
                                 borderRadius: BorderRadius.circular(8),
-                                border:
-                                    Border.all(color: const Color(0xFFA7F3D0)),
+                                border: Border.all(
+                                  color: const Color(0xFFA7F3D0),
+                                ),
                               ),
                               child: const Text(
                                 'Yüksek Puanlı',
                                 style: TextStyle(
-                                    color: Color(0xFF047857),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 9),
+                                  color: Color(0xFF047857),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 9,
+                                ),
                               ),
                             ),
                           ],
@@ -446,9 +473,10 @@ class _MarketplaceSellerProfileScreenState
                                 ),
                               ),
                               Container(
-                                  width: 1,
-                                  height: 24,
-                                  color: const Color(0xFFE2E8F0)),
+                                width: 1,
+                                height: 24,
+                                color: const Color(0xFFE2E8F0),
+                              ),
                               Expanded(
                                 child: _MetricItem(
                                   icon: Icons.access_time_rounded,
@@ -524,8 +552,10 @@ class _MarketplaceSellerProfileScreenState
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: 40),
               child: Center(
-                child: Text('Henüz aktif bir ilan bulunmuyor.',
-                    style: TextStyle(color: Colors.grey)),
+                child: Text(
+                  'Henüz aktif bir ilan bulunmuyor.',
+                  style: TextStyle(color: Colors.grey),
+                ),
               ),
             ),
           )
@@ -543,6 +573,7 @@ class _MarketplaceSellerProfileScreenState
                 (context, index) => MarketplaceListingCard(
                   listing: listings[index],
                   controller: widget.controller,
+                  messaging: widget.messaging,
                 ),
                 childCount: listings.length,
               ),
@@ -565,26 +596,26 @@ class _MarketplaceSellerProfileScreenState
       'Eylül',
       'Ekim',
       'Kasım',
-      'Aralık'
+      'Aralık',
     ];
     return '${months[date.month - 1]} ${date.year}';
   }
 
   IconData _getBadgeIcon(String icon) => switch (icon) {
-        'verified' => Icons.badge_rounded,
-        'bolt' => Icons.bolt_rounded,
-        'handshake' => Icons.handshake_rounded,
-        'groups' => Icons.workspace_premium_rounded,
-        _ => Icons.verified_user_rounded,
-      };
+    'verified' => Icons.badge_rounded,
+    'bolt' => Icons.bolt_rounded,
+    'handshake' => Icons.handshake_rounded,
+    'groups' => Icons.workspace_premium_rounded,
+    _ => Icons.verified_user_rounded,
+  };
 
   Color _getBadgeColor(String icon) => switch (icon) {
-        'verified' => const Color(0xFF10B981),
-        'bolt' => const Color(0xFFF59E0B),
-        'handshake' => const Color(0xFF6355D8),
-        'groups' => const Color(0xFF4F46E5),
-        _ => const Color(0xFF64748B),
-      };
+    'verified' => const Color(0xFF10B981),
+    'bolt' => const Color(0xFFF59E0B),
+    'handshake' => const Color(0xFF6355D8),
+    'groups' => const Color(0xFF4F46E5),
+    _ => const Color(0xFF64748B),
+  };
 }
 
 class _CircleIconBtn extends StatelessWidget {
@@ -593,26 +624,27 @@ class _CircleIconBtn extends StatelessWidget {
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => Material(
-        color: Colors.white.withValues(alpha: 0.1),
-        shape: const CircleBorder(),
-        child: InkWell(
-          onTap: onTap,
-          customBorder: const CircleBorder(),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, color: Colors.white, size: 20),
-          ),
-        ),
-      );
+    color: Colors.white.withValues(alpha: 0.1),
+    shape: const CircleBorder(),
+    child: InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Icon(icon, color: Colors.white, size: 20),
+      ),
+    ),
+  );
 }
 
 class _HeaderBtn extends StatelessWidget {
-  const _HeaderBtn(
-      {required this.label,
-      required this.icon,
-      required this.onTap,
-      this.primary = true,
-      this.active = false});
+  const _HeaderBtn({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.primary = true,
+    this.active = false,
+  });
   final String label;
   final IconData icon;
   final VoidCallback onTap;
@@ -623,7 +655,9 @@ class _HeaderBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final bgColor = primary
         ? Colors.white
-        : (active ? const Color(0xFF10B981) : Colors.white.withValues(alpha: 0.15));
+        : (active
+              ? const Color(0xFF10B981)
+              : Colors.white.withValues(alpha: 0.15));
     final textColor = primary ? const Color(0xFF1E1A47) : Colors.white;
     final iconColor = primary ? const Color(0xFF6355D8) : Colors.white;
 
@@ -649,9 +683,10 @@ class _HeaderBtn extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12),
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ],
           ),
@@ -662,88 +697,99 @@ class _HeaderBtn extends StatelessWidget {
 }
 
 class _MetricItem extends StatelessWidget {
-  const _MetricItem(
-      {required this.icon,
-      required this.iconColor,
-      required this.label,
-      required this.value});
+  const _MetricItem({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+  });
   final IconData icon;
   final Color iconColor;
   final String label;
   final String value;
   @override
   Widget build(BuildContext context) => Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: iconColor, size: 20),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 9,
-                        color: Color(0xFF94A3B8),
-                        fontWeight: FontWeight.bold)),
-                Text(value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF334155))),
-              ],
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(icon, color: iconColor, size: 20),
+      const SizedBox(width: 10),
+      Flexible(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 9,
+                color: Color(0xFF94A3B8),
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-        ],
-      );
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF334155),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
 }
 
 class _ModernBadgeChip extends StatelessWidget {
-  const _ModernBadgeChip(
-      {required this.label, required this.icon, required this.color});
+  const _ModernBadgeChip({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
   final String label;
   final IconData icon;
   final Color color;
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.02),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: const Color(0xFFE2E8F0)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.02),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, color: color, size: 14),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF334155)),
-            ),
-          ],
+      ],
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: color, size: 14),
         ),
-      );
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF334155),
+          ),
+        ),
+      ],
+    ),
+  );
 }

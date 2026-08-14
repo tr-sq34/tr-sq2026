@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/test_member_capabilities.dart';
+import 'support/test_messaging.dart';
 
 void main() {
   testWidgets('Çarşı renders after initial load without viewport exceptions', (tester) async {
@@ -40,5 +41,6 @@ class MarketplaceTestHost extends StatelessWidget {
   Widget build(BuildContext context) => MarketplaceScreen(
         controller: MarketplaceController(repository: MockMarketplaceRepository()),
         memberCapabilitiesController: testMemberCapabilitiesController(),
+        messaging: testMessaging(),
       );
 }

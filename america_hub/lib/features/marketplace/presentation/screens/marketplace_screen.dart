@@ -8,6 +8,7 @@ import '../../application/marketplace_controller.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/entities/marketplace_seller.dart';
 import 'marketplace_seller_profile_screen.dart';
+import '../../../messaging/presentation/messaging_launcher.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 
 class MarketplaceScreen extends StatefulWidget {
@@ -15,9 +16,14 @@ class MarketplaceScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.memberCapabilitiesController,
+    required this.messaging,
   });
   final MarketplaceController controller;
   final MemberCapabilitiesController memberCapabilitiesController;
+
+  /// Satıcıyla konuşmanın yolu. Çarşı'nın her yerinde aynı düğme aynı yere
+  /// gitsin diye tek bir nesne aşağıya iniyor.
+  final MessagingLauncher messaging;
 
   @override
   State<MarketplaceScreen> createState() => _MarketplaceScreenState();
@@ -78,10 +84,12 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
                         controller: widget.controller,
                         memberCapabilitiesController:
                             widget.memberCapabilitiesController,
+                        messaging: widget.messaging,
                       )
                     : MarketplaceFeedView(
                         controller: widget.controller,
                         local: _tab == 2,
+                        messaging: widget.messaging,
                       ),
               ),
             ],
@@ -157,9 +165,11 @@ class MarketplaceFeedView extends StatelessWidget {
     super.key,
     required this.controller,
     required this.local,
+    required this.messaging,
   });
   final MarketplaceController controller;
   final bool local;
+  final MessagingLauncher messaging;
 
   @override
   Widget build(BuildContext context) {
@@ -213,8 +223,7 @@ class MarketplaceFeedView extends StatelessWidget {
                   ),
                 ),
                 TextButton(
-                  onPressed: () =>
-                      controller.updateFilters(savedOnly: false),
+                  onPressed: () => controller.updateFilters(savedOnly: false),
                   child: const Text('Tüm ilanlar'),
                 ),
               ],
@@ -252,6 +261,7 @@ class MarketplaceFeedView extends StatelessWidget {
                         child: MarketplaceListingCard(
                           listing: listing,
                           controller: controller,
+                          messaging: messaging,
                         ),
                       ),
                   ],
@@ -269,20 +279,22 @@ class MarketplaceListingCard extends StatelessWidget {
     super.key,
     required this.listing,
     required this.controller,
+    required this.messaging,
   });
   final MarketplaceListing listing;
   final MarketplaceController controller;
+  final MessagingLauncher messaging;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: () {
-        print('DEBUG [Marketplace]: Ilana tiklandi -> ID: ${listing.id}');
         Navigator.of(context, rootNavigator: true).push(
           MaterialPageRoute<void>(
             builder: (_) => MarketplaceDetailScreen(
               listing: listing,
               controller: controller,
+              messaging: messaging,
             ),
           ),
         );
@@ -461,9 +473,11 @@ class SellerOverviewScreen extends StatelessWidget {
     super.key,
     required this.controller,
     required this.memberCapabilitiesController,
+    required this.messaging,
   });
   final MarketplaceController controller;
   final MemberCapabilitiesController memberCapabilitiesController;
+  final MessagingLauncher messaging;
 
   @override
   Widget build(BuildContext context) {
@@ -481,6 +495,7 @@ class SellerOverviewScreen extends StatelessWidget {
               builder: (_) => MarketplaceSellerProfileScreen(
                 controller: controller,
                 sellerId: dashboard?.sellerId ?? '',
+                messaging: messaging,
               ),
             ),
           ),
@@ -603,9 +618,7 @@ class SellerOverviewScreen extends StatelessWidget {
                       const SizedBox(height: 10),
                       Text(
                         'En çok kaydedilen: ${top.title} (${top.saves})',
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                        ),
+                        style: const TextStyle(color: AppColors.textSecondary),
                       ),
                     ],
                   ],
@@ -790,7 +803,9 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
       if (!mounted) return;
       setState(() {});
       if (error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error)));
       }
     }
     if (mounted) setState(() => _uploading = false);
@@ -1117,11 +1132,7 @@ class _ListingPhotoStrip extends StatelessWidget {
                 ),
                 // İlk fotoğraf kapak oluyor; satıcının bunu bilmesi gerekiyor.
                 if (index == 0)
-                  const Positioned(
-                    left: 6,
-                    bottom: 6,
-                    child: _CoverTag(),
-                  ),
+                  const Positioned(left: 6, bottom: 6, child: _CoverTag()),
                 Positioned(
                   right: 2,
                   top: 2,
@@ -1130,7 +1141,11 @@ class _ListingPhotoStrip extends StatelessWidget {
                     icon: const CircleAvatar(
                       radius: 12,
                       backgroundColor: Colors.black54,
-                      child: Icon(Icons.close_rounded, size: 14, color: Colors.white),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 14,
+                        color: Colors.white,
+                      ),
                     ),
                     onPressed: () => onRemove(index),
                   ),
@@ -1190,7 +1205,11 @@ class _CoverTag extends StatelessWidget {
     ),
     child: const Text(
       'Kapak',
-      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+      ),
     ),
   );
 }
@@ -1200,27 +1219,46 @@ class MarketplaceDetailScreen extends StatefulWidget {
     super.key,
     required this.listing,
     required this.controller,
+    required this.messaging,
   });
   final MarketplaceListing listing;
   final MarketplaceController controller;
+  final MessagingLauncher messaging;
   @override
   State<MarketplaceDetailScreen> createState() =>
       _MarketplaceDetailScreenState();
 }
 
 class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
-  bool _showToast = false;
+  /// İlanın altındaki hazır soru. Ekranda ne yazıyorsa satıcıya o gidiyor.
+  static const _quickQuestion = 'Hâlâ satılık mı?';
 
-  void _triggerToast() {
-    setState(() => _showToast = true);
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted) setState(() => _showToast = false);
-    });
+  bool _opening = false;
+
+  /// İlanın altındaki düğme aylardır hiçbir şey göndermeden "Mesaj İsteği
+  /// Gönderildi" diyordu. Artık satıcıyla sohbeti gerçekten açıyor; alıcı ne
+  /// söyleyeceğini kendi yazıyor.
+  Future<void> _contactSeller({String? firstMessage}) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    final opened = await widget.messaging.openWithMember(
+      context,
+      userId: widget.listing.sellerId,
+      firstMessage: firstMessage,
+    );
+    if (!mounted) return;
+    setState(() => _opening = false);
+    if (!opened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Satıcıyla sohbet şu anda açılamadı.')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final listing = widget.listing;
+    final canContact = widget.messaging.canMessage(listing.sellerId);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -1279,62 +1317,66 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
           const SizedBox(width: 12),
         ],
       ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10 + 20),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.9),
-          border: const Border(top: BorderSide(color: Color(0xFFF1F5F9))),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, -5),
-            ),
-          ],
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _triggerToast,
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+      // Kendi ilanında satıcı sensin: kendine mesaj gönderilmiyor, o yüzden
+      // düğme de yok.
+      bottomNavigationBar: !canContact
+          ? null
+          : Container(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10 + 20),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF3B3383), Color(0xFF6355D8)],
-                ),
-                borderRadius: BorderRadius.circular(20),
+                color: Colors.white.withValues(alpha: 0.9),
+                border: const Border(top: BorderSide(color: Color(0xFFF1F5F9))),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF6355D8).withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 6),
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, -5),
                   ),
                 ],
               ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    color: Colors.white,
-                    size: 18,
-                  ),
-                  SizedBox(width: 8),
-                  Text(
-                    'Satıcı ile İletişime Geç',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _opening ? null : _contactSeller,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF3B3383), Color(0xFF6355D8)],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF6355D8).withValues(alpha: 0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.chat_bubble_outline_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Satıcı ile İletişime Geç',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ),
       body: Stack(
         children: [
           ListView(
@@ -1530,104 +1572,112 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFF1F5F9)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(
-                                Icons.chat_bubble_outline_rounded,
-                                color: Color(0xFF6355D8),
-                                size: 16,
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                'Hızlı Soru Sor',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                  color: Color(0xFF334155),
+                    // Hazir soru kutusu da satici konusulabilir oldugunda var.
+                    if (canContact)
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                  color: Color(0xFF6355D8),
+                                  size: 16,
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          InkWell(
-                            onTap: _triggerToast,
-                            borderRadius: BorderRadius.circular(16),
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(0xFFD9D6FE),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.03),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Hızlı Soru Sor',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: Color(0xFF334155),
                                   ),
-                                ],
-                              ),
-                              child: const Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 12,
-                                        backgroundColor: Color(0xFFF5F3FF),
-                                        child: Icon(
-                                          Icons.send_rounded,
-                                          size: 12,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            InkWell(
+                              onTap: _opening
+                                  ? null
+                                  : () => _contactSeller(
+                                      firstMessage: _quickQuestion,
+                                    ),
+                              borderRadius: BorderRadius.circular(16),
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFFD9D6FE),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.03,
+                                      ),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 12,
+                                          backgroundColor: Color(0xFFF5F3FF),
+                                          child: Icon(
+                                            Icons.send_rounded,
+                                            size: 12,
+                                            color: Color(0xFF6355D8),
+                                          ),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          _quickQuestion,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12,
+                                            color: Color(0xFF1E293B),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          'Gönder',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                            color: Color(0xFF6355D8),
+                                          ),
+                                        ),
+                                        Icon(
+                                          Icons.chevron_right_rounded,
+                                          size: 14,
                                           color: Color(0xFF6355D8),
                                         ),
-                                      ),
-                                      SizedBox(width: 8),
-                                      Text(
-                                        'Hâlâ satılık mı?',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 12,
-                                          color: Color(0xFF1E293B),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Row(
-                                    children: [
-                                      Text(
-                                        'Gönder',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 11,
-                                          color: Color(0xFF6355D8),
-                                        ),
-                                      ),
-                                      Icon(
-                                        Icons.chevron_right_rounded,
-                                        size: 14,
-                                        color: Color(0xFF6355D8),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 16),
                     const Text(
                       'AÇIKLAMA',
@@ -1671,18 +1721,13 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                     const SizedBox(height: 10),
                     InkWell(
                       onTap: () {
-                        print(
-                          'DEBUG [Detail]: Satici profiline gitmeye calisiliyor -> ID: ${listing.sellerId}',
-                        );
                         Navigator.of(context, rootNavigator: true).push(
                           MaterialPageRoute<void>(
-                            builder: (_) {
-                              print('DEBUG [Detail]: Builder icindeyiz.');
-                              return MarketplaceSellerProfileScreen(
-                                controller: widget.controller,
-                                sellerId: listing.sellerId,
-                              );
-                            },
+                            builder: (_) => MarketplaceSellerProfileScreen(
+                              controller: widget.controller,
+                              sellerId: listing.sellerId,
+                              messaging: widget.messaging,
+                            ),
                           ),
                         );
                       },
@@ -1925,90 +1970,6 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
               ),
             ],
           ),
-          if (_showToast)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              right: 16,
-              child: TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0, end: 1),
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeOutCubic,
-                builder: (context, value, child) {
-                  return Opacity(
-                    opacity: value,
-                    child: Transform.translate(
-                      offset: Offset(0, 20 * (1 - value)),
-                      child: child,
-                    ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0xFF6355D8).withValues(alpha: 0.2),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 30,
-                        offset: const Offset(0, 15),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      const CircleAvatar(
-                        radius: 18,
-                        backgroundColor: Color(0xFF10B981),
-                        child: Icon(
-                          Icons.send_rounded,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Mesaj İsteği Gönderildi',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                                color: Color(0xFF0F172A),
-                              ),
-                            ),
-                            Text(
-                              'Satıcı en kısa sürede dönüş yapacaktır.',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF64748B),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => setState(() => _showToast = false),
-                        icon: const Icon(
-                          Icons.close_rounded,
-                          size: 18,
-                          color: Color(0xFF94A3B8),
-                        ),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );

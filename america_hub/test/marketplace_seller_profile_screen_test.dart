@@ -8,11 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/test_member_capabilities.dart';
+import 'support/test_messaging.dart';
 
 void main() {
   testWidgets('seller storefront renders without an exception', (tester) async {
     final controller = MarketplaceController(repository: MockMarketplaceRepository());
-    await tester.pumpWidget(MaterialApp(home: MarketplaceSellerProfileScreen(controller: controller, sellerId: 'user-demo')));
+    await tester.pumpWidget(MaterialApp(home: MarketplaceSellerProfileScreen(controller: controller, sellerId: 'user-demo', messaging: testMessaging())));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -24,7 +25,7 @@ void main() {
     final controller = MarketplaceController(repository: MockMarketplaceRepository());
     const listing = MarketplaceListing(id: 'listing-detail', title: 'Test ilanı', category: 'Ev', price: 42, condition: 'Yeni', location: 'New York, NY', sellerName: 'Can B.', imageUrl: '');
 
-    await tester.pumpWidget(MaterialApp(home: MarketplaceDetailScreen(listing: listing, controller: controller)));
+    await tester.pumpWidget(MaterialApp(home: MarketplaceDetailScreen(listing: listing, controller: controller, messaging: testMessaging())));
     final seller = find.text('Can B.');
     await tester.drag(find.byType(ListView).first, const Offset(0, -420));
     await tester.pumpAndSettle();
@@ -45,6 +46,7 @@ void main() {
           body: MarketplaceScreen(
             controller: controller,
             memberCapabilitiesController: testMemberCapabilitiesController(),
+            messaging: testMessaging(),
           ),
         ),
       ),
@@ -83,6 +85,7 @@ void main() {
                     controller: controller,
                     memberCapabilitiesController:
                         testMemberCapabilitiesController(),
+                    messaging: testMessaging(),
                   ),
                 ],
               ),

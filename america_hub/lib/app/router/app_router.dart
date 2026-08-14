@@ -17,6 +17,7 @@ import '../../features/messaging/application/messaging_controller.dart';
 import '../../features/messaging/domain/repositories/direct_message_repository.dart';
 import '../../features/community/domain/repositories/content_moderation_repository.dart';
 import '../../features/messaging/domain/repositories/message_moderation_repository.dart';
+import '../../features/messaging/presentation/messaging_launcher.dart';
 import '../../features/messaging/presentation/screens/inbox_screen.dart';
 import '../../features/forum/application/forum_controller.dart';
 import '../../features/home/application/community_home_controller.dart';
@@ -88,6 +89,25 @@ class AppRouter {
   final ForumController forumController;
   final SosController sosController;
 
+  /// Bir üyeyle sohbeti nereden olursa olsun açan taraf. Çarşı'daki satıcı
+  /// düğmeleri de gelen kutusu da aynı kurulumu kullanıyor.
+  MessagingLauncher get _messaging => MessagingLauncher(
+    directMessages: directMessageRepository,
+    createController: _directConversationController,
+    moderationRepository: messageModerationRepository,
+    viewerId: () => authController.user?.id,
+  );
+
+  // Read at open time, not at construction: the signed-in user is only known
+  // once authentication has completed.
+  DirectConversationController _directConversationController(
+    String conversationId,
+  ) => DirectConversationController(
+    repository: directMessageRepository,
+    conversationId: conversationId,
+    viewerId: authController.user?.id ?? '',
+  );
+
   /// Where a member lands right after signing in.
   ///
   /// Onboarding is a one-time setup, not a gate on every session: sending every
@@ -116,6 +136,7 @@ class AppRouter {
             specialRequestController: specialRequestController,
             eventsController: eventsController,
             marketplaceController: marketplaceController,
+            messaging: _messaging,
             profileController: profileController,
             friendshipController: friendshipController,
             journeyController: journeyController,
@@ -158,14 +179,7 @@ class AppRouter {
           settings: settings,
           builder: (_) => InboxScreen(
             controller: messagingController,
-            // Read at open time, not at construction: the signed-in user is
-            // only known once authentication has completed.
-            createConversationController: (conversationId) =>
-                DirectConversationController(
-                  repository: directMessageRepository,
-                  conversationId: conversationId,
-                  viewerId: authController.user?.id ?? '',
-                ),
+            createConversationController: _directConversationController,
             moderationRepository: messageModerationRepository,
             friendshipController: friendshipController,
             directMessageRepository: directMessageRepository,
