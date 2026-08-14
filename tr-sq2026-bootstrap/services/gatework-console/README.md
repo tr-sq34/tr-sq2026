@@ -26,6 +26,7 @@ depoya girmez - yalnızca argon2id özeti secret store'a konur. Adımlar:
 | Moderasyon | canlı | Messaging gateway + Community |
 | Forum | canlı | Community |
 | Çarşı ve İhaleler | canlı | Community (ilan/ihale okuma, yayından kaldırma, ihale iptali) |
+| Etkinlikler | canlı | Community (etkinlik yayınlama, taslak, iptal; katılım yalnızca sayı olarak) |
 | Mesajlar | canlı | Messaging gateway |
 | Sistem ve Denetim | canlı | Kimlik + Community + Messaging gateway (yalnızca okuma) |
 | Doğrulama | canlı | Verification vault (yalnızca okuma; belge içeriği yok) |

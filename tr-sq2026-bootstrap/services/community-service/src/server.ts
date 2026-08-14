@@ -3189,6 +3189,222 @@ app.post('/v1/internal/gatework/safety/alerts/:id/close', async (request, reply)
   }
 });
 
+// --- Etkinlikler ----------------------------------------------------------
+// The app has had an Etkinlikler tab since its first release, wired to a mock
+// repository: four invented meetups, the same four for every member, with no
+// route behind them - `GET /v1/events` has never existed. Migration 022 gives
+// them a table; below are the two reads the app makes, the RSVP it writes, and
+// the console's publishing desk.
+//
+// Events are published from the console. The app has no composer for them, and
+// inventing one here would mean shipping a moderation queue in the same breath;
+// an operator publishing under a known, audited name is the honest version of
+// "official event".
+const eventsQuery = z.object({ cursor: z.string().max(128).optional(), limit: z.coerce.number().int().min(1).max(50).default(20) });
+const rsvpBody = z.object({ status: z.enum(['going', 'interested', 'none']) });
+// `viewer` is the placeholder holding the member id, or null for the console -
+// which has no RSVP of its own and must not be told anybody else's.
+const eventSelect = (viewer: string | null) => `SELECT e.id,e.title,e.description,e.category,e.starts_at,e.ends_at,e.venue_label,e.city,e.region_code,e.price_label,e.external_url,e.capacity,e.status,e.cancellation_reason,e.created_at,
+  m.safe_url media_url,
+  ${viewer ? `(SELECT r.status FROM event_rsvps r WHERE r.event_id=e.id AND r.member_id=${viewer})` : 'NULL'} viewer_status,
+  (SELECT count(*) FROM event_rsvps r WHERE r.event_id=e.id AND r.status='going') going_count,
+  (SELECT count(*) FROM event_rsvps r WHERE r.event_id=e.id AND r.status='interested') interested_count
+  FROM community_events e LEFT JOIN media_assets m ON m.id=e.media_id`;
+type EventRow = { id: string; title: string; description: string; category: string; starts_at: Date; ends_at: Date | null; venue_label: string; city: string; region_code: string; price_label: string; external_url: string | null; capacity: number | null; status: string; cancellation_reason: string | null; created_at: Date; media_url: string | null; viewer_status: string | null; going_count: string; interested_count: string };
+const eventCursor = (row: EventRow) => Buffer.from(`${row.starts_at.toISOString()}|${row.id}`).toString('base64url');
+const eventJson = async (row: EventRow) => ({
+  id: row.id,
+  title: row.title,
+  description: row.description,
+  category: row.category,
+  startsAt: row.starts_at.toISOString(),
+  endsAt: row.ends_at?.toISOString() ?? null,
+  // The card draws one line under the title and the detail sheet draws two, so
+  // the venue and the city travel separately.
+  location: row.venue_label,
+  city: row.city,
+  regionCode: row.region_code,
+  priceLabel: row.price_label,
+  externalUrl: row.external_url,
+  capacity: row.capacity,
+  // Signed on the way out, never stored - the rule posts, stories, news and
+  // promotions all follow.
+  imageUrl: row.media_url ? await mediaObjectUrl(row.media_url) : null,
+  // A count leaves; the going-list does not. Who was where on a given evening
+  // is exactly the record this service has spent twenty migrations not keeping,
+  // and the app only ever draws the number.
+  attendeeCount: Number(row.going_count),
+  interestedCount: Number(row.interested_count),
+  status: row.status,
+  cancellationReason: row.cancellation_reason,
+  rsvpStatus: row.viewer_status ?? 'none',
+});
+
+/// Upcoming published events, soonest first. One that has already started drops
+/// off here rather than being filtered client-side: "yaklasan" is the whole
+/// promise of the tab, and two app versions must not disagree about it.
+app.get('/v1/events', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const input = eventsQuery.parse(request.query);
+    const cursor = decodeCursor(input.cursor);
+    const params: unknown[] = [userId];
+    let where = `e.status='published' AND e.starts_at > now()`;
+    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (e.starts_at,e.id) > ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    params.push(input.limit + 1);
+    const result = await db.query<EventRow>(`${eventSelect('$1')} WHERE ${where} ORDER BY e.starts_at ASC,e.id ASC LIMIT $${params.length}`, params);
+    const page = result.rows.slice(0, input.limit);
+    const next = result.rows.length > input.limit ? eventCursor(page[page.length - 1]!) : null;
+    return { data: await Promise.all(page.map(eventJson)), meta: { nextCursor: next } };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'EVENTS_UNAVAILABLE', message: 'Etkinlikler yüklenemedi.' } });
+  }
+});
+
+/// A single event, cancellation included. A cancelled one stays readable on
+/// purpose: somebody with it in their calendar needs to find out why, not find
+/// a 404.
+app.get('/v1/events/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const row = await db.query<EventRow>(`${eventSelect('$1')} WHERE e.id=$2 AND e.status<>'draft'`, [userId, id]);
+    if (!row.rows[0]) return reply.code(404).send({ error: { code: 'EVENT_NOT_FOUND', message: 'Etkinlik bulunamadı.' } });
+    return { data: await eventJson(row.rows[0]) };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'EVENT_UNAVAILABLE', message: 'Etkinlik yüklenemedi.' } });
+  }
+});
+
+/// Saying you are going, or taking it back. 'none' deletes the row instead of
+/// storing a third state: a withdrawn RSVP is not a fact worth keeping, and
+/// keeping it would turn this table into an attendance history.
+app.put('/v1/events/:id/rsvp', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = rsvpBody.parse(request.body);
+    const event = await db.query<{ status: string; capacity: number | null }>('SELECT status,capacity FROM community_events WHERE id=$1', [id]);
+    if (!event.rows[0]) return reply.code(404).send({ error: { code: 'EVENT_NOT_FOUND', message: 'Etkinlik bulunamadı.' } });
+    if (event.rows[0].status !== 'published') return reply.code(409).send({ error: { code: 'EVENT_CLOSED', message: 'Bu etkinlik katılıma açık değil.' } });
+    if (input.status === 'none') await db.query('DELETE FROM event_rsvps WHERE event_id=$1 AND member_id=$2', [id, userId]);
+    else {
+      // The door count is checked here, not trusted from the client, and only
+      // for 'going' - being interested in a full event costs nobody a seat.
+      const seated = await db.query<{ member_id: string }>(
+        `INSERT INTO event_rsvps(event_id,member_id,status) SELECT $1::uuid,$2::uuid,$3
+         WHERE $3<>'going' OR $4::int IS NULL OR (SELECT count(*) FROM event_rsvps r WHERE r.event_id=$1 AND r.status='going' AND r.member_id<>$2) < $4::int
+         ON CONFLICT (event_id,member_id) DO UPDATE SET status=EXCLUDED.status,updated_at=now() RETURNING member_id`,
+        [id, userId, input.status, event.rows[0].capacity],
+      );
+      if (!seated.rows[0]) return reply.code(409).send({ error: { code: 'EVENT_FULL', message: 'Kontenjan doldu.' } });
+    }
+    const row = await db.query<EventRow>(`${eventSelect('$1')} WHERE e.id=$2`, [userId, id]);
+    return { data: await eventJson(row.rows[0]!) };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'EVENT_RSVP_REJECTED', message: 'Katılım kaydedilemedi.' } });
+  }
+});
+
+// --- Event operations -----------------------------------------------------
+const gateworkEventQuery = z.object({ status: z.enum(['draft', 'published', 'cancelled']).default('published'), limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).default(0) });
+const gateworkEventBody = z.object({
+  title: z.string().trim().min(3).max(140),
+  description: z.string().trim().max(4000).default(''),
+  category: z.string().trim().min(2).max(40).default('Etkinlik'),
+  startsAt: z.string().datetime(),
+  endsAt: z.string().datetime().optional(),
+  venueLabel: z.string().trim().min(2).max(200),
+  city: z.string().trim().min(2).max(80),
+  regionCode: z.string().trim().length(2),
+  mediaId: z.string().uuid().optional(),
+  priceLabel: z.string().trim().min(1).max(60).default('Ücretsiz'),
+  externalUrl: z.string().url().startsWith('https://').max(500).optional(),
+  capacity: z.number().int().min(1).max(100000).optional(),
+  // Publishing on creation is the normal case; a draft is for the one somebody
+  // is still writing.
+  publish: z.boolean().default(false),
+  idempotencyKey: z.string().min(8).max(120),
+});
+const eventCancelBody = z.object({ reason: z.string().trim().min(3).max(500), idempotencyKey: z.string().min(8).max(120) });
+
+app.get('/v1/internal/gatework/events', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'auditor']);
+    const input = gateworkEventQuery.parse(request.query);
+    const rows = await db.query<EventRow>(`${eventSelect(null)} WHERE e.status=$1 ORDER BY e.starts_at DESC LIMIT $2 OFFSET $3`, [input.status, input.limit, input.offset]);
+    return { data: await Promise.all(rows.rows.map(eventJson)), nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'EVENT_QUEUE_UNAVAILABLE', message: 'Etkinlikler okunamadı.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/events', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkEventBody.parse(request.body);
+    await client.query('BEGIN');
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='event.create' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]?.result_id) { await client.query('COMMIT'); return reply.code(200).send({ data: { id: prior.rows[0].result_id, duplicate: true } }); }
+    if (input.mediaId) {
+      const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND status='ready'", [input.mediaId]);
+      if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+    }
+    const row = await client.query<{ id: string }>(
+      `INSERT INTO community_events(title,description,category,starts_at,ends_at,venue_label,city,region_code,media_id,price_label,external_url,capacity,status,published_at,created_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $13='published' THEN now() END,$14) RETURNING id`,
+      [input.title, input.description, input.category, input.startsAt, input.endsAt ?? null, input.venueLabel, input.city, input.regionCode.toUpperCase(),
+        input.mediaId ?? null, input.priceLabel, input.externalUrl ?? null, input.capacity ?? null, input.publish ? 'published' : 'draft', actor.actorId],
+    );
+    await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'event.create',$3)", [actor.actorId, input.idempotencyKey, row.rows[0]!.id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: input.publish ? 'event.publish' : 'event.draft', targetType: 'event', targetId: row.rows[0]!.id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return reply.code(201).send({ data: { id: row.rows[0]!.id, duplicate: false } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'EVENT_CREATE_REJECTED', message: 'Etkinlik kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/v1/internal/gatework/events/:id/publish', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const row = await db.query<{ id: string }>("UPDATE community_events SET status='published',published_at=COALESCE(published_at,now()),updated_at=now() WHERE id=$1 AND status='draft' RETURNING id", [id]);
+    if (!row.rows[0]) return reply.code(409).send({ error: { code: 'EVENT_NOT_DRAFT', message: 'Bu etkinlik taslak değil.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'event.publish', targetType: 'event', targetId: id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'EVENT_PUBLISH_REJECTED', message: 'Etkinlik yayınlanamadı.' } });
+  }
+});
+
+/// Cancelling keeps the row and the reason. People planned around this date;
+/// deleting it would empty their evening without saying why.
+app.post('/v1/internal/gatework/events/:id/cancel', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = eventCancelBody.parse(request.body);
+    const row = await db.query<{ id: string }>("UPDATE community_events SET status='cancelled',cancellation_reason=$2,updated_at=now() WHERE id=$1 AND status<>'cancelled' RETURNING id", [id, input.reason]);
+    if (!row.rows[0]) return reply.code(409).send({ error: { code: 'EVENT_ALREADY_CANCELLED', message: 'Bu etkinlik zaten iptal edilmiş.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'event.cancel', targetType: 'event', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'EVENT_CANCEL_REJECTED', message: 'Etkinlik iptal edilemedi.' } });
+  }
+});
+
 // --- Analytics and locality ----------------------------------------------
 // The console's Analitik ve Konum screen. Two rules shape everything below,
 // and both come from how locality was designed in migration 008: locality is a

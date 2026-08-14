@@ -27,6 +27,7 @@ import 'features/community/domain/repositories/media_upload_repository.dart';
 import 'features/community/data/repositories/mock_community_special_request_repository.dart';
 import 'features/community/data/repositories/cached_community_repository.dart';
 import 'features/events/application/events_controller.dart';
+import 'features/events/data/repositories/api_events_repository.dart';
 import 'features/events/data/repositories/mock_events_repository.dart';
 import 'features/events/data/repositories/cached_events_repository.dart';
 import 'features/marketplace/application/marketplace_controller.dart';
@@ -224,7 +225,9 @@ Future<void> main() async {
 
   final eventsController = EventsController(
     repository: CachedEventsRepository(
-      remote: MockEventsRepository(),
+      remote: useMockServices
+          ? MockEventsRepository()
+          : ApiEventsRepository(client: communityApiClient),
       cacheStore: cacheStore,
     ),
   );

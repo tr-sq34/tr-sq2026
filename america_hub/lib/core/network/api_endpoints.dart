@@ -105,6 +105,7 @@ abstract final class ApiEndpoints {
   static const safetySosActive = '/safety/sos/active';
   static String safetySosCancel(String id) => '/safety/sos/$id/cancel';
   static const eventsUpcoming = '/events';
+  static String eventRsvp(String id) => '/events/$id/rsvp';
   static const marketplaceListings = '/marketplace/listings';
   static const profile = '/profile/me';
 }
