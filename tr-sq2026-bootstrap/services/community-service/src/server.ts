@@ -719,6 +719,127 @@ app.put('/v1/community/comments/:id/likes', { config: { rateLimit: { max: 60, ti
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_LIKE_FAILED', message: 'Beğenin kaydedilemedi.' } });
   }
 });
+
+/**
+ * "Eşleşme isteği gönder" / "Destek teklif et".
+ *
+ * The sheet has always closed with "İsteğin gönderildi." and the request has
+ * always gone into a list in the sender's own process: the mock repository was
+ * wired on both sides of the mock flag, so the owner was never told and had
+ * nowhere to look. These three routes are the other end of that sheet.
+ *
+ * The kind is derived from the post's own purpose and never read from the
+ * request body. A member cannot decide that somebody else's help post is a
+ * suitcase; the post already said what it is.
+ */
+const specialRequestBody = z.object({ message: z.string().trim().min(1).max(500) });
+const specialRequestStatusBody = z.object({ status: z.enum(['accepted', 'declined', 'cancelled']) });
+const SPECIAL_REQUEST_KINDS: Record<string, string> = { imece_help: 'imece_offer', traveler_match: 'traveler_match' };
+
+type SpecialRequestRow = { id: string; post_id: string; sender_id: string; sender_name: string; kind: string; message: string; status: string; created_at: Date };
+const specialRequestColumns = `r.id,r.post_id,r.sender_id,r.kind,r.message,r.status,r.created_at,
+  COALESCE(cp.display_name,'TurkSquare üyesi') sender_name`;
+const specialRequestSender = 'LEFT JOIN community_profile_projection cp ON cp.user_id=r.sender_id';
+const specialRequestSelect = `SELECT ${specialRequestColumns} FROM post_special_requests r ${specialRequestSender}`;
+const specialRequestJson = (row: SpecialRequestRow) => ({
+  id: row.id,
+  postId: row.post_id,
+  senderId: row.sender_id,
+  senderName: row.sender_name,
+  type: row.kind === 'imece_offer' ? 'imeceOffer' : 'travelerMatch',
+  message: row.message,
+  status: row.status,
+  createdAt: row.created_at.toISOString(),
+});
+
+app.post('/v1/community/posts/:id/requests', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const postId = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = specialRequestBody.parse(request.body);
+    const post = await db.query<{ purpose: string; author_id: string }>(
+      `SELECT p.purpose,p.author_id FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`,
+      [postId, userId],
+    );
+    const found = post.rows[0];
+    if (!found) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Nothing to ask for on a plain post, and nothing to ask yourself.
+    const kind = SPECIAL_REQUEST_KINDS[found.purpose];
+    if (!kind) return reply.code(409).send({ error: { code: 'POST_NOT_REQUESTABLE', message: 'Bu paylaşıma istek gönderilemez.' } });
+    if (found.author_id === userId) return reply.code(409).send({ error: { code: 'OWN_POST', message: 'Kendi paylaşımına istek gönderemezsin.' } });
+    // A pending request can be rewritten; an answered one cannot. Re-asking
+    // after a no is the thing the owner should never have to decline twice, so
+    // the UPDATE simply matches no row and the request is refused.
+    const saved = await db.query<SpecialRequestRow>(
+      // The row comes back out of the CTE itself rather than being read again
+      // from the table: a statement sees the snapshot it started with, so a
+      // second SELECT here would not find the row this INSERT just wrote.
+      `WITH upserted AS (
+         INSERT INTO post_special_requests(post_id,sender_id,kind,message) VALUES($1,$2,$3,$4)
+         ON CONFLICT (post_id,sender_id) DO UPDATE SET message=EXCLUDED.message,updated_at=now()
+           WHERE post_special_requests.status='pending'
+         RETURNING id,post_id,sender_id,kind,message,status,created_at
+       )
+       SELECT ${specialRequestColumns} FROM upserted r ${specialRequestSender}`,
+      [postId, userId, kind, input.message],
+    );
+    const row = saved.rows[0];
+    if (!row) return reply.code(409).send({ error: { code: 'REQUEST_ALREADY_ANSWERED', message: 'Bu paylaşıma zaten istek gönderdin.' } });
+    notifyOwner('special_request', postId, userId);
+    return reply.code(201).send({ data: specialRequestJson(row) });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'REQUEST_CREATE_FAILED', message: 'İstek gönderilemedi.' } });
+  }
+});
+
+/// The owner reads every request on their post. Anybody else reads only the one
+/// they sent themselves: how many people offered to carry a parcel is the
+/// owner's business, not the queue's.
+app.get('/v1/community/posts/:id/requests', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const postId = z.string().uuid().parse((request.params as { id: string }).id);
+    const post = await db.query(`SELECT 1 FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    const rows = await db.query<SpecialRequestRow>(
+      `${specialRequestSelect}
+        WHERE r.post_id=$1
+          AND (r.sender_id=$2 OR EXISTS(SELECT 1 FROM community_posts p WHERE p.id=r.post_id AND p.author_id=$2))
+        ORDER BY r.created_at DESC LIMIT 100`,
+      [postId, userId],
+    );
+    return { data: rows.rows.map(specialRequestJson) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'REQUESTS_FAILED', message: 'İstekler yüklenemedi.' } });
+  }
+});
+
+/// Who may say what: the owner accepts or declines, the sender withdraws.
+/// Neither can do the other's half, and only a pending request can move - an
+/// accepted request is a promise somebody is already acting on.
+app.put('/v1/community/requests/:id/status', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = specialRequestStatusBody.parse(request.body);
+    const actorClause = input.status === 'cancelled'
+      ? 'r.sender_id=$3'
+      : 'EXISTS(SELECT 1 FROM community_posts p WHERE p.id=r.post_id AND p.author_id=$3)';
+    const updated = await db.query<{ id: string }>(
+      `UPDATE post_special_requests r SET status=$2,updated_at=now()
+        WHERE r.id=$1 AND r.status='pending' AND ${actorClause} RETURNING r.id`,
+      [id, input.status, userId],
+    );
+    if (!updated.rows[0]) return reply.code(404).send({ error: { code: 'REQUEST_NOT_FOUND', message: 'İstek bulunamadı.' } });
+    const row = await db.query<SpecialRequestRow>(`${specialRequestSelect} WHERE r.id=$1`, [id]);
+    return { data: specialRequestJson(row.rows[0]!) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'REQUEST_STATUS_FAILED', message: 'İstek güncellenemedi.' } });
+  }
+});
+
 /**
  * Saving, liking and sharing a listing.
  *
@@ -1565,6 +1686,7 @@ const NOTIFICATION_SUBJECTS = {
   post_like: 'SELECT p.author_id,p.id FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL',
   listing_save: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
   listing_like: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
+  special_request: 'SELECT p.author_id,p.id FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL',
 } as const;
 type NotificationKind = keyof typeof NOTIFICATION_SUBJECTS;
 
@@ -1601,10 +1723,12 @@ type NotificationRow = {
  * deleted - or whose listing was taken down - simply is not in the answer,
  * rather than being a line that opens onto nothing.
  *
- * The actor's name is sent only for comments. A comment is public writing and
- * carries its author's name anyway. A like and a save do not: the rest of this
- * service refuses to answer "who saved this listing" and this route is not a
- * back door into that question.
+ * The actor's name is sent only for comments and special requests. A comment is
+ * public writing and carries its author's name anyway; a special request is a
+ * message somebody wrote asking to be put in touch, so withholding their name
+ * would make the notification useless. A like and a save are neither: the rest
+ * of this service refuses to answer "who saved this listing" and this route is
+ * not a back door into that question.
  */
 app.get('/v1/notifications', async (request, reply) => {
   try {
@@ -1616,9 +1740,12 @@ app.get('/v1/notifications', async (request, reply) => {
            WHEN 'post_comment' THEN (SELECT count(DISTINCT c.author_id) FROM community_comments c WHERE c.post_id=n.subject_id AND c.deleted_at IS NULL AND c.moderation_state='active' AND c.author_id<>n.user_id)
            WHEN 'post_like' THEN (SELECT count(*) FROM post_reactions x WHERE x.post_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
            WHEN 'listing_save' THEN (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='save' AND x.actor_id<>n.user_id)
-           ELSE (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
+           WHEN 'listing_like' THEN (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
+           -- Only the ones still waiting. Once the owner has answered them all
+           -- the line goes, because there is nothing left to act on.
+           ELSE (SELECT count(*) FROM post_special_requests r WHERE r.post_id=n.subject_id AND r.status='pending')
          END actor_count,
-         CASE WHEN n.kind IN ('post_comment','post_like')
+         CASE WHEN n.kind IN ('post_comment','post_like','special_request')
            THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
            ELSE (SELECT l.title FROM marketplace_listings l WHERE l.id=n.subject_id AND l.status<>'draft')
          END subject_title
@@ -1637,7 +1764,7 @@ app.get('/v1/notifications', async (request, reply) => {
         subjectId: row.subject_id,
         subjectTitle: row.subject_title,
         actorCount: Number(row.actor_count),
-        actorName: row.kind === 'post_comment' ? row.actor_name : null,
+        actorName: row.kind === 'post_comment' || row.kind === 'special_request' ? row.actor_name : null,
         createdAt: row.updated_at.toISOString(),
         isRead: row.read_at !== null,
       }));

@@ -18,6 +18,7 @@ import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
 import '../../../promotions/application/promotions_controller.dart';
 import '../widgets/comments_sheet.dart';
+import '../widgets/post_requests_sheet.dart';
 import '../widgets/special_post_request_sheet.dart';
 import '../../domain/repositories/content_moderation_repository.dart';
 import '../widgets/content_report_sheet.dart';
@@ -987,6 +988,33 @@ class _PostCard extends StatelessWidget {
           ),
         if (post.purpose != CommunityPostPurpose.standard)
           const SizedBox(height: 10),
+        // Sahibinin tarafı: gelen istekler. Bu düğmeye kadar istekleri okuyan
+        // bir yer yoktu, o yüzden kimse yanıtlayamıyordu.
+        if (post.isAuthor &&
+            (post.purpose == CommunityPostPurpose.imeceHelp ||
+                post.purpose == CommunityPostPurpose.travelerMatch))
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                useSafeArea: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) => PostRequestsSheet(
+                  post: post,
+                  controller: specialRequestController,
+                ),
+              ),
+              icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
+              label: const Text('Gelen istekler'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+            ),
+          ),
         // Kendi ilanına istek göndermek diye bir şey yok: düğme sahibine
         // gösterilmiyordu değil, gösteriliyordu - ve dokunulunca kendine
         // "Eşleşme isteği gönder" diyordu.

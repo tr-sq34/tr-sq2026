@@ -8,14 +8,31 @@ class CommunitySpecialRequestController extends ChangeNotifier {
 
   final CommunitySpecialRequestRepository _repository;
   final Map<String, List<CommunitySpecialRequest>> _byPost = {};
+  final Set<String> _loading = {};
   bool isSubmitting = false;
   String? errorMessage;
 
   List<CommunitySpecialRequest> requestsFor(String postId) => _byPost[postId] ?? const [];
 
+  /// Liste daha hiç okunmadıysa "istek yok" ile "henüz bilmiyoruz" aynı şey
+  /// değil: sahibine boş bir liste göstermeden önce cevabın geldiğini bilmemiz
+  /// gerekiyor.
+  bool isLoading(String postId) => _loading.contains(postId);
+  bool hasLoaded(String postId) => _byPost.containsKey(postId);
+
   Future<void> loadForPost(String postId) async {
-    _byPost[postId] = await _repository.getRequestsForPost(postId);
+    if (_loading.contains(postId)) return;
+    _loading.add(postId);
+    errorMessage = null;
     notifyListeners();
+    try {
+      _byPost[postId] = await _repository.getRequestsForPost(postId);
+    } catch (_) {
+      errorMessage = 'İstekler şu anda yüklenemedi.';
+    } finally {
+      _loading.remove(postId);
+      notifyListeners();
+    }
   }
 
   Future<bool> send({required String postId, required CommunitySpecialRequestType type, required String message}) async {
@@ -41,18 +58,24 @@ class CommunitySpecialRequestController extends ChangeNotifier {
     }
   }
 
-  Future<void> updateStatus(String requestId, CommunitySpecialRequestStatus status) async {
-    await _repository.updateStatus(requestId, status);
+  /// Yanıt sunucuda tutmazsa listede de tutmuyor: kabul edilmiş görünüp
+  /// karşı tarafa hiç ulaşmamış bir istek, en kötü sonuç.
+  Future<bool> updateStatus(String requestId, CommunitySpecialRequestStatus status) async {
+    try {
+      await _repository.updateStatus(requestId, status);
+    } catch (_) {
+      errorMessage = 'İstek şu anda güncellenemedi.';
+      notifyListeners();
+      return false;
+    }
+    errorMessage = null;
     for (final entry in _byPost.entries) {
       final index = entry.value.indexWhere((item) => item.id == requestId);
       if (index < 0) continue;
-      final previous = entry.value[index];
-      entry.value[index] = CommunitySpecialRequest(
-        id: previous.id, postId: previous.postId, type: previous.type, senderId: previous.senderId,
-        message: previous.message, createdAt: previous.createdAt, status: status,
-      );
-      notifyListeners();
-      return;
+      entry.value[index] = entry.value[index].copyWith(status: status);
+      break;
     }
+    notifyListeners();
+    return true;
   }
 }
