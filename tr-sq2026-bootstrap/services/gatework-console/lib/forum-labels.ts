@@ -20,9 +20,13 @@ export type ForumCategory = {
 export type ForumTopicRow = {
   id: string;
   title: string;
+  categoryId: string;
   categoryTitle: string;
   authorId: string;
   authorName: string | null;
+  // First 600 characters of the body. Deciding to lock a thread is a judgement
+  // about what it says, and the old screen only ever showed the title.
+  excerpt: string;
   replyCount: number;
   viewCount: number;
   isPinned: boolean;

@@ -1,4 +1,5 @@
-import { MarketplaceDesk } from '@/components/marketplace-desk';
+import { MarketplaceDesk } from '@/components/marketplace/marketplace-desk';
+import { EmptyState, PageHeader } from '@/components/ui/page';
 import { canActOnMarketplace, canSeeMarketplace, marketplacePage } from '@/lib/marketplace';
 import { getSession } from '@/lib/session';
 
@@ -10,21 +11,23 @@ export default async function MarketplacePage() {
   const roles = session.member.roles;
 
   if (!canSeeMarketplace(roles)) {
-    return <main><h1 className="text-3xl font-semibold">Çarşı ve İhaleler</h1><p className="mt-4 max-w-xl text-zinc-400">Bu alan çarşı yetkisi gerektirir. Mevcut rollerin: {roles.join(', ')}.</p></main>;
+    return (
+      <main>
+        <PageHeader eyebrow="Yetki gerekli" tone="warning" title="Çarşı ve İhaleler" />
+        <EmptyState title="Bu alan çarşı yetkisi gerektirir." description={`Mevcut rollerin: ${roles.join(', ')}.`} />
+      </main>
+    );
   }
 
   const { overview, listings, auctions, failure } = await marketplacePage();
 
   return (
     <main>
-      <div className="mb-8">
-        <p className="text-sm text-emerald-400">Community API bağlı operasyon</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Çarşı ve İhaleler</h1>
-        <p className="mt-2 max-w-2xl text-zinc-400">
-          Üyelerin ilanları ve ihaleleri. Buradan bir ilan yayından kaldırılır ya da geri alınır, bir ihale iptal edilir — her ikisi de gerekçeyle ve denetim kaydıyla. İlanın başlığı, fiyatı ve açıklaması değiştirilemez: başkasının ilanını, adı üstünde dururken yeniden yazmak kaldırmaktan daha ağırdır.
-        </p>
-      </div>
-
+      <PageHeader
+        eyebrow="Topluluk servisine bağlı"
+        title="Çarşı ve İhaleler"
+        description="Üyelerin ilanları ve ihaleleri. Buradan bir ilan yayından kaldırılır ya da geri alınır, bir ihale iptal edilir — her ikisi de gerekçeyle ve denetim kaydıyla. Satırların yanındaki uyarılar ölçümdür: fiyat kategori ortancasının çok altında mı, aynı başlık başka hesaplarda var mı, satıcı hakkında açık şikâyet var mı. Karar hâlâ senin."
+      />
       <MarketplaceDesk
         initialOverview={overview}
         initialListings={listings}

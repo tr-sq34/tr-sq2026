@@ -10,6 +10,7 @@ export async function GET(request: Request) {
       status: url.searchParams.get('status') ?? undefined,
       query: url.searchParams.get('query') ?? undefined,
       regionCode: url.searchParams.get('regionCode') ?? undefined,
+      category: url.searchParams.get('category') ?? undefined,
     });
     return NextResponse.json({ data }, { headers: noStore });
   } catch (error) {

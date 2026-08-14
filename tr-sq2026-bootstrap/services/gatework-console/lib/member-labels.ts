@@ -36,6 +36,17 @@ export type CommunityMember = {
   restriction: { kind: string; reason: string; expiresAt: string | null } | null;
 };
 
+// Which buttons are worth drawing for this operator. Resolved on the server
+// from the session roles; the services check the same rules again on every
+// call, so this only decides what is offered, never what is allowed.
+export type MemberPermissions = {
+  manageRoles: boolean;
+  revokeSessions: boolean;
+  restrict: boolean;
+  setCapabilities: boolean;
+  seeAudit: boolean;
+};
+
 export const ROLE_LABELS: Record<GateworkRole, string> = {
   owner: 'Owner — tam yetki',
   security_admin: 'Güvenlik yöneticisi',

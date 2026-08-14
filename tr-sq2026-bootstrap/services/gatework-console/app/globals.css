@@ -1,7 +1,157 @@
 @import "tailwindcss";
 
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body { margin: 0; background: #09090b; color: #f8fafc; font-family: Arial, Helvetica, sans-serif; }
-a { color: inherit; text-decoration: none; }
-button, input { font: inherit; }
+/**
+ * Gatework design tokens.
+ *
+ * The console used to carry seven lines of CSS and pick colours inline, which
+ * is how it ended up looking like a different product from the app it
+ * administers: emerald was treated as the brand here, while emerald is only an
+ * accent in `app_colors.dart` and the actual brand is the violet below. Every
+ * colour in this file is the same value the Flutter app ships, so a status that
+ * reads "success" green in the app cannot read blue in the panel.
+ *
+ * Only semantic names are exported. A screen asks for `surface-raised` or
+ * `danger`, never for a hex value or a zinc step - that is what let the old
+ * screens drift apart from each other one `bg-zinc-900/40` at a time.
+ */
+@theme {
+  /* Brand - AppColors.primary / primaryLight. */
+  --color-brand-50: #f1eefe;
+  --color-brand-100: #ded7fc;
+  --color-brand-200: #c3b7f8;
+  --color-brand-300: #a08ff3;
+  --color-brand-400: #7c6cf1;
+  --color-brand-500: #6c5ce7;
+  --color-brand-600: #5b4acd;
+  --color-brand-700: #4a3caa;
+  --color-brand-800: #372c80;
+  --color-brand-900: #251d57;
+
+  /* Canvas and the three surfaces stacked on it. Violet-tinted rather than
+     neutral grey so the brand does not look pasted onto the page. */
+  --color-canvas: #0b0a12;
+  --color-surface: #131120;
+  --color-surface-raised: #1a1828;
+  --color-surface-overlay: #211e33;
+  --color-hairline: #2a2740;
+
+  /* Text. `ink` is what you read, `muted` is what you skim, `faint` is what you
+     only look at when you are looking for it. */
+  --color-ink: #f5f4f8;
+  --color-ink-muted: #a5a1b5;
+  --color-ink-faint: #6f6b80;
+
+  /* Semantic states - AppColors.accentEmerald / accentRose / accentAmber. The
+     app has no separate "info" colour, so info borrows the brand. */
+  --color-success: #16a085;
+  --color-success-soft: #16a08526;
+  --color-warning: #e8a33a;
+  --color-warning-soft: #e8a33a26;
+  --color-danger: #e87393;
+  --color-danger-soft: #e8739326;
+  --color-info: #7c6cf1;
+  --color-info-soft: #7c6cf126;
+
+  --radius-card: 0.875rem;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* Numbers sit in tables and stat cards all over this console; proportional
+     digits make a column of them impossible to compare at a glance. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* The console is a long-lived tab full of scrollable panels; the default
+   Windows scrollbar is wide enough to change a table's column widths. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+/* Keyboard focus has to stay visible on every surface. Operators here suspend
+   accounts and open location records; "which control am I about to trigger"
+   is not a question this UI may leave open. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-400);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes gatework-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes gatework-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes gatework-zoom-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

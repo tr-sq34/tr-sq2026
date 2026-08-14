@@ -61,6 +61,13 @@ export const forumCategoryPatchSchema = z.object({
   isActive: z.boolean().optional(),
   reason: z.string().trim().min(5).max(500),
 });
+// The whole order at once rather than one ordinal per row: setting them one at
+// a time leaves two categories briefly sharing a number, and the tie is broken
+// by title - so the forum reshuffles itself while an operator is editing it.
+export const forumCategoryOrderSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(60),
+  reason: z.string().trim().min(5).max(500),
+});
 export const forumTopicStateSchema = z.object({
   isPinned: z.boolean().optional(),
   isLocked: z.boolean().optional(),
@@ -82,6 +89,14 @@ export async function createForumCategory(raw: unknown) {
 export async function updateForumCategory(id: string, raw: unknown) {
   const input = forumCategoryPatchSchema.parse(raw);
   return (await communityFetch(`/v1/internal/gatework/forum/categories/${id}`, { method: 'PATCH', body: JSON.stringify(input) })).data as { id: string };
+}
+
+export async function reorderForumCategories(raw: unknown) {
+  const input = forumCategoryOrderSchema.parse(raw);
+  return (await communityFetch('/v1/internal/gatework/forum/categories/order', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })).data as { ordered: number };
 }
 
 export async function listForumTopics(params: { categoryId?: string; state?: string; query?: string } = {}): Promise<ForumTopicRow[]> {

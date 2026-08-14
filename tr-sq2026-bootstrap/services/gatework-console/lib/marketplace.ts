@@ -37,9 +37,10 @@ async function communityFetch(path: string, init: RequestInit = {}) {
 }
 
 export {
-  LISTING_STATUS_LABELS, AUCTION_STATE_LABELS, LISTING_STATUS_ORDER, AUCTION_STATE_ORDER, money, sellerLabel, placeLabel,
+  LISTING_STATUS_LABELS, AUCTION_STATE_LABELS, LISTING_CATEGORY_LABELS, LISTING_STATUS_ORDER, AUCTION_STATE_ORDER,
+  money, sellerLabel, placeLabel, categoryLabel, listingRiskFlags, riskTone, RISK_RULES,
 } from './marketplace-labels';
-export type { AuctionRow, ListingRow, MarketplaceOverview } from './marketplace-labels';
+export type { AuctionRow, ListingRow, ListingSignals, MarketplaceOverview, RiskFlag } from './marketplace-labels';
 
 // Mirrors the service. Analyst and auditor read; content_editor does not - the
 // listings are not editorial content, they are other people's property.
@@ -52,10 +53,11 @@ export const listingStatusSchema = z.object({
 });
 export const auctionCancelSchema = z.object({ reason: z.string().trim().min(5, 'Gerekçe en az 5 karakter olmalı.').max(500) });
 
-export async function listListings(params: { status?: string; query?: string; regionCode?: string } = {}): Promise<ListingRow[]> {
+export async function listListings(params: { status?: string; query?: string; regionCode?: string; category?: string } = {}): Promise<ListingRow[]> {
   const search = new URLSearchParams({ status: params.status ?? 'all', limit: '50' });
   if (params.query && params.query.trim().length >= 2) search.set('query', params.query.trim());
   if (params.regionCode) search.set('regionCode', params.regionCode);
+  if (params.category) search.set('category', params.category);
   return (await communityFetch(`/v1/internal/gatework/marketplace/listings?${search}`)).data as ListingRow[];
 }
 

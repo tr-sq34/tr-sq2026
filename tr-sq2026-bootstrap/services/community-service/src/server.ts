@@ -122,6 +122,44 @@ app.post('/v1/internal/gatework/system-accounts', { config: { rateLimit: { max: 
   }
 });
 
+/// The official accounts, for the console to pick from.
+///
+/// Creating one returned an id and nothing ever listed them again, so an editor
+/// had to keep a UUID somewhere outside the product and paste it into every
+/// publish form. A wrong paste was not caught by the form - it was caught by
+/// the publish endpoint, after the article had been written - and a UUID does
+/// not tell you which account you got.
+///
+/// The counts travel with the row because "which account is this" is answered
+/// by what it has published, not by its id.
+app.get('/v1/internal/gatework/system-accounts', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const rows = await db.query<{ user_id: string; display_name: string | null; active: boolean; created_at: Date; news_count: string; post_count: string }>(
+      `SELECT s.user_id,p.display_name,s.active,s.created_at,
+              (SELECT count(*) FROM news_articles a WHERE a.author_id=s.user_id AND a.deleted_at IS NULL) news_count,
+              (SELECT count(*) FROM community_posts c WHERE c.author_id=s.user_id AND c.deleted_at IS NULL) post_count
+         FROM community_system_accounts s
+         LEFT JOIN community_profile_projection p ON p.user_id=s.user_id
+        WHERE s.role='official'
+        ORDER BY s.active DESC, p.display_name ASC`,
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.user_id,
+        displayName: row.display_name,
+        active: row.active,
+        createdAt: row.created_at.toISOString(),
+        newsCount: Number(row.news_count),
+        postCount: Number(row.post_count),
+      })),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNTS_UNAVAILABLE', message: 'Resmî hesaplar okunamadı.' } });
+  }
+});
+
 app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
   try {
     const actor = await gateworkActor(request.headers);
@@ -2924,6 +2962,65 @@ app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWin
   }
 });
 
+/// What the console shows an editor after they publish.
+///
+/// The public listing is not usable here: it hides anything scheduled for later
+/// and carries the viewer's own reaction, which an operator does not have. This
+/// one shows scheduled pieces too - an article dated for tomorrow is invisible
+/// everywhere else, so the only way to notice a wrong date was to wait for it.
+///
+/// Read-only, and it never returns the body: the list is for deciding which
+/// piece to act on, not for reading them in the panel.
+const gateworkNewsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  category: z.enum(newsCategories).optional(),
+});
+
+app.get('/v1/internal/gatework/news', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'auditor']);
+    const input = gateworkNewsQuery.parse(request.query);
+    const rows = await db.query<{
+      id: string; title: string; summary: string; category: string; author_id: string; author_name: string;
+      region_code: string | null; published_at: Date; headline_rank: number | null; comments_enabled: boolean;
+      hero_url: string | null; comment_count: string; reaction_count: string;
+    }>(
+      `SELECT a.id,a.title,a.summary,a.category,a.author_id,a.author_name,a.region_code,a.published_at,
+              a.headline_rank,a.comments_enabled,m.safe_url hero_url,
+              (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
+              (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id) reaction_count
+         FROM news_articles a
+         LEFT JOIN media_assets m ON m.id=a.hero_media_id AND m.status='ready'
+        WHERE a.deleted_at IS NULL AND ($2::text IS NULL OR a.category=$2)
+        ORDER BY a.published_at DESC, a.id DESC
+        LIMIT $1`,
+      [input.limit, input.category ?? null],
+    );
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        id: row.id,
+        title: row.title,
+        summary: row.summary,
+        category: row.category,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        regionCode: row.region_code,
+        publishedAt: row.published_at.toISOString(),
+        // The distinction the public list erases: written, but not yet readable.
+        live: row.published_at.getTime() <= Date.now(),
+        headlineRank: row.headline_rank,
+        commentsEnabled: row.comments_enabled,
+        imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
+        commentCount: Number(row.comment_count),
+        reactionCount: Number(row.reaction_count),
+      }))),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
+  }
+});
+
 /// Retracting a published article. A soft delete, so the comments and any report
 /// filed against it still resolve to something after it comes down.
 app.delete('/v1/internal/gatework/news/:id', async (request, reply) => {
@@ -3012,18 +3109,26 @@ const promotionQueueQuery = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 const promotionEventBody = z.object({ kind: z.enum(['impression', 'click']) });
+// The whole running order arrives at once rather than one "move up" per card.
+// Two operators dragging at the same time then overwrite each other's list
+// instead of interleaving into an order neither of them chose.
+const promotionOrderBody = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(50),
+  reason: z.string().trim().min(5).max(500),
+});
 
 type PromotionRow = {
   id: string; owner_id: string; placement: string; title: string; subtitle: string | null;
   media_url: string | null; target_kind: string | null; target_value: string | null;
   region_code: string | null; city: string | null; starts_at: Date; ends_at: Date;
   status: string; decision_reason: string | null; request_note?: string | null;
-  created_at: Date; owner_name?: string; impressions?: string; clicks?: string;
+  created_at: Date; display_order: number | null; owner_name?: string; impressions?: string; clicks?: string;
 };
 
 const PROMOTION_SELECT = `
   SELECT p.id,p.owner_id,p.placement,p.title,p.subtitle,m.safe_url media_url,p.target_kind,p.target_value,
-         p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at
+         p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at,
+         p.display_order
     FROM promotions p
     LEFT JOIN media_assets m ON m.id=p.media_id AND m.status='ready'`;
 
@@ -3044,6 +3149,8 @@ const promotionJson = async (row: PromotionRow) => ({
   status: row.status,
   decisionReason: row.decision_reason,
   createdAt: row.created_at.toISOString(),
+  // NULL is "not hand-ordered", which is a different thing from "first".
+  displayOrder: row.display_order,
 });
 
 /// What the home screen reads. "Live" is computed here rather than stored: an
@@ -3061,7 +3168,9 @@ app.get('/v1/community/promotions/active', async (request, reply) => {
           -- nationwide ones, never somebody else's city.
           AND (p.region_code IS NULL OR p.region_code=v.region_code)
           AND (p.city IS NULL OR p.city=v.city)
-        ORDER BY p.starts_at DESC,p.id DESC LIMIT 20`,
+        -- Hand order first when an operator has set one; everything else keeps
+        -- the newest-first behaviour it had before the column existed.
+        ORDER BY p.display_order ASC NULLS LAST,p.starts_at DESC,p.id DESC LIMIT 20`,
       [userId],
     );
     return { data: await Promise.all(rows.rows.map(promotionJson)) };
@@ -3151,20 +3260,38 @@ app.get('/v1/internal/gatework/promotions', async (request, reply) => {
     requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator']);
     const input = promotionQueueQuery.parse(request.query);
     const rows = await db.query<PromotionRow>(
-      `${PROMOTION_SELECT} WHERE p.status=$1 ORDER BY p.created_at ASC LIMIT $2 OFFSET $3`,
+      // A pending queue is worked oldest-first, but an approved list is the
+      // running order - so it is read in the order the home screen will use it.
+      `${PROMOTION_SELECT} WHERE p.status=$1
+        ORDER BY ${input.status === 'approved' ? 'p.display_order ASC NULLS LAST,p.starts_at DESC,p.id DESC' : 'p.created_at ASC'}
+        LIMIT $2 OFFSET $3`,
       [input.status, input.limit, input.offset],
     );
-    const owners = await db.query<{ user_id: string; display_name: string }>(
-      'SELECT user_id,display_name FROM community_profile_projection WHERE user_id=ANY($1::uuid[])',
-      [rows.rows.map((row) => row.owner_id)],
-    );
+    const ids = rows.rows.map((row) => row.id);
+    const [owners, totals] = await Promise.all([
+      db.query<{ user_id: string; display_name: string }>(
+        'SELECT user_id,display_name FROM community_profile_projection WHERE user_id=ANY($1::uuid[])',
+        [rows.rows.map((row) => row.owner_id)],
+      ),
+      // These counters already existed and the member could see their own; the
+      // operator deciding whether to keep a placement running could not. Without
+      // them "is this working" was answered by opinion.
+      db.query<{ promotion_id: string; impressions: string; clicks: string }>(
+        `SELECT promotion_id,sum(impressions) impressions,sum(clicks) clicks
+           FROM promotion_impressions WHERE promotion_id=ANY($1::uuid[]) GROUP BY promotion_id`,
+        [ids],
+      ),
+    ]);
     const names = new Map(owners.rows.map((row) => [row.user_id, row.display_name]));
+    const counters = new Map(totals.rows.map((row) => [row.promotion_id, row]));
     return {
       data: await Promise.all(rows.rows.map(async (row) => ({
         ...await promotionJson(row),
         ownerId: row.owner_id,
         ownerName: names.get(row.owner_id) ?? 'TurkSquare üyesi',
         requestNote: row.request_note ?? null,
+        impressions: Number(counters.get(row.id)?.impressions ?? 0),
+        clicks: Number(counters.get(row.id)?.clicks ?? 0),
       }))),
       nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null,
     };
@@ -3208,6 +3335,47 @@ app.post('/v1/internal/gatework/promotions/:id/decision', async (request, reply)
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTION_DECISION_FAILED', message: 'Karar kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+/// Hand ordering the live cards. Only approved rows can be ordered: a pending
+/// request has no place on the home screen, so dragging one into the running
+/// list must fail loudly rather than quietly place it.
+app.put('/v1/internal/gatework/promotions/order', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = promotionOrderBody.parse(request.body);
+    // A repeated id would give one card two positions and steal one from
+    // another card, and the row count check below would still pass.
+    if (new Set(input.ids).size !== input.ids.length) throw Error('DUPLICATE_ID');
+    await client.query('BEGIN');
+    // Written as one statement, so the home screen cannot read a half-applied
+    // order in which two cards share a position.
+    const updated = await client.query(
+      `UPDATE promotions p SET display_order=v.rank,updated_at=now()
+         FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id,rank)
+        WHERE p.id=v.id AND p.status='approved'`,
+      [input.ids],
+    );
+    // The console sends the list it was showing. A short count means that list
+    // is stale - something ended or was pulled while it was open - and applying
+    // the rest would order a screen the operator never actually saw.
+    if (updated.rowCount !== input.ids.length) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'PROMOTION_ORDER_STALE', message: 'Liste değişmiş. Sayfayı yenileyip sıralamayı tekrar kaydet.' } });
+    }
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'promotion.reorder', targetType: 'promotion', targetId: input.ids[0]!, reason: `${input.reason} (${input.ids.length} kart)`, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return { data: { ordered: updated.rowCount } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'PROMOTION_ORDER_FAILED', message: 'Sıralama kaydedilemedi.' } });
   } finally {
     client.release();
   }
@@ -3598,6 +3766,14 @@ const gateworkForumCategoryPatch = z.object({
   reason: z.string().trim().min(5).max(500),
 }).refine((value) => value.title !== undefined || value.emoji !== undefined || value.description !== undefined || value.ordinal !== undefined || value.isActive !== undefined);
 
+// The whole order at once, like the promotion one: setting ordinals one row at
+// a time leaves the list briefly holding two categories with the same number,
+// and the tie is broken by title - so the forum reshuffles itself mid-edit.
+const gateworkForumCategoryOrder = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(60),
+  reason: z.string().trim().min(5).max(500),
+});
+
 const gateworkForumTopicState = z.object({
   isPinned: z.boolean().optional(),
   isLocked: z.boolean().optional(),
@@ -3690,6 +3866,48 @@ app.patch('/v1/internal/gatework/forum/categories/:id', { config: { rateLimit: {
   }
 });
 
+/// The order the sections appear in, for members and here. Both the app's list
+/// and the console's read ORDER BY ordinal, so this is the one write that
+/// decides what people see first when they open the forum.
+app.put('/v1/internal/gatework/forum/categories/order', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, FORUM_EDIT_ROLES);
+    const input = gateworkForumCategoryOrder.parse(request.body);
+    // A repeated id would give one category two positions and steal one from
+    // another, and the row count check below would still pass.
+    if (new Set(input.ids).size !== input.ids.length) throw Error('DUPLICATE_ID');
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `UPDATE forum_categories c SET ordinal=v.rank
+         FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id,rank)
+        WHERE c.id=v.id`,
+      [input.ids],
+    );
+    // A short count means the console is ordering a list that no longer
+    // matches the table; applying the rest would order a forum nobody saw.
+    if (updated.rowCount !== input.ids.length) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'FORUM_ORDER_STALE', message: 'Kategori listesi değişmiş. Sayfayı yenileyip sıralamayı tekrar kaydet.' } });
+    }
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'forum_category.reorder', targetType: 'forum_category',
+      targetId: input.ids[0]!, reason: `${input.reason} (${input.ids.length} kategori)`, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return { data: { ordered: updated.rowCount } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_ORDER_REJECTED', message: 'Sıralama kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
 // The member-facing topic list is not reusable here: it filters to active rows
 // and answers a member token. An operator has to be able to reach the topic that
 // is already hidden, which is usually the one they are looking for.
@@ -3705,8 +3923,12 @@ app.get('/v1/internal/gatework/forum/topics', async (request, reply) => {
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, [...FORUM_MODERATE_ROLES, 'content_editor', 'analyst', 'auditor']);
     const input = gateworkForumTopicsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; title: string; category_title: string; author_id: string; author_name: string | null; reply_count: number; view_count: string; is_pinned: boolean; is_locked: boolean; moderation_state: string; created_at: Date; last_activity_at: Date }>(
-      `SELECT t.id,t.title,c.title category_title,t.author_id,p.display_name author_name,
+    const rows = await db.query<{ id: string; title: string; category_id: string; category_title: string; author_id: string; author_name: string | null; excerpt: string; reply_count: number; view_count: string; is_pinned: boolean; is_locked: boolean; moderation_state: string; created_at: Date; last_activity_at: Date }>(
+      // An excerpt rather than the whole body: locking a thread is a judgement
+      // about what it says, and a title alone does not carry that. Truncated
+      // because fifty full topics is half a megabyte to read one paragraph of.
+      `SELECT t.id,t.title,t.category_id,c.title category_title,t.author_id,p.display_name author_name,
+              left(t.body,600) excerpt,
               t.reply_count,t.view_count,t.is_pinned,t.is_locked,t.moderation_state,
               t.created_at,COALESCE(t.last_reply_at,t.created_at) last_activity_at
          FROM forum_topics t
@@ -3722,8 +3944,8 @@ app.get('/v1/internal/gatework/forum/topics', async (request, reply) => {
     );
     return {
       data: rows.rows.map((row) => ({
-        id: row.id, title: row.title, categoryTitle: row.category_title, authorId: row.author_id,
-        authorName: row.author_name, replyCount: row.reply_count, viewCount: Number(row.view_count),
+        id: row.id, title: row.title, categoryId: row.category_id, categoryTitle: row.category_title, authorId: row.author_id,
+        authorName: row.author_name, excerpt: row.excerpt, replyCount: row.reply_count, viewCount: Number(row.view_count),
         isPinned: row.is_pinned, isLocked: row.is_locked, moderationState: row.moderation_state,
         createdAt: row.created_at.toISOString(), lastActivityAt: row.last_activity_at.toISOString(),
       })),
@@ -3778,6 +4000,7 @@ const gateworkListingsQuery = z.object({
   status: z.enum(['all', 'draft', 'active', 'reserved', 'sold', 'inactive']).default('all'),
   query: z.string().trim().min(2).max(140).optional(),
   regionCode: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
+  category: z.enum(['vehicle', 'rental', 'home', 'electronics', 'collectible', 'art', 'other']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
@@ -3800,13 +4023,75 @@ const gateworkAuctionCancel = z.object({ reason: z.string().trim().min(5).max(50
 // disagree about what 'active' means.
 const AUCTION_STATE_SQL = `CASE WHEN a.status='cancelled' THEN 'cancelled' WHEN a.ends_at<=now() THEN 'closed' WHEN a.starts_at>now() THEN 'scheduled' ELSE 'active' END`;
 
+/**
+ * What is measurably unusual about a listing.
+ *
+ * A member-to-member marketplace is where fraud lands first, and until now the
+ * console showed a listing exactly as its seller wrote it: a title, a price and
+ * a name. Nothing on that card distinguishes an honest $400 sofa from a $400
+ * car, or a neighbour's second listing from the fortieth one an account opened
+ * this morning under forty different titles that are all the same sentence.
+ *
+ * These are measurements, not a verdict. No score is stored, no listing is
+ * hidden automatically, and the thresholds that turn a number into a warning
+ * live in the console next to the sentence an operator reads - a rule about
+ * what counts as "too cheap" should be arguable without a migration, and a
+ * takedown should always be a person's decision with a reason attached.
+ *
+ * The median deliberately excludes the listing itself and is only meaningful
+ * with enough comparable rows; `categorySample` is returned so the console can
+ * say "not enough listings to compare" instead of quietly comparing against
+ * two.
+ */
+type ListingSignals = {
+  categoryMedianPrice: number | null;
+  categorySample: number;
+  sellerListingsLast24h: number;
+  sellerActiveListings: number;
+  sellerOpenReports: number;
+  sellerFraudReports: number;
+  sellerVerified: boolean;
+  duplicateTitleOwners: number;
+};
+
+async function listingRiskSignals(ids: string[]): Promise<Map<string, ListingSignals>> {
+  const rows = await db.query<{ id: string; category_median: string | null; category_sample: string; seller_listings_24h: string; seller_active_listings: string; seller_open_reports: string; seller_fraud_reports: string; seller_verified: boolean; duplicate_title_owners: string }>(
+    `SELECT l.id,
+            med.median category_median,med.sample category_sample,
+            (SELECT count(*) FROM marketplace_listings s WHERE s.owner_id=l.owner_id AND s.created_at>now()-interval '24 hours') seller_listings_24h,
+            (SELECT count(*) FROM marketplace_listings s WHERE s.owner_id=l.owner_id AND s.status='active') seller_active_listings,
+            (SELECT count(*) FROM content_reports r WHERE r.reported_user_id=l.owner_id AND r.status IN ('open','in_review')) seller_open_reports,
+            (SELECT count(*) FROM content_reports r WHERE r.reported_user_id=l.owner_id AND r.category IN ('scam_fraud','illegal_goods') AND r.created_at>now()-interval '180 days') seller_fraud_reports,
+            COALESCE((SELECT c.identity_verified FROM member_capabilities c WHERE c.user_id=l.owner_id),false) seller_verified,
+            (SELECT count(DISTINCT o.owner_id) FROM marketplace_listings o WHERE lower(o.title)=lower(l.title) AND o.owner_id<>l.owner_id) duplicate_title_owners
+       FROM marketplace_listings l
+       LEFT JOIN LATERAL (
+         SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s.price) median,count(*) sample
+           FROM marketplace_listings s
+          WHERE s.category=l.category AND s.status='active' AND s.id<>l.id
+       ) med ON true
+      WHERE l.id=ANY($1::uuid[])`,
+    [ids],
+  );
+  return new Map(rows.rows.map((row) => [row.id, {
+    categoryMedianPrice: row.category_median === null ? null : Number(row.category_median),
+    categorySample: Number(row.category_sample),
+    sellerListingsLast24h: Number(row.seller_listings_24h),
+    sellerActiveListings: Number(row.seller_active_listings),
+    sellerOpenReports: Number(row.seller_open_reports),
+    sellerFraudReports: Number(row.seller_fraud_reports),
+    sellerVerified: row.seller_verified,
+    duplicateTitleOwners: Number(row.duplicate_title_owners),
+  }]));
+}
+
 app.get('/v1/internal/gatework/marketplace/listings', async (request, reply) => {
   try {
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
     const input = gateworkListingsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; title: string; description: string; price: string; status: string; city: string | null; region_code: string | null; owner_id: string; owner_name: string | null; created_at: Date; updated_at: Date; auction_id: string | null; auction_state: string | null; bid_count: string }>(
-      `SELECT l.id,l.title,l.description,l.price,l.status,l.city,l.region_code,l.owner_id,
+    const rows = await db.query<{ id: string; title: string; description: string; price: string; status: string; category: string; city: string | null; region_code: string | null; owner_id: string; owner_name: string | null; created_at: Date; updated_at: Date; auction_id: string | null; auction_state: string | null; bid_count: string }>(
+      `SELECT l.id,l.title,l.description,l.price,l.status,l.category,l.city,l.region_code,l.owner_id,
               p.display_name owner_name,l.created_at,l.updated_at,
               a.id auction_id,${AUCTION_STATE_SQL} auction_state,
               (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count
@@ -3816,17 +4101,21 @@ app.get('/v1/internal/gatework/marketplace/listings', async (request, reply) => 
         WHERE ($1::text = 'all' OR l.status=$1)
           AND ($2::text IS NULL OR l.title ILIKE '%'||$2||'%')
           AND ($3::text IS NULL OR l.region_code=$3)
+          AND ($6::text IS NULL OR l.category=$6)
         ORDER BY l.created_at DESC,l.id DESC
         LIMIT $4 OFFSET $5`,
-      [input.status, input.query ?? null, input.regionCode?.toUpperCase() ?? null, input.limit + 1, input.offset],
+      [input.status, input.query ?? null, input.regionCode?.toUpperCase() ?? null, input.limit + 1, input.offset, input.category ?? null],
     );
     const page = rows.rows.slice(0, input.limit);
+    const signals = page.length > 0 ? await listingRiskSignals(page.map((row) => row.id)) : new Map<string, ListingSignals>();
     return {
       data: page.map((row) => ({
         id: row.id, title: row.title, description: row.description, price: Number(row.price), status: row.status,
+        category: row.category,
         city: row.city, regionCode: row.region_code, ownerId: row.owner_id, ownerName: row.owner_name,
         createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
         auction: row.auction_id ? { id: row.auction_id, state: row.auction_state!, bidCount: Number(row.bid_count) } : null,
+        signals: signals.get(row.id) ?? null,
       })),
       meta: { nextOffset: rows.rows.length > input.limit ? input.offset + input.limit : null },
     };
@@ -3885,14 +4174,19 @@ app.get('/v1/internal/gatework/marketplace/auctions', async (request, reply) => 
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, MARKETPLACE_READ_ROLES);
     const input = gateworkAuctionsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; listing_id: string; listing_title: string; listing_status: string; seller_id: string; seller_name: string | null; starting_price: string; minimum_increment: string; starts_at: Date; ends_at: Date; stored_status: string; state: string; bid_count: string; top_bid: string | null; top_bidder_id: string | null; top_bidder_name: string | null; created_at: Date }>(
+    const rows = await db.query<{ id: string; listing_id: string; listing_title: string; listing_status: string; seller_id: string; seller_name: string | null; seller_eligible: boolean; starting_price: string; minimum_increment: string; starts_at: Date; ends_at: Date; stored_status: string; state: string; bid_count: string; top_bid: string | null; top_bidder_id: string | null; top_bidder_name: string | null; created_at: Date }>(
       `SELECT a.id,a.listing_id,l.title listing_title,l.status listing_status,a.seller_id,p.display_name seller_name,
               a.starting_price,a.minimum_increment,a.starts_at,a.ends_at,a.status stored_status,
               ${AUCTION_STATE_SQL} state,a.created_at,
+              -- The badge is checked when the auction opens and never again. A
+              -- running auction whose seller has since lost it is the row an
+              -- operator most needs to see, and it looked identical to the rest.
+              COALESCE(c.auction_seller_eligible,false) seller_eligible,
               (SELECT count(*) FROM marketplace_auction_bids b WHERE b.auction_id=a.id) bid_count,
               top.amount top_bid,top.bidder_id top_bidder_id,bp.display_name top_bidder_name
          FROM marketplace_auctions a
          JOIN marketplace_listings l ON l.id=a.listing_id
+         LEFT JOIN member_capabilities c ON c.user_id=a.seller_id
          LEFT JOIN community_profile_projection p ON p.user_id=a.seller_id
          LEFT JOIN LATERAL (
            SELECT b.amount,b.bidder_id FROM marketplace_auction_bids b
@@ -3908,7 +4202,7 @@ app.get('/v1/internal/gatework/marketplace/auctions', async (request, reply) => 
     return {
       data: page.map((row) => ({
         id: row.id, listingId: row.listing_id, listingTitle: row.listing_title, listingStatus: row.listing_status,
-        sellerId: row.seller_id, sellerName: row.seller_name,
+        sellerId: row.seller_id, sellerName: row.seller_name, sellerEligible: row.seller_eligible,
         startingPrice: Number(row.starting_price), minimumIncrement: Number(row.minimum_increment),
         startsAt: row.starts_at.toISOString(), endsAt: row.ends_at.toISOString(),
         storedStatus: row.stored_status, state: row.state,
