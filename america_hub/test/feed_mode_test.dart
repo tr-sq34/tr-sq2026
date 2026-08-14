@@ -12,6 +12,10 @@ class _RecordingFeed implements FeedRepository {
   final List<FeedMode> asked = [];
 
   @override
+  Future<CommunityPost> fetchPost(String postId) async =>
+      throw UnimplementedError();
+
+  @override
   Future<CursorPage<CommunityPost>> fetchFeed({
     required FeedMode mode,
     String? cursor,

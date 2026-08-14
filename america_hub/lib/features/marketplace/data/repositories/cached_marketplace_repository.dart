@@ -12,6 +12,9 @@ class CachedMarketplaceRepository implements MarketplaceRepository {
   final CachedCursorDataSource<MarketplaceListing> _cached;
   @override Future<CursorPage<MarketplaceListing>> fetchPage({String? cursor, int limit = 20}) => _cached.fetchPage(cursor: cursor, limit: limit);
   @override Future<List<MarketplaceListing>> getListings() => _remote.getListings();
+  // Tek ilan hep sunucudan: bildirimden açılan sayfa, önbellekteki eski fiyatı
+  // değil ilanın şu anki hâlini göstermeli.
+  @override Future<MarketplaceListing> getListing(String listingId) => _remote.getListing(listingId);
   @override Future<MarketplaceSellerDashboard> getSellerDashboard() => _remote.getSellerDashboard();
   @override Future<MarketplaceSellerProfile> getSellerProfile(String sellerId) => _remote.getSellerProfile(sellerId);
   @override Future<List<MarketplaceListing>> getSellerListings(String sellerId) => _remote.getSellerListings(sellerId);

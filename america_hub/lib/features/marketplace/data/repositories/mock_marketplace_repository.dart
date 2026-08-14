@@ -23,6 +23,13 @@ class MockMarketplaceRepository implements MarketplaceRepository {
   Future<List<MarketplaceListing>> getListings() async => _listings;
 
   @override
+  Future<MarketplaceListing> getListing(String listingId) async =>
+      _listings.firstWhere(
+        (item) => item.id == listingId,
+        orElse: () => throw StateError('LISTING_NOT_FOUND'),
+      );
+
+  @override
   Future<MarketplaceSellerDashboard> getSellerDashboard() async {
     final active = _listings.where((item) => item.status == MarketplaceListingStatus.active).toList();
     final best = [..._listings]..sort((a, b) => b.likeCount.compareTo(a.likeCount));

@@ -105,9 +105,7 @@ void main() {
       {
         'data': {'id': 'post-1'},
       },
-      {
-        'data': [post(purpose: 'travelerMatch', travelerMatch: _trip)],
-      },
+      {'data': post(purpose: 'travelerMatch', travelerMatch: _trip)},
     ]);
 
     await harness.repository.createPost(
@@ -141,9 +139,7 @@ void main() {
       {
         'data': {'id': 'post-1'},
       },
-      {
-        'data': [post()],
-      },
+      {'data': post()},
     ]);
 
     await harness.repository.createPost(

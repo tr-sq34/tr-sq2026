@@ -105,10 +105,25 @@ class ApiCommunityRepository
 
   static bool _isUploadedMedia(PostMedia media) => _uuid.hasMatch(media.id);
 
-  Future<CommunityPost> _post(String postId) async => (await fetchFeed(
-    mode: FeedMode.forYou,
-    limit: 50,
-  )).items.firstWhere((item) => item.id == postId);
+  @override
+  Future<CommunityPost> fetchPost(String postId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      '/community/posts/$postId',
+    );
+    final envelope = ApiResponse<CommunityPost>.fromJson(
+      response.data!,
+      (raw) =>
+          CommunityPostDto.fromJson(raw as Map<String, dynamic>).toDomain(),
+    );
+    return envelope.data;
+  }
+
+  /// Beğeniden sonra kartın yeni hâli.
+  ///
+  /// Eskiden akışın ilk 50 kaydı çekilip aranıyordu: biraz aşağı kaydırmış
+  /// birinin beğenisi o listede bulunamıyor ve işlem sunucuda başarılı olduğu
+  /// hâlde uygulamada hata olarak dönüyordu.
+  Future<CommunityPost> _post(String postId) => fetchPost(postId);
   String _key() {
     final r = Random.secure();
     String s(int n) =>

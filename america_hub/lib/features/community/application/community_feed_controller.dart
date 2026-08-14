@@ -56,6 +56,12 @@ class CommunityFeedController extends PagedController<CommunityPost> {
         super(dataSource: source, pageSize: 2);
 
   final _FeedModeSource _source;
+
+  /// Bildirimden gelen paylaşım listede olmayabilir: akış ilk sayfayı gösterir,
+  /// yorum ise iki hafta önceki bir paylaşıma gelmiş olabilir. Sunucuya tek tek
+  /// soruluyor.
+  Future<CommunityPost> fetchPost(String postId) =>
+      _source.feed.fetchPost(postId);
   final CommunityPostCommands _commands;
   final PostInteractionRepository _interactions;
   final PollRepository _polls;

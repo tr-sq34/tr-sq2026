@@ -29,6 +29,7 @@ import 'package:america_hub/features/news/data/repositories/mock_news_comments_r
 import 'package:america_hub/features/news/data/repositories/mock_news_repository.dart';
 import 'package:america_hub/features/notifications/application/notifications_controller.dart';
 import 'package:america_hub/features/notifications/data/repositories/empty_notification_repository.dart';
+import 'package:america_hub/features/notifications/domain/repositories/notification_repository.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/promotions/application/promotions_controller.dart';
 import 'package:america_hub/features/promotions/data/repositories/mock_promotion_repository.dart';
@@ -69,9 +70,12 @@ void _ignoreOverflowReports() {
 /// so building it by hand in each test would bury the assertion under fifty
 /// lines of wiring. Pass [signUpName] to have the mock repository remember a
 /// display name, exactly as registering through the app would.
+/// Pass [notifications] to put rows behind the bell; the default shell has an
+/// empty list, which is what most of these tests want.
 Future<AuthController> pumpShell(
   WidgetTester tester, {
   String? signUpName,
+  NotificationRepository notifications = const EmptyNotificationRepository(),
 }) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
@@ -145,7 +149,7 @@ Future<AuthController> pumpShell(
         memberCapabilitiesController: _StubCapabilitiesController(apiClient),
         authController: authController,
         notificationsController: NotificationsController(
-          repository: const EmptyNotificationRepository(),
+          repository: notifications,
         ),
         newsController: NewsController(repository: MockNewsRepository()),
         newsCommentsController: CommunityCommentsController(
