@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../../core/constants/app_colors.dart';
-import '../../../../core/widgets/app_remote_image.dart';
 import '../../application/marketplace_controller.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/entities/marketplace_seller.dart';
@@ -191,20 +189,9 @@ class _MarketplaceSellerProfileScreenState
                                 : null,
                           ),
                         ),
-                        Positioned(
-                          bottom: 2,
-                          right: 2,
-                          child: Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                  color: const Color(0xFF1E1A47), width: 2),
-                            ),
-                          ),
-                        ),
+                        // Avatarın köşesindeki yeşil nokta herkeste yanıyordu ve
+                        // "şu an çevrimiçi" diyordu; kimsenin çevrimiçi olup
+                        // olmadığını bu ekran bilmiyor.
                       ],
                     ),
                     const SizedBox(width: 14),
@@ -258,52 +245,58 @@ class _MarketplaceSellerProfileScreenState
                               ),
                             ],
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Katılım: ${_formatDate(p.memberSince)}',
-                            style: const TextStyle(
-                              color: Color(0xFFD9D6FE),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
+                          // Katılım tarihi ve puan yalnızca gerçekten varsa
+                          // görünüyor: "Katılım: bugün" ya da "5 üzerinden 0",
+                          // bilmediğimizi bilmiyormuş gibi söylemek olurdu.
+                          if (p.memberSince case final memberSince?) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Katılım: ${_formatDate(memberSince)}',
+                              style: const TextStyle(
+                                color: Color(0xFFD9D6FE),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          // Rating
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.star_rounded,
-                                        color: Colors.amber, size: 14),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '${p.rating}',
-                                      style: const TextStyle(
-                                        color: Colors.amber,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
+                          ],
+                          if (p.reviewCount > 0) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.star_rounded,
+                                          color: Colors.amber, size: 14),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        '${p.rating}',
+                                        style: const TextStyle(
+                                          color: Colors.amber,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                '(${p.reviewCount} Değerlendirme)',
-                                style: const TextStyle(
-                                  color: Color(0xFFD9D6FE),
-                                  fontSize: 12,
+                                const SizedBox(width: 8),
+                                Text(
+                                  '(${p.reviewCount} Değerlendirme)',
+                                  style: const TextStyle(
+                                    color: Color(0xFFD9D6FE),
+                                    fontSize: 12,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -407,58 +400,67 @@ class _MarketplaceSellerProfileScreenState
                               ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFECFDF5),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFA7F3D0)),
-                            ),
-                            child: const Text(
-                              'Yüksek Puanlı',
-                              style: TextStyle(
-                                  color: Color(0xFF047857),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 9),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF8FAFC),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFF1F5F9)),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: _MetricItem(
-                                icon: Icons.bolt_rounded,
-                                iconColor: Colors.amber,
-                                label: 'Yanıt Oranı',
-                                value: '%${p.responseRate}',
-                              ),
-                            ),
+                          // "Yüksek Puanlı" rozeti hiçbir şeye bakmadan herkese
+                          // takılıyordu; puan varsa hak edildiğinde geliyor.
+                          if (p.reviewCount > 0 && p.rating >= 4.5) ...[
+                            const SizedBox(width: 8),
                             Container(
-                                width: 1,
-                                height: 24,
-                                color: const Color(0xFFE2E8F0)),
-                            Expanded(
-                              child: _MetricItem(
-                                icon: Icons.access_time_rounded,
-                                iconColor: const Color(0xFF6355D8),
-                                label: 'Ort. Yanıt Süresi',
-                                value: 'Ort. ${p.averageResponseMinutes} dk',
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFECFDF5),
+                                borderRadius: BorderRadius.circular(8),
+                                border:
+                                    Border.all(color: const Color(0xFFA7F3D0)),
+                              ),
+                              child: const Text(
+                                'Yüksek Puanlı',
+                                style: TextStyle(
+                                    color: Color(0xFF047857),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 9),
                               ),
                             ),
                           ],
-                        ),
+                        ],
                       ),
+                      // Yanıt oranı ve süresi hiçbir yerde ölçülmüyor; ölçülene
+                      // kadar bu kutu yok.
+                      if (p.responseRate > 0) ...[
+                        const SizedBox(height: 14),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFF1F5F9)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _MetricItem(
+                                  icon: Icons.bolt_rounded,
+                                  iconColor: Colors.amber,
+                                  label: 'Yanıt Oranı',
+                                  value: '%${p.responseRate}',
+                                ),
+                              ),
+                              Container(
+                                  width: 1,
+                                  height: 24,
+                                  color: const Color(0xFFE2E8F0)),
+                              Expanded(
+                                child: _MetricItem(
+                                  icon: Icons.access_time_rounded,
+                                  iconColor: const Color(0xFF6355D8),
+                                  label: 'Ort. Yanıt Süresi',
+                                  value: 'Ort. ${p.averageResponseMinutes} dk',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

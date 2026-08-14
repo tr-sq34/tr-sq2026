@@ -39,7 +39,7 @@ const mediaPresignBody=z.object({
 const mediaCompleteBody=z.object({uploadId:z.string().uuid()});
 const commentBody=z.object({body:z.string().trim().min(1).max(1000),parentId:z.string().uuid().optional()});
 const listingBody=z.object({title:z.string().trim().min(3).max(140),description:z.string().trim().min(10).max(4000),price:z.coerce.number().nonnegative(),city:z.string().trim().min(2).max(100).optional(),regionCode:z.string().regex(/^[A-Za-z]{2}$/).optional()});
-const listingQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(20)});
+const listingQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(20),sellerId:z.string().uuid().optional()});
 const auctionBody=z.object({startingPrice:z.coerce.number().nonnegative(),minimumIncrement:z.coerce.number().positive(),startsAt:z.string().datetime(),endsAt:z.string().datetime()}).refine((v)=>Date.parse(v.endsAt)>Date.parse(v.startsAt));
 const bidBody=z.object({amount:z.coerce.number().positive()});
 const gateworkSystemAccountBody=z.object({principalId:z.string().uuid(),displayName:z.string().trim().min(2).max(100),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
@@ -732,7 +732,39 @@ const readListing = async (listingId: string, userId: string) => {
   return row.rows[0] ?? null;
 };
 
-app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map(listingJson),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(input.sellerId){params.push(input.sellerId);where+=` AND l.owner_id=$${params.length}`;}if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map(listingJson),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+
+/**
+ * The seller behind a listing.
+ *
+ * Tapping the seller's name opened a profile the app filled in from nothing:
+ * `getSellerProfile` returned a hardcoded record of zeros and
+ * `getSellerListings` returned the entire marketplace, so a stranger's page
+ * showed every listing on TurkSquare as theirs.
+ *
+ * What comes back here is only what is known: the name, the chosen city, how
+ * many listings are up, and whether identity has been verified. There is no
+ * rating, no response time and no sales count in this system yet, so none is
+ * invented - a fabricated "0 out of 5" is a worse answer than no answer.
+ */
+app.get('/v1/marketplace/sellers/:id', async (request, reply) => {
+  try {
+    // Read for authentication only: a seller's page is for members, and the
+    // answer is the same for every one of them.
+    await viewer(request.headers);
+    const sellerId = z.string().uuid().parse((request.params as { id: string }).id);
+    const row = await db.query<{ display_name: string | null; city: string | null; region_code: string | null; active_listings: string; identity_verified: boolean }>(
+      `SELECT cp.display_name,cp.city,cp.region_code,
+              (SELECT count(*) FROM marketplace_listings l WHERE l.owner_id=$1 AND l.status='active') active_listings,
+              EXISTS(SELECT 1 FROM member_capabilities mc WHERE mc.user_id=$1 AND mc.identity_verified) identity_verified
+         FROM (SELECT $1::uuid user_id) s
+         LEFT JOIN community_profile_projection cp ON cp.user_id=s.user_id`, [sellerId]);
+    const seller = row.rows[0]!;
+    return { data: { id: sellerId, displayName: seller.display_name ?? 'TurkSquare üyesi', city: [seller.city, seller.region_code].filter(Boolean).join(', '), activeListingCount: Number(seller.active_listings), identityVerified: seller.identity_verified } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'SELLER_UNAVAILABLE', message: 'Satıcı bilgisi alınamadı.' } });
+  }
+});
 
 app.put('/v1/marketplace/listings/:id/reactions/:kind', async (request, reply) => {
   try {

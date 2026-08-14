@@ -20,7 +20,10 @@ class MarketplaceSellerProfile {
   final String userId;
   final String displayName;
   final String city;
-  final DateTime memberSince;
+
+  /// Bilinmiyorsa boş. Bu sistemde üyeliğin başladığı tarihi tutan bir kayıt
+  /// yok; "Katılım: bugün" yazmaktansa o satır hiç görünmüyor.
+  final DateTime? memberSince;
   final int activeListingCount;
   final int completedSales;
   final double rating;

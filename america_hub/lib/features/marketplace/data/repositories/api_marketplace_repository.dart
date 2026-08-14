@@ -47,23 +47,34 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
         totalSales: 0,
       );
 
+  /// Sunucu yalnızca bildiğini gönderiyor: ad, seçilen şehir, açık ilan sayısı
+  /// ve kimlik doğrulaması. Puan, yanıt süresi ve satış sayısı bu sistemde
+  /// henüz hiçbir yerde tutulmuyor; uydurulmuş bir "5 üzerinden 0", cevapsız
+  /// kalmaktan daha kötü bir cevap olurdu. Ekran bu alanları hiç göstermiyor.
   @override
-  Future<MarketplaceSellerProfile> getSellerProfile(String sellerId) async =>
-      MarketplaceSellerProfile(
-        userId: sellerId,
-        displayName: 'TurkSquare üyesi',
-        city: '',
-        memberSince: DateTime.now(),
-        activeListingCount: 0,
-        completedSales: 0,
-        rating: 0,
-        reviewCount: 0,
-        responseRate: 0,
-        averageResponseMinutes: 0,
-        identityStatus: MarketplaceVerificationStatus.unverified,
-        phoneStatus: MarketplaceVerificationStatus.unverified,
-        emailStatus: MarketplaceVerificationStatus.unverified,
-      );
+  Future<MarketplaceSellerProfile> getSellerProfile(String sellerId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      '/marketplace/sellers/$sellerId',
+    );
+    final data = response.data!['data'] as Map<String, dynamic>;
+    return MarketplaceSellerProfile(
+      userId: data['id'] as String? ?? sellerId,
+      displayName: data['displayName'] as String? ?? 'TurkSquare üyesi',
+      city: data['city'] as String? ?? '',
+      memberSince: null,
+      activeListingCount: (data['activeListingCount'] as num?)?.toInt() ?? 0,
+      completedSales: 0,
+      rating: 0,
+      reviewCount: 0,
+      responseRate: 0,
+      averageResponseMinutes: 0,
+      identityStatus: data['identityVerified'] == true
+          ? MarketplaceVerificationStatus.verified
+          : MarketplaceVerificationStatus.unverified,
+      phoneStatus: MarketplaceVerificationStatus.unverified,
+      emailStatus: MarketplaceVerificationStatus.unverified,
+    );
+  }
 
   @override
   Future<MarketplaceSellerAnalytics> getSellerAnalytics() async =>
@@ -82,9 +93,26 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
         insights: [],
       );
 
+  /// Satıcının kendi ilanları. Burası bugüne kadar tüm Çarşı'yı döndürüyordu:
+  /// yabancının sayfası TurkSquare'deki her ilanı onunmuş gibi gösteriyordu.
   @override
-  Future<List<MarketplaceListing>> getSellerListings(String sellerId) =>
-      getListings();
+  Future<List<MarketplaceListing>> getSellerListings(String sellerId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.marketplaceListings,
+      queryParameters: {'sellerId': sellerId, 'limit': 50},
+    );
+    final envelope = ApiResponse<List<MarketplaceListing>>.fromJson(
+      response.data!,
+      (raw) => (raw as List)
+          .map(
+            (item) => MarketplaceListingDto.fromJson(
+              item as Map<String, dynamic>,
+            ).toDomain(),
+          )
+          .toList(),
+    );
+    return envelope.data;
+  }
 
   @override
   Future<MarketplaceListing> publishListing(

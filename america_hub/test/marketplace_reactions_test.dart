@@ -5,6 +5,7 @@ import 'package:america_hub/features/marketplace/application/marketplace_control
 import 'package:america_hub/features/marketplace/data/dtos/marketplace_listing_dto.dart';
 import 'package:america_hub/features/marketplace/data/repositories/api_marketplace_repository.dart';
 import 'package:america_hub/features/marketplace/domain/entities/marketplace_listing.dart';
+import 'package:america_hub/features/marketplace/domain/entities/marketplace_seller.dart';
 import 'package:america_hub/features/marketplace/domain/repositories/marketplace_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -140,6 +141,46 @@ void main() {
       '/marketplace/listings/11111111-1111-4111-8111-111111111111/shares',
     );
     expect(result.shareCount, 3);
+  });
+
+  test('satıcı sayfası yalnızca o satıcının ilanlarını istiyor', () async {
+    final harness = build({'data': [listing()], 'meta': {'nextCursor': null}});
+
+    final listings = await harness.repository.getSellerListings(
+      '22222222-2222-4222-8222-222222222222',
+    );
+
+    expect(
+      harness.adapter.requests.single.queryParameters['sellerId'],
+      '22222222-2222-4222-8222-222222222222',
+    );
+    expect(listings.single.sellerId, '22222222-2222-4222-8222-222222222222');
+  });
+
+  test('satıcı bilgisi bilinmeyeni uydurmuyor', () async {
+    final harness = build({
+      'data': {
+        'id': '22222222-2222-4222-8222-222222222222',
+        'displayName': 'Elif Demir',
+        'city': 'Paterson, NJ',
+        'activeListingCount': 3,
+        'identityVerified': true,
+      },
+    });
+
+    final profile = await harness.repository.getSellerProfile(
+      '22222222-2222-4222-8222-222222222222',
+    );
+
+    expect(profile.displayName, 'Elif Demir');
+    expect(profile.city, 'Paterson, NJ');
+    expect(profile.activeListingCount, 3);
+    expect(profile.identityStatus, MarketplaceVerificationStatus.verified);
+    // Puan, yanıt süresi ve üyelik tarihi hiçbir yerde tutulmuyor; ekran bu
+    // alanları göstermiyor, depo da onları uydurmuyor.
+    expect(profile.memberSince, isNull);
+    expect(profile.reviewCount, 0);
+    expect(profile.responseRate, 0);
   });
 
   test('sayaç sunucunun söylediği sayıya oturuyor', () async {
