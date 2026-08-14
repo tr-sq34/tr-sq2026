@@ -37,7 +37,7 @@ async function communityFetch(path: string, init: RequestInit = {}) {
   return response.json();
 }
 
-export { EVENT_STATUS_LABELS, EVENT_STATUS_ORDER, eventStatusTone, eventWhen, placeLabel, attendanceLabel } from './events-labels';
+export { EVENT_CATEGORIES, categoryLabel, EVENT_STATUS_LABELS, EVENT_STATUS_ORDER, eventStatusTone, eventWhen, placeLabel, attendanceLabel } from './events-labels';
 export type { EventRow } from './events-labels';
 
 // Mirrors the service. Auditor and analyst read the list; writing one is an

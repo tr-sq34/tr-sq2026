@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useState } from 'react';
 import {
-  EVENT_STATUS_LABELS, attendanceLabel, eventStatusTone, eventWhen, placeLabel, type EventRow,
+  EVENT_CATEGORIES, EVENT_STATUS_LABELS, attendanceLabel, categoryLabel, eventStatusTone, eventWhen, placeLabel, type EventRow,
 } from '@/lib/events-labels';
 
 /**
@@ -30,7 +30,7 @@ const TONE: Record<string, string> = {
 };
 
 const EMPTY = {
-  title: '', description: '', category: 'Buluşma', startsAt: '', endsAt: '',
+  title: '', description: '', category: 'Community', startsAt: '', endsAt: '',
   venueLabel: '', city: '', regionCode: '', priceLabel: 'Ücretsiz', externalUrl: '', capacity: '',
 };
 
@@ -134,7 +134,11 @@ export function EventsDesk({ initialPublished, initialDrafts, initialCancelled, 
             <div className="mt-4 grid gap-3 border-t border-white/10 pt-4 sm:grid-cols-2">
               <label className="text-sm sm:col-span-2">Başlık<input value={form.title} onChange={set('title')} className={`mt-1 block w-full ${field}`} placeholder="Türk Kahvaltısı Buluşması" /></label>
               <label className="text-sm sm:col-span-2">Açıklama<textarea value={form.description} onChange={set('description')} rows={3} className={`mt-1 block w-full ${field}`} placeholder="Ne olacağı, kimin için, ne getirmeli." /></label>
-              <label className="text-sm">Kategori<input value={form.category} onChange={set('category')} className={`mt-1 block w-full ${field}`} /></label>
+              <label className="text-sm">Kategori
+                <select value={form.category} onChange={set('category')} className={`mt-1 block w-full ${field}`}>
+                  {EVENT_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
               <label className="text-sm">Ücret<input value={form.priceLabel} onChange={set('priceLabel')} className={`mt-1 block w-full ${field}`} placeholder="Ücretsiz / Kapıda 20$" /></label>
               <label className="text-sm">Başlangıç<input type="datetime-local" value={form.startsAt} onChange={set('startsAt')} className={`mt-1 block w-full ${field}`} /></label>
               <label className="text-sm">Bitiş (isteğe bağlı)<input type="datetime-local" value={form.endsAt} onChange={set('endsAt')} className={`mt-1 block w-full ${field}`} /></label>
@@ -160,7 +164,7 @@ export function EventsDesk({ initialPublished, initialDrafts, initialCancelled, 
           <article key={row.id} className="rounded-xl border border-white/10 bg-zinc-900/40 p-4">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className={`rounded px-2 py-0.5 ${TONE[row.status] ?? 'bg-zinc-800 text-zinc-300'}`}>{EVENT_STATUS_LABELS[row.status] ?? row.status}</span>
-              <span className="text-zinc-400">{row.category}</span>
+              <span className="text-zinc-400">{categoryLabel(row.category)}</span>
               <span className={eventStatusTone(row.status)}>{eventWhen(row.startsAt, row.endsAt)}</span>
               <span className="text-zinc-500">{row.priceLabel}</span>
             </div>
