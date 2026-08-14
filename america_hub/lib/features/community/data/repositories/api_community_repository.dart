@@ -96,6 +96,15 @@ class ApiCommunityRepository
     return _post(postId);
   }
 
+  /// Yüklenmiş medyanın kimliği sunucunun verdiği UUID; besteci elindeki yerel
+  /// öğeye kendi kimliğini veriyor ve o kimlik sunucuda hiçbir şeye karşılık
+  /// gelmiyor. Ayırt eden tek şey biçim.
+  static final _uuid = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  static bool _isUploadedMedia(PostMedia media) => _uuid.hasMatch(media.id);
+
   Future<CommunityPost> _post(String postId) async => (await fetchFeed(
     mode: FeedMode.forYou,
     limit: 50,
@@ -123,6 +132,16 @@ class ApiCommunityRepository
           'locationLabel': label,
         if (draft.marketplaceListingId case final listingId?)
           'marketplaceListingId': listingId,
+        // Fotoğraflar kimlikleriyle gidiyor, adresleriyle değil: adres her
+        // yanıtta yeniden imzalanan süreli bir izin, kalıcı bir alan değil.
+        // Yalnızca yükleme servisinden dönmüş kimlikler gönderiliyor; besteci
+        // yükleme tamamlanmadan da bir öğe taşıyabiliyor ve onun yerel kimliği
+        // sunucuda hiçbir şeye karşılık gelmez.
+        if (draft.media.where(_isUploadedMedia).isNotEmpty)
+          'mediaIds': [
+            for (final item in draft.media)
+              if (_isUploadedMedia(item)) item.id,
+          ],
         // Anketin sorusu ayrı gitmiyor; sunucuda da ayrı bir alan yok, gövde
         // metninin kendisi soru. Seçenekler sırasıyla kaydediliyor.
         if (draft.poll case final poll?)
