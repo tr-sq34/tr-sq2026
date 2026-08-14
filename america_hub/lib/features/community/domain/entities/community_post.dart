@@ -143,6 +143,7 @@ class CommunityPost {
     this.taggedUsers = const [],
     this.postLocation,
     this.isLiked = false,
+    this.isAuthor = false,
     this.deletedAt,
     this.purpose = CommunityPostPurpose.standard,
     this.travelerMatch,
@@ -165,6 +166,10 @@ class CommunityPost {
   final List<TaggedUser> taggedUsers;
   final PostLocation? postLocation;
   final bool isLiked;
+
+  /// Paylaşımı bu üye mi yazdı. Sunucudan geliyor; kimlik karşılaştırması
+  /// orada yapılıyor, çünkü cevap zaten evet ya da hayır.
+  final bool isAuthor;
   final DateTime? deletedAt;
   final CommunityPostPurpose purpose;
   final TravelerMatchDetails? travelerMatch;
