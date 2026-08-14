@@ -44,6 +44,15 @@ class ApiCommunityCommentsRepository implements CommunityCommentsRepository {
   Future<void> deleteComment(String commentId) =>
       _client.delete<void>(ApiEndpoints.communityPostComment(commentId));
 
+  @override
+  Future<void> setCommentLike({
+    required String commentId,
+    required bool liked,
+  }) => _client.put<Map<String, dynamic>>(
+    ApiEndpoints.communityPostCommentLikes(commentId),
+    data: {'enabled': liked},
+  );
+
   CommunityComment _comment(String postId, Map<String, dynamic> json) =>
       CommunityComment(
         id: json['id'] as String,
@@ -57,5 +66,7 @@ class ApiCommunityCommentsRepository implements CommunityCommentsRepository {
             DateTime.tryParse(json['createdAt'] as String? ?? '')?.toLocal() ??
             DateTime.now(),
         parentId: json['parentId'] as String?,
+        likes: (json['likes'] as num?)?.toInt() ?? 0,
+        isLiked: json['isLiked'] as bool? ?? false,
       );
 }

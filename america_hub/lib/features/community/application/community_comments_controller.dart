@@ -52,12 +52,38 @@ class CommunityCommentsController extends ChangeNotifier {
     }
   }
 
-  void toggleLike(String commentId) {
+  /// Yorum beğenisi: önce ekranda, sonra sunucuda.
+  ///
+  /// Kalp parmağın altında hemen dönüyor çünkü bir beğeni için ağ beklemek
+  /// dokunuşu bozuk hissettiriyor. Sunucu isteği almazsa kalp geri alınıyor:
+  /// eskiden bu çağrı hiçbir yere gitmiyordu ve sayı ekran kapanınca sıfırdan
+  /// başlıyordu, yani yalnızca dokunan kişi için doğru bir sayıydı.
+  Future<void> toggleLike(String commentId) async {
     final current = _state;
     if (current is! AsyncData<List<CommunityComment>>) return;
-    _state = AsyncData([for (final comment in current.value) if (comment.id == commentId) comment.copyWith(isLiked: !comment.isLiked, likes: comment.isLiked ? comment.likes - 1 : comment.likes + 1) else comment]);
+    final index = current.value.indexWhere((comment) => comment.id == commentId);
+    if (index == -1) return;
+    final liked = !current.value[index].isLiked;
+    _state = AsyncData(_withLike(current.value, commentId, liked));
     notifyListeners();
+    try {
+      await _repository.setCommentLike(commentId: commentId, liked: liked);
+    } catch (_) {
+      final now = _state;
+      if (now is! AsyncData<List<CommunityComment>>) return;
+      _state = AsyncData(_withLike(now.value, commentId, !liked));
+      notifyListeners();
+    }
   }
+
+  /// Değiştirme değil, kurma: iki kez uygulanması sayıyı iki kez oynatmıyor.
+  List<CommunityComment> _withLike(List<CommunityComment> comments, String commentId, bool liked) => [
+    for (final comment in comments)
+      if (comment.id == commentId && comment.isLiked != liked)
+        comment.copyWith(isLiked: liked, likes: liked ? comment.likes + 1 : comment.likes - 1)
+      else
+        comment,
+  ];
 
   Future<void> deleteComment({required CommunityComment comment, required CommunityPost post, required String viewerId}) async {
     if (!PostAccessPolicy.canDeleteComment(comment: comment, post: post, viewerId: viewerId)) {

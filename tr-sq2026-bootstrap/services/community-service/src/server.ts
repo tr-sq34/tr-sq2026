@@ -506,13 +506,15 @@ app.put('/v1/community/stories/:id/likes',async(request,reply)=>{try{const userI
 // The display name is joined here rather than left to the caller, exactly as the
 // news list does it, because a comment is drawn under a name and an author id is
 // not one.
-const POST_COMMENT_SELECT = `
+const postCommentSelect = (viewerParam: string) => `
   SELECT c.id,c.author_id,c.parent_id,c.body,c.created_at,
-         COALESCE(p.display_name,'TurkSquare üyesi') author_name
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name,
+         (SELECT count(*) FROM comment_reactions x WHERE x.comment_id=c.id) like_count,
+         EXISTS(SELECT 1 FROM comment_reactions x WHERE x.comment_id=c.id AND x.actor_id=${viewerParam}) is_liked
     FROM community_comments c
     LEFT JOIN community_profile_projection p ON p.user_id=c.author_id`;
 
-type PostCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string };
+type PostCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string; like_count: string; is_liked: boolean };
 const postCommentJson = (row: PostCommentRow) => ({
   id: row.id,
   authorId: row.author_id,
@@ -520,6 +522,8 @@ const postCommentJson = (row: PostCommentRow) => ({
   parentId: row.parent_id,
   body: row.body,
   createdAt: row.created_at.toISOString(),
+  likes: Number(row.like_count),
+  isLiked: row.is_liked,
 });
 
 /**
@@ -540,8 +544,8 @@ app.get('/v1/community/posts/:id/comments', async (request, reply) => {
     // Oldest first: a thread reads top to bottom, and the app appends a comment
     // it has just written to the end of the list it is already holding.
     const rows = await db.query<PostCommentRow>(
-      `${POST_COMMENT_SELECT} WHERE c.post_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
-      [postId],
+      `${postCommentSelect('$2')} WHERE c.post_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+      [postId, userId],
     );
     return { data: rows.rows.map(postCommentJson) };
   } catch (error) {
@@ -565,7 +569,7 @@ app.post('/v1/community/posts/:id/comments', { config: { rateLimit: { max: 20, t
       'INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
       [postId, userId, input.parentId ?? null, input.body],
     );
-    const row = await db.query<PostCommentRow>(`${POST_COMMENT_SELECT} WHERE c.id=$1`, [inserted.rows[0]!.id]);
+    const row = await db.query<PostCommentRow>(`${postCommentSelect('$2')} WHERE c.id=$1`, [inserted.rows[0]!.id, userId]);
     // Ses Ver: the first comment. Everything else about commenting is counted
     // elsewhere; this is the one badge the act itself earns.
     void grantInBackground('comment', async (journey) => { await touchStreak(journey, userId); await awardBadge(journey, userId, 'vocalist'); });
@@ -593,6 +597,40 @@ app.delete('/v1/community/comments/:id', async (request, reply) => {
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
+  }
+});
+
+/**
+ * The heart under a comment.
+ *
+ * No idempotency key, unlike the post and story equivalents: this endpoint
+ * states the desired end state rather than applying a delta, so the same request
+ * twice leaves the same single row. `enabled` is what the reader's finger is
+ * saying, not "add one".
+ */
+const commentLikeBody = z.object({ enabled: z.boolean() });
+
+app.put('/v1/community/comments/:id/likes', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = commentLikeBody.parse(request.body);
+    // Liking something is a claim to have read it, so it asks the same
+    // visibility question the list does - about the post the comment hangs under.
+    const readable = await db.query(
+      `SELECT 1 FROM community_comments c JOIN community_posts p ON ${postReadableWhere('c.post_id', '$2')}
+        WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active'`,
+      [id, userId],
+    );
+    if (!readable.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (input.enabled) await db.query('INSERT INTO comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
+    else await db.query('DELETE FROM comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
+    const tally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM comment_reactions WHERE comment_id=$1', [id]);
+    return { data: { likes: Number(tally.rows[0]!.like_count), isLiked: input.enabled } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_LIKE_FAILED', message: 'Beğenin kaydedilemedi.' } });
   }
 });
 app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
@@ -1839,13 +1877,15 @@ app.put('/v1/community/news/:id/reactions', { config: { rateLimit: { max: 60, ti
 // The display name is joined here and not left to the client. The feed's own
 // comment list still omits it, which is why comments there render under whatever
 // the caller happens to know; a news article has no such context to fall back on.
-const NEWS_COMMENT_SELECT = `
+const newsCommentSelect = (viewerParam: string) => `
   SELECT c.id,c.author_id,c.parent_id,c.body,c.created_at,
-         COALESCE(p.display_name,'TurkSquare üyesi') author_name
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name,
+         (SELECT count(*) FROM news_comment_reactions x WHERE x.comment_id=c.id) like_count,
+         EXISTS(SELECT 1 FROM news_comment_reactions x WHERE x.comment_id=c.id AND x.actor_id=${viewerParam}) is_liked
     FROM news_comments c
     LEFT JOIN community_profile_projection p ON p.user_id=c.author_id`;
 
-type NewsCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string };
+type NewsCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string; like_count: string; is_liked: boolean };
 const newsCommentJson = (row: NewsCommentRow) => ({
   id: row.id,
   authorId: row.author_id,
@@ -1853,15 +1893,17 @@ const newsCommentJson = (row: NewsCommentRow) => ({
   parentId: row.parent_id,
   body: row.body,
   createdAt: row.created_at.toISOString(),
+  likes: Number(row.like_count),
+  isLiked: row.is_liked,
 });
 
 app.get('/v1/community/news/:id/comments', async (request, reply) => {
   try {
-    await viewer(request.headers);
+    const userId = await viewer(request.headers);
     const id = z.string().uuid().parse((request.params as { id: string }).id);
     const rows = await db.query<NewsCommentRow>(
-      `${NEWS_COMMENT_SELECT} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
-      [id],
+      `${newsCommentSelect('$2')} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+      [id, userId],
     );
     return { data: rows.rows.map(newsCommentJson) };
   } catch (error) {
@@ -1882,7 +1924,7 @@ app.post('/v1/community/news/:id/comments', { config: { rateLimit: { max: 20, ti
       'INSERT INTO news_comments(article_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
       [id, userId, input.parentId ?? null, input.body],
     );
-    const row = await db.query<NewsCommentRow>(`${NEWS_COMMENT_SELECT} WHERE c.id=$1`, [inserted.rows[0]!.id]);
+    const row = await db.query<NewsCommentRow>(`${newsCommentSelect('$2')} WHERE c.id=$1`, [inserted.rows[0]!.id, userId]);
     // Streak only. `vocalist` counts comments on the feed, and quietly earning a
     // feed badge somewhere else would make its own description untrue.
     void grantInBackground('news_comment', async (journey) => { await touchStreak(journey, userId); });
@@ -1900,6 +1942,31 @@ app.delete('/v1/community/news/comments/:id', async (request, reply) => {
     return reply.code(204).send();
   } catch {
     return reply.code(400).send({ error: { code: 'NEWS_COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
+  }
+});
+
+// The same heart, on the other comment list. A published article is readable by
+// everybody, so there is no visibility question here - only whether the comment
+// is still standing.
+app.put('/v1/community/news/comments/:id/likes', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = commentLikeBody.parse(request.body);
+    const readable = await db.query(
+      `SELECT 1 FROM news_comments c JOIN news_articles a ON a.id=c.article_id
+        WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' AND ${NEWS_VISIBLE}`,
+      [id],
+    );
+    if (!readable.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (input.enabled) await db.query('INSERT INTO news_comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
+    else await db.query('DELETE FROM news_comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
+    const tally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM news_comment_reactions WHERE comment_id=$1', [id]);
+    return { data: { likes: Number(tally.rows[0]!.like_count), isLiked: input.enabled } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NEWS_COMMENT_LIKE_FAILED', message: 'Beğenin kaydedilemedi.' } });
   }
 });
 

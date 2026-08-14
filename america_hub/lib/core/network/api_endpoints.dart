@@ -70,6 +70,10 @@ abstract final class ApiEndpoints {
       '/community/posts/$postId/comments';
   static String communityPostComment(String commentId) =>
       '/community/comments/$commentId';
+  // Beğeni PUT: gövde son durumu söylüyor, artış değil. Aynı isteğin ikincisi
+  // sayıyı ikiye katlamasin diye.
+  static String communityPostCommentLikes(String commentId) =>
+      '/community/comments/$commentId/likes';
   static const communityJourney = '/community/me/journey';
   static const communityBadges = '/community/badges';
   static String communityUserBadges(String userId) =>
@@ -86,6 +90,8 @@ abstract final class ApiEndpoints {
       '/community/news/$id/comments';
   static String communityNewsComment(String commentId) =>
       '/community/news/comments/$commentId';
+  static String communityNewsCommentLikes(String commentId) =>
+      '/community/news/comments/$commentId/likes';
   // Sponsorlu alanlar: ana sayfanın okuduğu liste, üyenin kendi talepleri ve
   // günlük toplanan gösterim/tıklama sayacı.
   static const communityPromotions = '/community/promotions';
