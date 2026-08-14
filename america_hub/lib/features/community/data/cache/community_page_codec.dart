@@ -43,6 +43,7 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                   city: (item['postLocation'] as Map<String, dynamic>)['city'] as String?,
                 ),
           isLiked: item['isLiked'] as bool? ?? false,
+          isAuthor: item['isAuthor'] as bool? ?? false,
           deletedAt: item['deletedAt'] == null ? null : DateTime.tryParse(item['deletedAt'] as String),
           purpose: CommunityPostPurpose.values.byName(item['purpose'] as String? ?? CommunityPostPurpose.standard.name),
           travelerMatch: item['travelerMatch'] == null
@@ -96,6 +97,7 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                       'city': item.postLocation!.city,
                     },
               'isLiked': item.isLiked,
+              'isAuthor': item.isAuthor,
               'deletedAt': item.deletedAt?.toIso8601String(),
               'purpose': item.purpose.name,
               'travelerMatch': item.travelerMatch == null

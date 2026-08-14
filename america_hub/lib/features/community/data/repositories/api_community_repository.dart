@@ -154,6 +154,26 @@ class ApiCommunityRepository
             if (poll.endsAt case final endsAt?)
               'closesAt': endsAt.toUtc().toIso8601String(),
           },
+        // Paylaşımın ne için açıldığı. Buraya kadar hiç gönderilmiyordu:
+        // "Bavulda Yer Var" seçip İstanbul → New York yazan bir üyenin
+        // paylaşımı sunucuya sıradan bir paylaşım olarak gidiyor, herkesin
+        // akışına da öyle düşüyordu. Rota, tarih ve paket bilgisi telefondan
+        // hiç çıkmıyordu.
+        if (draft.purpose != CommunityPostPurpose.standard)
+          'purpose': switch (draft.purpose) {
+            CommunityPostPurpose.imeceHelp => 'imece_help',
+            CommunityPostPurpose.travelerMatch => 'traveler_match',
+            _ => 'standard',
+          },
+        if (draft.travelerMatch case final trip?)
+          'travelerMatch': {
+            'from': trip.from,
+            'to': trip.to,
+            'travelAt': trip.travelAt.toUtc().toIso8601String(),
+            'packageDetails': trip.packageDetails,
+            if (trip.note case final note? when note.trim().isNotEmpty)
+              'note': note,
+          },
         'idempotencyKey': _key(),
       },
     );

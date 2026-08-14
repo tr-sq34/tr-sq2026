@@ -2,7 +2,7 @@ import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 
 class CommunityPostDto {
-  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.media = const [], this.poll});
+  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.isAuthor = false, this.purpose = CommunityPostPurpose.standard, this.travelerMatch, this.media = const [], this.poll});
   final String id;
   final String authorName;
   final String location;
@@ -11,6 +11,19 @@ class CommunityPostDto {
   final int likes;
   final int comments;
   final bool isLiked;
+
+  /// Paylaşımın sahibi bu üye mi. Sunucu karşılaştırmayı kendisi yapıyor:
+  /// başkasının kimliğini göndermeye gerek yok, cevap zaten evet ya da hayır.
+  final bool isAuthor;
+
+  /// Paylaşımın ne için açıldığı. Besteci bunu ilk günden beri soruyordu ama
+  /// sunucuya hiç gitmiyordu: "Bavulda Yer Var" olarak yayınlanan bir paylaşım
+  /// herkesin akışına sıradan bir paylaşım olarak düşüyordu.
+  final CommunityPostPurpose purpose;
+
+  /// Yolculuk ayrıntıları. Yalnızca [CommunityPostPurpose.travelerMatch]
+  /// paylaşımlarında dolu.
+  final TravelerMatchDetails? travelerMatch;
 
   /// Paylaşıma eklenen fotoğraflar, gönderildikleri sırayla.
   ///
@@ -35,9 +48,31 @@ class CommunityPostDto {
         likes: (json['likes'] as num?)?.toInt() ?? 0,
         comments: (json['comments'] as num?)?.toInt() ?? 0,
         isLiked: json['isLiked'] as bool? ?? false,
+        isAuthor: json['isAuthor'] as bool? ?? false,
+        purpose: _purposeFromJson(json['purpose']),
+        travelerMatch: _travelerFromJson(json['travelerMatch']),
         media: _mediaFromJson(json['media']),
         poll: _pollFromJson(json['poll'], message),
       );
+  }
+
+  static CommunityPostPurpose _purposeFromJson(Object? raw) => switch (raw) {
+    'imeceHelp' => CommunityPostPurpose.imeceHelp,
+    'travelerMatch' => CommunityPostPurpose.travelerMatch,
+    _ => CommunityPostPurpose.standard,
+  };
+
+  static TravelerMatchDetails? _travelerFromJson(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final travelAt = DateTime.tryParse(raw['travelAt'] as String? ?? '');
+    if (travelAt == null) return null;
+    return TravelerMatchDetails(
+      from: raw['from'] as String? ?? '',
+      to: raw['to'] as String? ?? '',
+      travelAt: travelAt.toLocal(),
+      packageDetails: raw['packageDetails'] as String? ?? '',
+      note: raw['note'] as String?,
+    );
   }
 
   static List<PostMedia> _mediaFromJson(Object? raw) => [
@@ -82,5 +117,5 @@ class CommunityPostDto {
     );
   }
 
-  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, media: media, poll: poll);
+  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll);
 }

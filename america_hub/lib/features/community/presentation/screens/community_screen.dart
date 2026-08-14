@@ -987,8 +987,12 @@ class _PostCard extends StatelessWidget {
           ),
         if (post.purpose != CommunityPostPurpose.standard)
           const SizedBox(height: 10),
-        if (post.purpose == CommunityPostPurpose.imeceHelp ||
-            post.purpose == CommunityPostPurpose.travelerMatch)
+        // Kendi ilanına istek göndermek diye bir şey yok: düğme sahibine
+        // gösterilmiyordu değil, gösteriliyordu - ve dokunulunca kendine
+        // "Eşleşme isteği gönder" diyordu.
+        if (!post.isAuthor &&
+            (post.purpose == CommunityPostPurpose.imeceHelp ||
+                post.purpose == CommunityPostPurpose.travelerMatch))
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
