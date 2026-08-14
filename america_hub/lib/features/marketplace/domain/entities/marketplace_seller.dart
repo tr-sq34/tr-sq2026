@@ -83,20 +83,28 @@ class MarketplaceOffer {
 }
 
 class MarketplaceListingDraft {
-  const MarketplaceListingDraft({required this.type, this.title = '', this.price, this.description = '', this.category = '', this.location = '', this.mediaUrls = const [], this.fields = const {}, this.hideExactLocation = true, this.commentsEnabled = true, this.autoReplyEnabled = false});
+  const MarketplaceListingDraft({required this.type, this.title = '', this.price, this.description = '', this.category = '', this.location = '', this.mediaUrls = const [], this.mediaIds = const [], this.fields = const {}, this.hideExactLocation = true, this.commentsEnabled = true, this.autoReplyEnabled = false});
   final MarketplaceListingType type;
   final String title;
   final double? price;
   final String description;
   final String category;
   final String location;
+
+  /// Önizlemede çizilen adresler. Bunlar süreli imzalı adresler: yarın açılan
+  /// bir taslakta artık çalışmayabilirler, o yüzden sunucuya giden şey bunlar
+  /// değil [mediaIds].
   final List<String> mediaUrls;
+
+  /// Yüklenip taraması biten fotoğrafların kimlikleri, seçildikleri sırayla.
+  /// İlk sıradaki kapak oluyor.
+  final List<String> mediaIds;
   final Map<String, String> fields;
   final bool hideExactLocation;
   final bool commentsEnabled;
   final bool autoReplyEnabled;
 
-  MarketplaceListingDraft copyWith({String? title, double? price, String? description, String? category, String? location, List<String>? mediaUrls, Map<String, String>? fields, bool? hideExactLocation, bool? commentsEnabled, bool? autoReplyEnabled}) => MarketplaceListingDraft(type: type, title: title ?? this.title, price: price ?? this.price, description: description ?? this.description, category: category ?? this.category, location: location ?? this.location, mediaUrls: mediaUrls ?? this.mediaUrls, fields: fields ?? this.fields, hideExactLocation: hideExactLocation ?? this.hideExactLocation, commentsEnabled: commentsEnabled ?? this.commentsEnabled, autoReplyEnabled: autoReplyEnabled ?? this.autoReplyEnabled);
+  MarketplaceListingDraft copyWith({String? title, double? price, String? description, String? category, String? location, List<String>? mediaUrls, List<String>? mediaIds, Map<String, String>? fields, bool? hideExactLocation, bool? commentsEnabled, bool? autoReplyEnabled}) => MarketplaceListingDraft(type: type, title: title ?? this.title, price: price ?? this.price, description: description ?? this.description, category: category ?? this.category, location: location ?? this.location, mediaUrls: mediaUrls ?? this.mediaUrls, mediaIds: mediaIds ?? this.mediaIds, fields: fields ?? this.fields, hideExactLocation: hideExactLocation ?? this.hideExactLocation, commentsEnabled: commentsEnabled ?? this.commentsEnabled, autoReplyEnabled: autoReplyEnabled ?? this.autoReplyEnabled);
 }
 
 class MarketplaceAnalysisSuggestion {
