@@ -4,6 +4,47 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // Ilk ekranda "Google ile devam et", "Apple ile devam et" ve "Telefonla
+  // devam et" duruyordu. Ucu de basilinca "yakinda" diyordu; hicbiri hic
+  // yazilmadi, kimlik sunucusunda ne OAuth ne telefonla giris var.
+  testWidgets('giris ekraninda calismayan giris yolu kalmadi', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          onCheckEmailStatus: (_) async => true,
+          onSignIn: (_, _) async {},
+        ),
+      ),
+    );
+
+    expect(find.text('Google ile devam et'), findsNothing);
+    expect(find.text('Apple ile devam et'), findsNothing);
+    expect(find.text('Telefonla devam et'), findsNothing);
+    // Passkey gercekten calisiyor; o da ancak uygulama saglayinca cikiyor.
+    expect(find.text('Passkey ile devam et'), findsNothing);
+    expect(find.text('veya'), findsNothing);
+  });
+
+  testWidgets('passkey saglandiginda gorunuyor', (tester) async {
+    var called = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          onCheckEmailStatus: (_) async => true,
+          onSignIn: (_, _) async {},
+          onPasskeyLogin: ({String? email}) async => called = true,
+        ),
+      ),
+    );
+
+    expect(find.text('veya'), findsOneWidget);
+    await tester.ensureVisible(find.text('Passkey ile devam et'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Passkey ile devam et'));
+    await tester.pumpAndSettle();
+    expect(called, isTrue);
+  });
+
   testWidgets('existing email reveals the password step in place', (
     tester,
   ) async {
