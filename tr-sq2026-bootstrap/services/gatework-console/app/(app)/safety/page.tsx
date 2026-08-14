@@ -1,4 +1,5 @@
-import { SafetyDesk } from '@/components/safety-desk';
+import { SafetyDesk } from '@/components/safety/safety-desk';
+import { EmptyState, PageHeader } from '@/components/ui/page';
 import { canActOnSafety, canSeeSafety, safetyPage } from '@/lib/safety';
 import { getSession } from '@/lib/session';
 
@@ -10,21 +11,23 @@ export default async function SafetyPage() {
   const roles = session.member.roles;
 
   if (!canSeeSafety(roles)) {
-    return <main><h1 className="text-3xl font-semibold">Güvenlik ve SOS</h1><p className="mt-4 max-w-xl text-zinc-400">Bu alan güvenlik yetkisi gerektirir. Mevcut rollerin: {roles.join(', ')}.</p></main>;
+    return (
+      <main>
+        <PageHeader eyebrow="Yetki gerekli" tone="warning" title="Güvenlik ve SOS" />
+        <EmptyState title="Bu alan güvenlik yetkisi gerektirir." description={`Mevcut rollerin: ${roles.join(', ')}.`} />
+      </main>
+    );
   }
 
   const { alerts, failure } = await safetyPage();
 
   return (
     <main>
-      <div className="mb-8">
-        <p className="text-sm text-emerald-400">Topluluk servisi bağlı</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Güvenlik ve SOS</h1>
-        <p className="mt-2 max-w-2xl text-zinc-400">
-          Yardım isteyen üyeler. En uzun bekleyen en üstte. Üyenin konumu <strong>mühürlüdür</strong>: bu liste konumu içermez, görmek için gerekçe yazman gerekir, erişim süreyle sınırlıdır ve çağrı kapandığında konum silinir.
-        </p>
-      </div>
-
+      <PageHeader
+        eyebrow="Topluluk servisi bağlı"
+        title="Güvenlik ve SOS"
+        description="Yardım isteyen üyeler. En uzun bekleyen en üstte. Üyenin konumu mühürlüdür: bu liste konumu içermez, görmek için gerekçe yazman gerekir, erişim süreyle sınırlıdır ve çağrı kapandığında konum silinir."
+      />
       <SafetyDesk initialAlerts={alerts} initialFailure={failure} canAct={canActOnSafety(roles)} />
     </main>
   );

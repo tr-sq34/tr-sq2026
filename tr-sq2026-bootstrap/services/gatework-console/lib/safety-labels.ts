@@ -52,11 +52,13 @@ export const SOS_STATUS_LABELS: Record<SosAlert['status'], string> = {
   cancelled: 'Üye geri aldı',
 };
 
-export const SOS_STATUS_TONE: Record<SosAlert['status'], string> = {
-  active: 'bg-red-500/15 text-red-300',
-  acknowledged: 'bg-amber-500/15 text-amber-200',
-  resolved: 'bg-emerald-500/10 text-emerald-300',
-  cancelled: 'bg-zinc-800 text-zinc-400',
+/// Badge tones rather than colour classes: the palette lives in one place, so a
+/// status cannot end up a different shade of red from every other danger badge.
+export const SOS_STATUS_TONE: Record<SosAlert['status'], 'danger' | 'warning' | 'success' | 'neutral'> = {
+  active: 'danger',
+  acknowledged: 'warning',
+  resolved: 'success',
+  cancelled: 'neutral',
 };
 
 export const isOpen = (alert: SosAlert) => alert.status === 'active' || alert.status === 'acknowledged';

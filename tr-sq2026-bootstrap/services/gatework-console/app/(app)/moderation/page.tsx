@@ -1,7 +1,9 @@
 import { AlarmClock, Gauge, ShieldAlert, Timer } from 'lucide-react';
-import { ContentModerationQueue } from '@/components/content-moderation-queue';
-import { ModerationQueue } from '@/components/moderation-queue';
-import { QueueTabs } from '@/components/queue-tabs';
+import { ContentReportQueue } from '@/components/moderation/content-report-queue';
+import { MessageReportQueue } from '@/components/moderation/message-report-queue';
+import { EmptyState, PageHeader } from '@/components/ui/page';
+import { StatCard } from '@/components/ui/stat-card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { canActOnReports, canReviewReports, listReports, moderationOverview, type ModerationOverview, type ReportSummary } from '@/lib/moderation';
 import { contentOverview, listContentReports, type ContentOverview, type ContentReportSummary } from '@/lib/content-moderation';
 import { getSession } from '@/lib/session';
@@ -25,7 +27,15 @@ export default async function ModerationPage() {
   const roles = session.member.roles;
 
   if (!canReviewReports(roles)) {
-    return <main><h1 className="text-3xl font-semibold">Moderasyon Merkezi</h1><p className="mt-4 max-w-xl text-zinc-400">Bu alan yalnızca moderasyon yetkisi olan rollere açıktır. Mevcut rollerin: {roles.join(', ')}.</p></main>;
+    return (
+      <main>
+        <PageHeader eyebrow="Yetki gerekli" tone="warning" title="Moderasyon Merkezi" />
+        <EmptyState
+          title="Bu alan moderasyon yetkisi gerektirir."
+          description={`Mevcut rollerin: ${roles.join(', ')}.`}
+        />
+      </main>
+    );
   }
 
   // Settled, not all: one service being down must not blank the other's queue.
@@ -57,48 +67,85 @@ export default async function ModerationPage() {
   };
   const slaHours = messagingOverview?.slaHours ?? feedOverview?.slaHours ?? { urgent: 2, standard: 24 };
   const median = worstMedian(messagingOverview?.medianResolutionMinutes ?? null, feedOverview?.medianResolutionMinutes ?? null);
-
-  const cards = ([
-    ['Bekleyen şikâyet', String(totals.open), `${totals.urgent} acil · ${messagingOverview?.openReports ?? 0} mesaj, ${feedOverview?.openReports ?? 0} içerik`, ShieldAlert],
-    ['Süresi geçen', String(totals.overdue), `Hedef: acil ${slaHours.urgent} sa · normal ${slaHours.standard} sa`, AlarmClock],
-    ['Ortanca yanıt (30 gün)', formatMinutes(median), `Son 7 günde ${totals.resolved7} sonuçlandı`, Timer],
-    ['Etkin kısıtlama', String(totals.restrictions), `Son 7 günde ${totals.filed7} yeni şikâyet`, Gauge],
-  ] as const);
+  // Both summaries missing means the four cards are adding nothing to nothing.
+  // Saying "0 bekleyen" then would be the most expensive wrong answer a queue
+  // can give, so the cards grey out instead.
+  const countsUnavailable = !messagingOverview && !feedOverview;
 
   return (
     <main>
-      <div className="mb-8">
-        <p className="text-sm text-emerald-400">Mesajlaşma ve içerik moderasyonu</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Moderasyon Merkezi</h1>
-        {/* The privacy rule is stated where the work happens, not only in a
-            policy document: an operator seeing message text needs to know that
-            it is a snapshot the reporter submitted, not a window into a live
-            conversation. */}
-        <p className="mt-2 max-w-2xl text-zinc-400">
-          Şikâyet edilen mesajlar ve paylaşımlar, şikâyet anında alınan kanıt kopyasından okunur. Canlı özel konuşmalar hiçbir rol tarafından görüntülenemez. Her karar — reddetme dahil — denetim kaydına yazılır.
-        </p>
-      </div>
-
-      {messagingFailure && <p className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">Mesajlaşma servisi yanıt vermedi: {reasonOf(messagingFailure)}. Aşağıdaki mesaj kuyruğu eksik olabilir.</p>}
-      {contentFailure && <p className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">Topluluk servisi yanıt vermedi: {reasonOf(contentFailure)}. Aşağıdaki içerik kuyruğu eksik olabilir.</p>}
-
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map(([title, value, hint, Icon]) => (
-          <article key={title} className={`rounded-xl border p-5 ${title === 'Süresi geçen' && totals.overdue > 0 ? 'border-rose-500/40 bg-rose-500/10' : 'border-white/10 bg-zinc-900/50'}`}>
-            <Icon size={20} className="text-emerald-400" />
-            <p className="mt-4 text-sm text-zinc-400">{title}</p>
-            <p className="mt-1 text-2xl font-semibold">{value}</p>
-            <p className="mt-2 text-xs text-zinc-500">{hint}</p>
-          </article>
-        ))}
-      </div>
-
-      <QueueTabs
-        tabs={[
-          { key: 'messaging', label: 'Mesaj şikâyetleri', badge: messagingOverview?.openReports ?? messagingReports.length, panel: <ModerationQueue initialReports={messagingReports} canAct={canActOnReports(roles)} /> },
-          { key: 'content', label: 'Paylaşım ve yorum şikâyetleri', badge: feedOverview?.openReports ?? contentReports.length, panel: <ContentModerationQueue initialReports={contentReports} canAct={canActOnReports(roles)} /> },
-        ]}
+      <PageHeader
+        eyebrow="Mesajlaşma ve içerik moderasyonu"
+        title="Moderasyon Merkezi"
+        /* The privacy rule is stated where the work happens, not only in a
+           policy document: an operator seeing message text needs to know that
+           it is a snapshot the reporter submitted, not a window into a live
+           conversation. */
+        description="Şikâyet edilen mesajlar ve paylaşımlar, şikâyet anında alınan kanıt kopyasından okunur. Canlı özel konuşmalar hiçbir rol tarafından görüntülenemez. Her karar — reddetme dahil — denetim kaydına yazılır."
       />
+
+      {messagingFailure && (
+        <p className="mb-4 rounded-card border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
+          Mesajlaşma servisi yanıt vermedi: {reasonOf(messagingFailure)}. Aşağıdaki mesaj kuyruğu eksik olabilir.
+        </p>
+      )}
+      {contentFailure && (
+        <p className="mb-4 rounded-card border border-warning/30 bg-warning-soft p-4 text-sm text-warning">
+          Topluluk servisi yanıt vermedi: {reasonOf(contentFailure)}. Aşağıdaki içerik kuyruğu eksik olabilir.
+        </p>
+      )}
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Bekleyen şikâyet"
+          value={countsUnavailable ? 'Yanıt yok' : String(totals.open)}
+          detail={`${messagingOverview?.openReports ?? 0} mesaj · ${feedOverview?.openReports ?? 0} içerik`}
+          badge={totals.urgent > 0 ? `${totals.urgent} acil` : undefined}
+          icon={ShieldAlert}
+          tone={totals.urgent > 0 ? 'danger' : 'brand'}
+          unavailable={countsUnavailable}
+        />
+        <StatCard
+          label="Süresi geçen"
+          value={countsUnavailable ? 'Yanıt yok' : String(totals.overdue)}
+          detail={`Hedef: acil ${slaHours.urgent} sa · normal ${slaHours.standard} sa`}
+          icon={AlarmClock}
+          tone={totals.overdue > 0 ? 'danger' : 'neutral'}
+          unavailable={countsUnavailable}
+        />
+        <StatCard
+          label="Ortanca yanıt (30 gün)"
+          value={countsUnavailable ? 'Yanıt yok' : formatMinutes(median)}
+          detail={`Son 7 günde ${totals.resolved7} sonuçlandı`}
+          icon={Timer}
+          tone="neutral"
+          unavailable={countsUnavailable || median === null}
+        />
+        <StatCard
+          label="Etkin kısıtlama"
+          value={countsUnavailable ? 'Yanıt yok' : String(totals.restrictions)}
+          detail={`Son 7 günde ${totals.filed7} yeni şikâyet`}
+          icon={Gauge}
+          tone="neutral"
+          unavailable={countsUnavailable}
+        />
+      </div>
+
+      <Tabs defaultValue="messaging">
+        <TabsList className="mb-4">
+          <TabsTrigger value="messaging" count={messagingOverview?.openReports ?? messagingReports.length}>Mesaj şikâyetleri</TabsTrigger>
+          <TabsTrigger value="content" count={feedOverview?.openReports ?? contentReports.length}>Paylaşım ve yorum şikâyetleri</TabsTrigger>
+        </TabsList>
+        {/* forceMount, because switching tabs must not throw away the selected
+            report or a half-typed reason. Radix unmounts inactive panels by
+            default; here they stay mounted and are hidden with CSS. */}
+        <TabsContent value="messaging" forceMount className="data-[state=inactive]:hidden">
+          <MessageReportQueue initialReports={messagingReports} canAct={canActOnReports(roles)} />
+        </TabsContent>
+        <TabsContent value="content" forceMount className="data-[state=inactive]:hidden">
+          <ContentReportQueue initialReports={contentReports} canAct={canActOnReports(roles)} />
+        </TabsContent>
+      </Tabs>
     </main>
   );
 }
