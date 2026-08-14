@@ -12,9 +12,8 @@ class CachedMarketplaceRepository implements MarketplaceRepository {
   final CachedCursorDataSource<MarketplaceListing> _cached;
   @override Future<CursorPage<MarketplaceListing>> fetchPage({String? cursor, int limit = 20}) => _cached.fetchPage(cursor: cursor, limit: limit);
   @override Future<List<MarketplaceListing>> getListings() => _remote.getListings();
-  @override Future<MarketplaceSellerOverview> getSellerOverview() => _remote.getSellerOverview();
+  @override Future<MarketplaceSellerDashboard> getSellerDashboard() => _remote.getSellerDashboard();
   @override Future<MarketplaceSellerProfile> getSellerProfile(String sellerId) => _remote.getSellerProfile(sellerId);
-  @override Future<MarketplaceSellerAnalytics> getSellerAnalytics() => _remote.getSellerAnalytics();
   @override Future<List<MarketplaceListing>> getSellerListings(String sellerId) => _remote.getSellerListings(sellerId);
   @override Future<MarketplaceListing> publishListing(MarketplaceListingDraft draft) => _remote.publishListing(draft);
   @override Future<MarketplaceListing> setSaved(String listingId, bool value) => _remote.setSaved(listingId, value);

@@ -23,7 +23,24 @@ class MockMarketplaceRepository implements MarketplaceRepository {
   Future<List<MarketplaceListing>> getListings() async => _listings;
 
   @override
-  Future<MarketplaceSellerOverview> getSellerOverview() async => MarketplaceSellerOverview(activeListings: _listings.where((item) => item.status == MarketplaceListingStatus.active).length, views: 1284, saves: 96, pendingOffers: _offers.where((item) => item.status == MarketplaceOfferStatus.pending).length, pendingMessages: 3, totalSales: 742);
+  Future<MarketplaceSellerDashboard> getSellerDashboard() async {
+    final active = _listings.where((item) => item.status == MarketplaceListingStatus.active).toList();
+    final best = [..._listings]..sort((a, b) => b.likeCount.compareTo(a.likeCount));
+    return MarketplaceSellerDashboard(
+      sellerId: 'user-demo',
+      activeListings: active.length,
+      reservedListings: _listings.where((item) => item.status == MarketplaceListingStatus.reserved).length,
+      soldListings: _listings.where((item) => item.status == MarketplaceListingStatus.sold).length,
+      draftListings: 0,
+      saves: _listings.where((item) => item.isSaved).length,
+      likes: _listings.fold(0, (sum, item) => sum + item.likeCount),
+      shares: _listings.fold(0, (sum, item) => sum + item.shareCount),
+      saves7d: _listings.where((item) => item.isSaved).length,
+      likes7d: _listings.fold(0, (sum, item) => sum + item.likeCount),
+      shares7d: _listings.fold(0, (sum, item) => sum + item.shareCount),
+      topListing: best.isEmpty ? null : MarketplaceTopListing(id: best.first.id, title: best.first.title, saves: best.first.likeCount),
+    );
+  }
 
   @override
   Future<MarketplaceSellerProfile> getSellerProfile(String sellerId) async => MarketplaceSellerProfile(
@@ -45,25 +62,6 @@ class MockMarketplaceRepository implements MarketplaceRepository {
           MarketplaceSellerBadge(id: 'responsive', label: 'Hızlı yanıtlayan', description: 'Genellikle 30 dakika içinde yanıt verir.', icon: 'bolt', level: MarketplaceSellerBadgeLevel.trusted, earnedAt: DateTime(2025, 8, 1)),
           MarketplaceSellerBadge(id: 'pickup', label: 'Güvenilir teslim alma', description: 'Başarılı yerel teslim geçmişi.', icon: 'handshake', level: MarketplaceSellerBadgeLevel.premium, earnedAt: DateTime(2026, 1, 1)),
           MarketplaceSellerBadge(id: 'community', label: 'Topluluk emektarı', description: 'Toplulukta 3. yılı.', icon: 'groups', level: MarketplaceSellerBadgeLevel.foundation, earnedAt: DateTime(2026, 4, 1)),
-        ],
-      );
-
-  @override
-  Future<MarketplaceSellerAnalytics> getSellerAnalytics() async => MarketplaceSellerAnalytics(
-        active: _listings.where((item) => item.status == MarketplaceListingStatus.active).length,
-        reserved: _listings.where((item) => item.status == MarketplaceListingStatus.reserved).length,
-        sold: 37,
-        draft: 1,
-        views7d: 284,
-        views30d: 1284,
-        saves7d: 18,
-        messages7d: 12,
-        offers7d: _offers.where((item) => item.status == MarketplaceOfferStatus.pending).length,
-        shareCount: _listings.fold(0, (sum, item) => sum + item.shareCount),
-        topListingTitle: _listings.isEmpty ? 'Henüz ilan yok' : _listings.first.title,
-        insights: const [
-          MarketplaceListingInsight(listingId: 'listing-2', title: 'Vintage kilim', message: 'Kaydedilme yüksek; fiyat veya teslimat bilgisini güçlendirin.', actionLabel: 'İlanı düzenle', priority: 1),
-          MarketplaceListingInsight(listingId: 'listing-3', title: 'Türk yemek kitapları', message: '7 gündür yeni görüntülenme düşük.', actionLabel: 'Öne çıkar', priority: 2),
         ],
       );
 

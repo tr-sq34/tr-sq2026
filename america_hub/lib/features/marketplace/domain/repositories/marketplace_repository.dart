@@ -4,9 +4,8 @@ import '../entities/marketplace_seller.dart';
 
 abstract interface class MarketplaceRepository implements CursorDataSource<MarketplaceListing> {
   Future<List<MarketplaceListing>> getListings();
-  Future<MarketplaceSellerOverview> getSellerOverview();
+  Future<MarketplaceSellerDashboard> getSellerDashboard();
   Future<MarketplaceSellerProfile> getSellerProfile(String sellerId);
-  Future<MarketplaceSellerAnalytics> getSellerAnalytics();
   Future<List<MarketplaceListing>> getSellerListings(String sellerId);
   Future<MarketplaceListing> publishListing(MarketplaceListingDraft draft);
   Future<MarketplaceListing> setSaved(String listingId, bool value);

@@ -27,8 +27,7 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
   /// kalıyor ve üstteki şeritten tek dokunuşla kapanıyor. Kaydettiğini
   /// bulamayan bir üye için kaydetmenin bir anlamı yok.
   bool _savedOnly = false;
-  MarketplaceSellerOverview? overview;
-  MarketplaceSellerAnalytics? analytics;
+  MarketplaceSellerDashboard? dashboard;
   MarketplaceListingDraft? draft;
 
   MarketplaceFeed get feed => _feed;
@@ -79,8 +78,10 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
     await _applyReaction(listingId, item.copyWith(shareCount: item.shareCount + 1), () => _repository.registerShare(listingId));
   }
 
-  Future<void> loadSellerOverview() async { overview = await _repository.getSellerOverview(); notifyListeners(); }
-  Future<void> loadSellerAnalytics() async { analytics = await _repository.getSellerAnalytics(); notifyListeners(); }
+  /// Sayilar okunamazsa panel eski sayilarla kaliyor. Yenile'ye basip aginin
+  /// gitmesi, dun dogru olan sayilarin yerine sifir yazilmasi icin bir sebep
+  /// degil.
+  Future<void> loadSellerDashboard() async { try { dashboard = await _repository.getSellerDashboard(); } catch (_) { return; } notifyListeners(); }
   Future<MarketplaceSellerProfile> sellerProfile(String sellerId) => _repository.getSellerProfile(sellerId);
   Future<List<MarketplaceListing>> sellerListings(String sellerId) => _repository.getSellerListings(sellerId);
   Future<void> beginDraft(MarketplaceListingType type) async { draft = MarketplaceListingDraft(type: type); await _restoreDraft(); notifyListeners(); }
@@ -134,7 +135,7 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
     ));
   }
 
-  Future<MarketplaceListing?> publishDraft() async { final value = draft; if (value == null || validateDraft() != null) return null; final listing = await _repository.publishListing(value); replaceItems([listing, ...items]); draft = null; await _draftStore?.remove(_draftKey); await loadSellerOverview(); return listing; }
+  Future<MarketplaceListing?> publishDraft() async { final value = draft; if (value == null || validateDraft() != null) return null; final listing = await _repository.publishListing(value); replaceItems([listing, ...items]); draft = null; await _draftStore?.remove(_draftKey); await loadSellerDashboard(); return listing; }
   Future<MarketplaceOffer> createOffer({required String listingId, required double amount}) => _repository.createOffer(listingId: listingId, amount: amount);
   Future<MarketplaceOffer> updateOfferStatus({required String offerId, required MarketplaceOfferStatus status, double? counterAmount}) => _repository.updateOfferStatus(offerId: offerId, status: status, counterAmount: counterAmount);
   Future<void> _persistDraft() async { final value = draft; if (value == null || _draftStore == null) return; await _draftStore.write(_draftKey, jsonEncode({'type': value.type.name, 'title': value.title, 'price': value.price, 'description': value.description, 'category': value.category, 'location': value.location, 'mediaUrls': value.mediaUrls, 'mediaIds': value.mediaIds, 'fields': value.fields, 'hideExactLocation': value.hideExactLocation, 'commentsEnabled': value.commentsEnabled, 'autoReplyEnabled': value.autoReplyEnabled})); }

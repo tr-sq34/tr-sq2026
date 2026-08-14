@@ -30,8 +30,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
   void initState() {
     super.initState();
     widget.controller.load();
-    widget.controller.loadSellerOverview();
-    widget.controller.loadSellerAnalytics();
+    widget.controller.loadSellerDashboard();
     widget.memberCapabilitiesController.load();
   }
 
@@ -468,8 +467,7 @@ class SellerOverviewScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final overview = controller.overview;
-    final analytics = controller.analytics;
+    final dashboard = controller.dashboard;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
       children: [
@@ -478,9 +476,11 @@ class SellerOverviewScreen extends StatelessWidget {
         InkWell(
           onTap: () => Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute(
+              // Kendi sayfasi: kimlik panelin kendisinden geliyor, sabit bir
+              // demo kimliginden degil.
               builder: (_) => MarketplaceSellerProfileScreen(
                 controller: controller,
-                sellerId: 'user-demo',
+                sellerId: dashboard?.sellerId ?? '',
               ),
             ),
           ),
@@ -528,17 +528,27 @@ class SellerOverviewScreen extends StatelessWidget {
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
         ),
         const SizedBox(height: 18),
+        // Yalnızca Çarşı'nın gerçekten saydığı şeyler. "Görüntülenme" ve
+        // "Teklif" kutuları kalktı: hiçbiri bu sistemde tutulmuyordu, ikisi de
+        // her üyeye sabit sıfır gösteriyordu.
         Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
             _Metric(
               label: 'Aktif ilan',
-              value: '${overview?.activeListings ?? 0}',
+              value: '${dashboard?.activeListings ?? 0}',
             ),
-            _Metric(label: 'Görüntülenme', value: '${overview?.views ?? 0}'),
-            _Metric(label: 'Kaydedilme', value: '${overview?.saves ?? 0}'),
-            _Metric(label: 'Teklif', value: '${overview?.pendingOffers ?? 0}'),
+            _Metric(label: 'Kaydedilme', value: '${dashboard?.saves ?? 0}'),
+            _Metric(label: 'Beğeni', value: '${dashboard?.likes ?? 0}'),
+            _Metric(label: 'Paylaşım', value: '${dashboard?.shares ?? 0}'),
+            if ((dashboard?.soldListings ?? 0) > 0)
+              _Metric(label: 'Satıldı', value: '${dashboard!.soldListings}'),
+            if ((dashboard?.reservedListings ?? 0) > 0)
+              _Metric(
+                label: 'Rezerve',
+                value: '${dashboard!.reservedListings}',
+              ),
           ],
         ),
         const SizedBox(height: 24),
@@ -550,7 +560,7 @@ class SellerOverviewScreen extends StatelessWidget {
             ),
             const Spacer(),
             TextButton(
-              onPressed: controller.loadSellerAnalytics,
+              onPressed: controller.loadSellerDashboard,
               child: const Text('Yenile'),
             ),
           ],
@@ -561,41 +571,46 @@ class SellerOverviewScreen extends StatelessWidget {
             color: const Color(0xFFF5F3FF),
             borderRadius: BorderRadius.circular(18),
           ),
-          child: analytics == null
+          child: dashboard == null
               ? const Center(child: CircularProgressIndicator())
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Son 7 gün · ${analytics.views7d} görüntülenme',
+                      dashboard.hasWeeklyActivity
+                          ? 'Son 7 gün'
+                          : 'Son 7 günde yeni bir hareket yok',
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 8,
-                      children: [
-                        Text('${analytics.saves7d} kaydetme'),
-                        Text('${analytics.messages7d} mesaj'),
-                        Text('${analytics.offers7d} teklif'),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'En iyi ilan: ${analytics.topListingTitle}',
-                      style: const TextStyle(color: AppColors.textSecondary),
-                    ),
+                    if (dashboard.hasWeeklyActivity) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 8,
+                        children: [
+                          if (dashboard.saves7d > 0)
+                            Text('${dashboard.saves7d} kaydetme'),
+                          if (dashboard.likes7d > 0)
+                            Text('${dashboard.likes7d} beğeni'),
+                          if (dashboard.shares7d > 0)
+                            Text('${dashboard.shares7d} paylaşım'),
+                        ],
+                      ),
+                    ],
+                    // Kaydeden kimse yokken "en iyi ilan" diye bir şey yok.
+                    if (dashboard.topListing case final top?
+                        when top.saves > 0) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'En çok kaydedilen: ${top.title} (${top.saves})',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
         ),
-        const SizedBox(height: 24),
-        const Text(
-          'İlgi bekleyenler',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-        ),
-        if (analytics != null)
-          for (final insight in analytics.insights)
-            _InsightCard(insight: insight),
       ],
     );
   }
@@ -640,46 +655,6 @@ class _AuctionEligibilityCard extends StatelessWidget {
         ),
       );
     },
-  );
-}
-
-class _InsightCard extends StatelessWidget {
-  const _InsightCard({required this.insight});
-  final MarketplaceListingInsight insight;
-  @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(top: 10),
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      boxShadow: const [BoxShadow(color: Color(0x120E0B18), blurRadius: 10)],
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.tips_and_updates_outlined, color: AppColors.primary),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                insight.title,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              Text(
-                insight.message,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-        TextButton(onPressed: () {}, child: Text(insight.actionLabel)),
-      ],
-    ),
   );
 }
 
