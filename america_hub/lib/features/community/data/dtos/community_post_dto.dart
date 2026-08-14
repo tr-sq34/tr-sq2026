@@ -2,7 +2,7 @@ import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 
 class CommunityPostDto {
-  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.isAuthor = false, this.purpose = CommunityPostPurpose.standard, this.travelerMatch, this.media = const [], this.poll});
+  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.authorId = '', this.isAuthor = false, this.purpose = CommunityPostPurpose.standard, this.travelerMatch, this.media = const [], this.poll});
   final String id;
   final String authorName;
   final String location;
@@ -12,8 +12,14 @@ class CommunityPostDto {
   final int comments;
   final bool isLiked;
 
-  /// Paylaşımın sahibi bu üye mi. Sunucu karşılaştırmayı kendisi yapıyor:
-  /// başkasının kimliğini göndermeye gerek yok, cevap zaten evet ya da hayır.
+  /// Paylaşımı yazanın kimliği. Buraya kadar hiç gelmiyordu; entity'deki
+  /// `ownerId` sabit 'local-user' varsayılanında kalıyor, dolayısıyla gerçek
+  /// bir hesapla girildiğinde hiçbir paylaşım üyenin kendi paylaşımı sayılmıyor
+  /// - ne silme düğmesi çıkıyor, ne de sahibi altındaki yorumları kaldırabiliyor.
+  final String authorId;
+
+  /// Paylaşımın sahibi bu üye mi. Sunucu karşılaştırmayı kendisi yapıyor,
+  /// oturum bilgisine bakmadan doğrudan cevap veriyor.
   final bool isAuthor;
 
   /// Paylaşımın ne için açıldığı. Besteci bunu ilk günden beri soruyordu ama
@@ -48,6 +54,7 @@ class CommunityPostDto {
         likes: (json['likes'] as num?)?.toInt() ?? 0,
         comments: (json['comments'] as num?)?.toInt() ?? 0,
         isLiked: json['isLiked'] as bool? ?? false,
+        authorId: json['authorId'] as String? ?? '',
         isAuthor: json['isAuthor'] as bool? ?? false,
         purpose: _purposeFromJson(json['purpose']),
         travelerMatch: _travelerFromJson(json['travelerMatch']),
@@ -117,5 +124,5 @@ class CommunityPostDto {
     );
   }
 
-  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll);
+  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, ownerId: authorId.isEmpty ? 'local-user' : authorId, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll);
 }
