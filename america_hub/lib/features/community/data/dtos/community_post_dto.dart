@@ -2,7 +2,7 @@ import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 
 class CommunityPostDto {
-  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.poll});
+  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.media = const [], this.poll});
   final String id;
   final String authorName;
   final String location;
@@ -11,6 +11,12 @@ class CommunityPostDto {
   final int likes;
   final int comments;
   final bool isLiked;
+
+  /// Paylaşıma eklenen fotoğraflar, gönderildikleri sırayla.
+  ///
+  /// Adresler her yanıtta yeniden imzalanıyor; kaydedilmiş bir URL değil,
+  /// süreli bir izin. O yüzden burada saklanan tek şey o anki adres.
+  final List<PostMedia> media;
 
   /// Anketi olan paylaşımlarda dolu. Anketin ayrı bir soru alanı yok: soru
   /// paylaşımın kendi metni, o yüzden [message] anketin de sorusu.
@@ -29,9 +35,24 @@ class CommunityPostDto {
         likes: (json['likes'] as num?)?.toInt() ?? 0,
         comments: (json['comments'] as num?)?.toInt() ?? 0,
         isLiked: json['isLiked'] as bool? ?? false,
+        media: _mediaFromJson(json['media']),
         poll: _pollFromJson(json['poll'], message),
       );
   }
+
+  static List<PostMedia> _mediaFromJson(Object? raw) => [
+    if (raw is List<dynamic>)
+      for (final item in raw.whereType<Map<String, dynamic>>())
+        if (item['url'] case final String url when url.isNotEmpty)
+          PostMedia(
+            id: item['id'] as String? ?? '',
+            type: item['type'] == 'video'
+                ? PostMediaType.video
+                : PostMediaType.image,
+            url: url,
+            thumbnailUrl: item['thumbnailUrl'] as String?,
+          ),
+  ];
 
   static CommunityPoll? _pollFromJson(Object? raw, String question) {
     if (raw is! Map<String, dynamic>) return null;
@@ -61,5 +82,5 @@ class CommunityPostDto {
     );
   }
 
-  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, poll: poll);
+  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, media: media, poll: poll);
 }

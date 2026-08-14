@@ -23,7 +23,7 @@ const app = Fastify({ logger: { redact: ['req.headers.authorization'] } });
 const feedQuery = z.object({ mode: z.enum(['forYou', 'nearby', 'following']).default('forYou'), cursor: z.string().max(128).optional(), limit: z.coerce.number().int().min(1).max(50).default(20) });
 const interactionBody = z.object({ enabled: z.boolean(), idempotencyKey: z.string().uuid() });
 const shareBody = z.object({ idempotencyKey: z.string().uuid() });
-const postBody = z.object({ body:z.string().trim().min(1).max(2200), visibility:z.enum(['public','friends_only']).default('public'), locationLabel:z.string().trim().max(120).optional(), locationRegionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(), marketplaceListingId:z.string().uuid().optional(), poll:z.object({ question:z.string().trim().min(1).max(300), selectionMode:z.enum(['single','multiple']), options:z.array(z.string().trim().min(1).max(160)).min(2).max(4), closesAt:z.string().datetime().optional() }).optional(), idempotencyKey:z.string().uuid() });
+const postBody = z.object({ body:z.string().trim().min(1).max(2200), visibility:z.enum(['public','friends_only']).default('public'), locationLabel:z.string().trim().max(120).optional(), locationRegionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(), marketplaceListingId:z.string().uuid().optional(), mediaIds:z.array(z.string().uuid()).max(10).optional(), poll:z.object({ question:z.string().trim().min(1).max(300), selectionMode:z.enum(['single','multiple']), options:z.array(z.string().trim().min(1).max(160)).min(2).max(4), closesAt:z.string().datetime().optional() }).optional(), idempotencyKey:z.string().uuid() });
 const storyBody=z.object({mediaId:z.string().uuid(),visibility:z.enum(['network','public']),ttlHours:z.union([z.literal(6),z.literal(12),z.literal(24)]),excludedUserIds:z.array(z.string().uuid()).max(200).default([])});
 const storyQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(30)});
 const storyAudienceContactsQuery=z.object({limit:z.coerce.number().int().min(1).max(200).default(100)});
@@ -349,6 +349,53 @@ app.get('/v1/community/me/capabilities', async (request, reply) => {
   }
 });
 
+/**
+ * What the composer sends and the feed never sent back.
+ *
+ * A post could carry photos and a poll since 001, and both were being written:
+ * `post_media_refs` had no INSERT anywhere in this file, and `post_polls` was
+ * inserted on create and read by nothing. So a member attached two photos and a
+ * four-option poll, published, and got a paragraph of text - the photos landed
+ * in the media service and were never referenced, the poll existed but had no
+ * options on screen to tap, which also made the vote route unreachable.
+ *
+ * Media travels as an id resolved to a signed URL on the way out, never as a
+ * stored URL, and only `ready` assets are joined: an image still being scanned
+ * is not part of the post yet.
+ */
+const FEED_MEDIA = `(SELECT json_agg(json_build_object('id',m.id,'kind',m.kind,'safeUrl',m.safe_url,'thumbnailUrl',m.thumbnail_url) ORDER BY r.ordinal) FROM post_media_refs r JOIN media_assets m ON m.id=r.media_id WHERE r.post_id=p.id AND m.status='ready') media`;
+
+const feedPoll = (viewerParam: string) => `(SELECT json_build_object(
+  'id',pp.post_id,'selectionMode',pp.selection_mode,'closesAt',pp.closes_at,
+  'options',(SELECT json_agg(json_build_object(
+      'id',o.id,'label',o.label,
+      'votes',(SELECT count(*) FROM post_poll_votes v WHERE v.option_id=o.id),
+      'selected',EXISTS(SELECT 1 FROM post_poll_votes v WHERE v.option_id=o.id AND v.voter_id=${viewerParam})
+    ) ORDER BY o.ordinal) FROM post_poll_options o WHERE o.post_id=pp.post_id)
+ ) FROM post_polls pp WHERE pp.post_id=p.id) poll`;
+
+type FeedMediaRow = { id: string; kind: 'image' | 'video'; safeUrl: string | null; thumbnailUrl: string | null };
+type FeedPollRow = { id: string; selectionMode: string; closesAt: string | null; options: Array<{ id: string; label: string; votes: string | number; selected: boolean }> | null };
+type FeedRow = { id: string; created_at: Date; body: string; location_label: string | null; author_name: string; likes: string; comments: string; is_liked: boolean; media: FeedMediaRow[] | null; poll: FeedPollRow | null };
+
+const feedMediaJson = async (media: FeedMediaRow[] | null) => Promise.all(
+  (media ?? []).filter((item) => item.safeUrl).map(async (item) => ({
+    id: item.id,
+    type: item.kind,
+    url: await mediaObjectUrl(item.safeUrl!),
+    thumbnailUrl: item.thumbnailUrl ? await mediaObjectUrl(item.thumbnailUrl) : null,
+  })),
+);
+
+const feedPollJson = (poll: FeedPollRow | null) => poll && poll.options?.length
+  ? {
+      id: poll.id,
+      selectionMode: poll.selectionMode,
+      closesAt: poll.closesAt,
+      options: poll.options.map((option) => ({ id: option.id, label: option.label, votes: Number(option.votes), selected: option.selected })),
+    }
+  : null;
+
 app.get('/v1/community/feed', async (request, reply) => {
   try {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
@@ -365,9 +412,9 @@ app.get('/v1/community/feed', async (request, reply) => {
     if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const result = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; author_name: string; likes: string; comments: string; is_liked: boolean }>(`SELECT p.id,p.created_at,p.body,p.location_label,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
+    const result = await db.query<FeedRow>(`SELECT p.id,p.created_at,p.body,p.location_label,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked,${FEED_MEDIA},${feedPoll('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
     const page = result.rows.slice(0, input.limit); const next = result.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null;
-    return { data: page.map((p) => ({ id:p.id, authorName:p.author_name, location:p.location_label ?? '', createdAtLabel:p.created_at.toISOString(), message:p.body, likes:Number(p.likes), comments:Number(p.comments), isLiked:p.is_liked })), meta: { nextCursor: next } };
+    return { data: await Promise.all(page.map(async (p) => ({ id:p.id, authorName:p.author_name, location:p.location_label ?? '', createdAtLabel:p.created_at.toISOString(), message:p.body, likes:Number(p.likes), comments:Number(p.comments), isLiked:p.is_liked, media: await feedMediaJson(p.media), poll: feedPollJson(p.poll) }))), meta: { nextCursor: next } };
   } catch (error) { return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'FEED_UNAVAILABLE', message: 'Akış yüklenemedi.' } }); }
 });
 
@@ -401,9 +448,27 @@ app.post('/v1/community/posts', async (request, reply) => {
     // the next post, not just record an opinion about the last one.
     const restricted = await activeRestriction(userId); if (restricted) return reply.code(403).send(restrictionError(restricted));
     const input = postBody.parse(request.body); const client = await db.connect(); try { await client.query('BEGIN');
-    if (input.marketplaceListingId) { const listing = await client.query('SELECT 1 FROM marketplace_listing_projection WHERE listing_id=$1 AND owner_id=$2 AND status=\'active\'', [input.marketplaceListingId,userId]); if (!listing.rows[0]) return reply.code(403).send({error:{code:'LISTING_NOT_AVAILABLE',message:'Aktif ilan bulunamadı.'}}); }
+    if (input.marketplaceListingId) { const listing = await client.query('SELECT 1 FROM marketplace_listing_projection WHERE listing_id=$1 AND owner_id=$2 AND status=\'active\'', [input.marketplaceListingId,userId]); if (!listing.rows[0]) { await client.query('ROLLBACK'); return reply.code(403).send({error:{code:'LISTING_NOT_AVAILABLE',message:'Aktif ilan bulunamadı.'}}); } }
     const kind = input.poll ? 'poll' : input.marketplaceListingId ? 'marketplace_listing' : 'standard'; const result = await client.query<{id:string}>('INSERT INTO community_posts(author_id,kind,visibility,body,location_label,region_code,marketplace_listing_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',[userId,kind,input.visibility,input.body,input.locationLabel??null,input.locationRegionCode?.toUpperCase()??null,input.marketplaceListingId??null]); const id=result.rows[0]!.id;
     if(input.poll){const poll=await client.query<{post_id:string}>('INSERT INTO post_polls(post_id,selection_mode,closes_at) VALUES($1,$2,$3) RETURNING post_id',[id,input.poll.selectionMode,input.poll.closesAt??null]); for(const [ordinal,label] of input.poll.options.entries()) await client.query('INSERT INTO post_poll_options(post_id,ordinal,label) VALUES($1,$2,$3)',[poll.rows[0]!.post_id,ordinal,label]);}
+    // The photos. `post_media_refs` has existed since 001 and nothing had ever
+    // written a row into it: the app uploaded the files, the media service
+    // scanned and stored them, and then the post was created without a single
+    // reference to any of them. Ownership and scan state are checked here rather
+    // than trusted from the request - an id is not a permission.
+    if (input.mediaIds?.length) {
+      const distinct = new Set(input.mediaIds);
+      const ready = await client.query<{ id: string }>("SELECT id FROM media_assets WHERE id=ANY($1::uuid[]) AND owner_id=$2 AND status='ready' FOR KEY SHARE", [input.mediaIds, userId]);
+      // Every id has to be the member's own, scanned, and listed once: a repeat
+      // would put the same photo on the post twice under two ordinals.
+      if (ready.rows.length !== distinct.size || distinct.size !== input.mediaIds.length) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: { code: 'MEDIA_NOT_READY', message: 'Medya hazır değil.' } });
+      }
+      for (const [ordinal, mediaId] of input.mediaIds.entries()) {
+        await client.query('INSERT INTO post_media_refs(post_id,media_id,ordinal) VALUES($1,$2,$3)', [id, mediaId, ordinal]);
+      }
+    }
     await client.query('COMMIT');
     // Awarded after the commit, in its own transaction: the post is the member's
     // work and it is already saved. Kirk Ambar counts from COUNT(*) rather than

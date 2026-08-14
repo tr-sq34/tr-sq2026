@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../../../core/cache/cache_codec.dart';
 import '../../../../core/pagination/cursor_page.dart';
 import '../../domain/entities/community_post.dart';
+import '../../domain/entities/feed_extensions.dart';
 
 class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
   @override
@@ -59,6 +60,7 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                   label: (item['badge'] as Map<String, dynamic>)['label'] as String,
                   icon: (item['badge'] as Map<String, dynamic>)['icon'] as String? ?? '✦',
                 ),
+          poll: _pollFrom(item['poll']),
         )).toList();
     return CursorPage(items: items, nextCursor: json['nextCursor'] as String?);
   }
@@ -108,6 +110,39 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
               'badge': item.badge == null
                   ? null
                   : {'label': item.badge!.label, 'icon': item.badge!.icon},
+              'poll': item.poll == null
+                  ? null
+                  : {
+                      'id': item.poll!.id,
+                      'question': item.poll!.question,
+                      'selectionMode': item.poll!.selectionMode.name,
+                      'endsAt': item.poll!.endsAt?.toIso8601String(),
+                      'options': item.poll!.options.map((option) => {'id': option.id, 'label': option.label, 'votes': option.votes}).toList(),
+                      'selectedOptionIds': item.poll!.selectedOptionIds.toList(),
+                    },
             }).toList(),
       });
+}
+
+/// Çevrimdışı kopyada anket de duruyor. Aksi halde uçakta açılan akışta anketli
+/// bir paylaşım yalnızca sorusuyla görünüyordu: seçenekler kaybolduğu için
+/// altında dokunulacak bir şey kalmıyordu.
+CommunityPoll? _pollFrom(Object? raw) {
+  if (raw is! Map<String, dynamic>) return null;
+  final endsAt = raw['endsAt'] as String?;
+  return CommunityPoll(
+    id: raw['id'] as String,
+    question: raw['question'] as String? ?? '',
+    selectionMode: PollSelectionMode.values.byName(raw['selectionMode'] as String? ?? PollSelectionMode.single.name),
+    endsAt: endsAt == null ? null : DateTime.tryParse(endsAt),
+    options: (raw['options'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map((option) => PollOption(
+              id: option['id'] as String,
+              label: option['label'] as String? ?? '',
+              votes: (option['votes'] as num?)?.toInt() ?? 0,
+            ))
+        .toList(growable: false),
+    selectedOptionIds: (raw['selectedOptionIds'] as List<dynamic>? ?? const []).cast<String>().toSet(),
+  );
 }
