@@ -1967,86 +1967,62 @@ class _MarketplaceDetailScreenState extends State<MarketplaceDetailScreen> {
                       ),
                     ),
                     const SizedBox(height: 10),
+                    // Burada harita gibi görünen bir kutu vardı: koda yazılmış
+                    // tek bir stok hava fotoğrafı, ortasında bir iğne ve
+                    // altında ilanın şehri. İğne hiçbir yeri göstermiyordu,
+                    // fotoğraf da her ilanda aynıydı - satılan şey nerede
+                    // olursa olsun aynı sokakları gösteriyordu. Sunucu ilanın
+                    // koordinatını hiç tutmuyor, yalnızca şehir ve bölge; o
+                    // yüzden çizilecek bir harita yok. Yazan da bu.
                     Container(
-                      height: 110,
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: const Color(0xFFF1F5F9)),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
                       ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Stack(
+                      child: Row(
                         children: [
-                          Image.network(
-                            'https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&w=600&q=80',
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                                Container(color: const Color(0xFF1E293B)),
-                          ),
-                          Container(color: Colors.black.withValues(alpha: 0.1)),
-                          const Center(
-                            child: CircleAvatar(
-                              radius: 20,
-                              backgroundColor: Color(0xFF6355D8),
-                              child: Icon(
-                                Icons.location_on_rounded,
-                                color: Colors.white,
-                                size: 20,
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6355D8).withValues(
+                                alpha: 0.12,
                               ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.location_on_rounded,
+                              color: Color(0xFF6355D8),
+                              size: 20,
                             ),
                           ),
-                          Positioned(
-                            bottom: 10,
-                            left: 10,
-                            right: 10,
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.9),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 0.5,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  listing.location.isEmpty
+                                      ? 'Konum belirtilmemiş'
+                                      : listing.location,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF1E293B),
+                                  ),
                                 ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.map_rounded,
-                                        size: 14,
-                                        color: Color(0xFF6355D8),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        listing.location,
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFF1E293B),
-                                        ),
-                                      ),
-                                    ],
+                                const SizedBox(height: 2),
+                                const Text(
+                                  'Satıcı yalnızca şehrini paylaşıyor; tam adres verilmiyor.',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF64748B),
+                                    height: 1.3,
                                   ),
-                                  const Text(
-                                    'Yaklaşık konum',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Color(0xFF64748B),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
                           ),
                         ],

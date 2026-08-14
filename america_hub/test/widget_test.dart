@@ -112,6 +112,7 @@ void main() {
     await tester.pump();
     expect(find.text('Hesap oluştur'), findsOneWidget);
     expect(find.text('Devam et'), findsOneWidget);
-    expect(find.text('Google ile devam et'), findsOneWidget);
+    // Google/Apple/Telefon dugmeleri kaldirildi: ucu de "yakinda" diyordu.
+    expect(find.text('Google ile devam et'), findsNothing);
   });
 }

@@ -1,4 +1,3 @@
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -161,32 +160,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     label: isExistingUser ? 'Giriş yap' : 'Devam et',
                     onPressed: isExistingUser ? _signIn : _continueWithEmail,
                   ),
-                  const SizedBox(height: 24),
-                  const _DividerLabel(label: 'veya'),
-                  const SizedBox(height: 24),
-                  _ProviderButton(
-                    icon: const FaIcon(
-                      FontAwesomeIcons.google,
-                      size: 20,
-                      color: Color(0xFF4285F4),
-                    ),
-                    label: 'Google ile devam et',
-                    onPressed: _showProviderUnavailable,
-                  ),
-                  const SizedBox(height: 10),
-                  _ProviderButton(
-                    icon: const FaIcon(FontAwesomeIcons.apple, size: 20),
-                    label: 'Apple ile devam et',
-                    onPressed: _showProviderUnavailable,
-                  ),
-                  const SizedBox(height: 10),
-                  _ProviderButton(
-                    icon: const Icon(Icons.phone_outlined, size: 22),
-                    label: 'Telefonla devam et',
-                    onPressed: _showProviderUnavailable,
-                  ),
+                  // Burada "Google ile devam et", "Apple ile devam et" ve
+                  // "Telefonla devam et" düğmeleri duruyordu. Üçü de basılınca
+                  // "yakında kullanılabilir olacak" diyordu: hiçbiri hiç
+                  // yazılmadı, kimlik sunucusunda ne OAuth ne de telefonla
+                  // giriş var. Uygulamanın ilk ekranında, hesabı olmayan birine
+                  // üç ayrı giriş yolu göstermek en kötü yerdeki söz oluyordu.
+                  // Yazıldıkları gün geri gelirler.
                   if (widget.onPasskeyLogin != null) ...[
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 24),
+                    const _DividerLabel(label: 'veya'),
+                    const SizedBox(height: 24),
                     _ProviderButton(
                       icon: const Icon(Icons.key_outlined, size: 21),
                       label: 'Passkey ile devam et',
@@ -295,9 +279,6 @@ class _LoginScreenState extends State<LoginScreen> {
       _obscurePassword = true;
     });
   }
-
-  void _showProviderUnavailable() =>
-      _showMessage('Bu giriş yöntemi yakında kullanılabilir olacak.');
 
   void _showMessage(String message) => ScaffoldMessenger.of(
     context,
