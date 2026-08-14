@@ -194,17 +194,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
             ),
           ),
-          // Calls are 1:1 only; a group has no call target.
-          if (!isGroup) ...[
-            IconButton(
-              icon: const Icon(Icons.call_rounded, size: 20),
-              onPressed: () {},
-            ),
-            IconButton(
-              icon: const Icon(Icons.videocam_rounded, size: 20),
-              onPressed: () {},
-            ),
-          ],
+          // Burada sesli ve görüntülü arama düğmeleri vardı. İkisi de basılınca
+          // hiçbir şey yapmıyordu: ne uygulamada ne sunucuda arama diye bir şey
+          // var. Arama gerçekten yazıldığında düğmeler de geri gelir.
           _buildSafetyMenu(),
         ],
       ),
@@ -496,10 +488,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ),
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.attach_file_rounded, color: Color(0xFF94A3B8)),
-              onPressed: () {},
-            ),
+            // Ataç düğmesi buradaydı ve basılınca hiçbir şey olmuyordu. Mesaj
+            // baştan sona yalnızca yazıdan ibaret: sunucu da uygulama da bir
+            // mesajda yazıdan başkasını taşımıyor, dolayısıyla dosya seçtirecek
+            // bir yer yok.
             Expanded(
               child: TextField(
                 controller: _input,

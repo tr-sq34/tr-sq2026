@@ -163,7 +163,11 @@ class _MarketplaceSellerProfileScreenState
                         letterSpacing: 1.5,
                       ),
                     ),
-                    _CircleIconBtn(icon: Icons.more_vert_rounded, onTap: () {}),
+                    // Sağ üstte boş bir menü düğmesi duruyordu; açacağı bir menü
+                    // hiç yazılmamıştı. Satıcıyı şikâyet etme ve engelleme
+                    // sohbet ekranındaki menüde duruyor.
+                    // Genişlik geri düğmesininki kadar: başlık ortada kalsın.
+                    const SizedBox(width: 36),
                   ],
                 ),
                 const SizedBox(height: 24),
