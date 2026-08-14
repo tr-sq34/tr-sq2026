@@ -167,6 +167,15 @@ class MockCommunityRepository
       _posts.where((post) => !post.isDeleted).toList(growable: false);
 
   @override
+  Future<CommunityPost> fetchPost(String postId) async {
+    final post = _posts.firstWhere(
+      (item) => item.id == postId && !item.isDeleted,
+      orElse: () => throw StateError('POST_NOT_FOUND'),
+    );
+    return post;
+  }
+
+  @override
   Future<CursorPage<CommunityPost>> fetchFeed({
     required FeedMode mode,
     String? cursor,

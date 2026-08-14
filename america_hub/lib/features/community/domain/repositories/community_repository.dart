@@ -46,6 +46,14 @@ abstract interface class FeedRepository {
     String? cursor,
     int limit = 20,
   });
+
+  /// Tek bir paylaşım, kimliğiyle.
+  ///
+  /// Bildirim "paylaşımına yorum yapıldı" diyor ama o paylaşım akışın ilk
+  /// sayfasında olmayabilir; sayfaları tarayıp aramak yerine sunucuya tek tek
+  /// soruluyor. Görünmüyorsa (silinmiş ya da yalnızca arkadaşlara açık) sunucu
+  /// 404 diyor — kimliği bilmek okuma izni değil.
+  Future<CommunityPost> fetchPost(String postId);
 }
 
 abstract interface class PostInteractionRepository {

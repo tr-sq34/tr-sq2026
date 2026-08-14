@@ -15,6 +15,10 @@ enum MarketplaceFeed { forYou, local }
 class MarketplaceController extends PagedController<MarketplaceListing> {
   MarketplaceController({required MarketplaceRepository repository, MarketplaceListingAnalyzer? analyzer, CacheStore? draftStore, MediaUploadRepository? mediaUploads}) : _repository = repository, _analyzer = analyzer, _draftStore = draftStore, _mediaUploads = mediaUploads, super(dataSource: repository, pageSize: 20);
   final MarketplaceRepository _repository;
+
+  /// Bildirimden açılan ilan listede olmayabilir; sunucudan tek tek isteniyor.
+  Future<MarketplaceListing> getListing(String listingId) =>
+      _repository.getListing(listingId);
   final MarketplaceListingAnalyzer? _analyzer;
   final CacheStore? _draftStore;
   final MediaUploadRepository? _mediaUploads;

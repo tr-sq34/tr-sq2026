@@ -36,6 +36,20 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
   @override
   Future<List<MarketplaceListing>> getListings() async =>
       (await fetchPage()).items;
+
+  @override
+  Future<MarketplaceListing> getListing(String listingId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      '${ApiEndpoints.marketplaceListings}/$listingId',
+    );
+    final envelope = ApiResponse<MarketplaceListing>.fromJson(
+      response.data!,
+      (raw) => MarketplaceListingDto.fromJson(
+        raw as Map<String, dynamic>,
+      ).toDomain(),
+    );
+    return envelope.data;
+  }
   /// Satış merkezinin sayıları. Buradaki her şey daha önce sabit sıfır
   /// döndüren yerel bir karşılıktı: üç ilanına on bir kaydetme gelmiş bir
   /// üyeye "hiç yok" yazıyordu ve bu, boş bir panelden daha kötü, çünkü bir

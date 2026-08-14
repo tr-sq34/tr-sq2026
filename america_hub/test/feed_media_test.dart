@@ -98,7 +98,8 @@ void main() {
   test('paylaşım gönderilirken medya kimlikleri sunucuya gidiyor', () async {
     final harness = build([
       {'data': {'id': 'post-1'}},
-      {'data': [post()], 'meta': {'nextCursor': null}},
+      // Gönderiden sonra depo o tek paylaşımı kendi adresinden okuyor.
+      {'data': post()},
     ]);
 
     await harness.repository.createPost(
@@ -154,7 +155,7 @@ void main() {
   test('medyasız paylaşımda alan hiç gönderilmiyor', () async {
     final harness = build([
       {'data': {'id': 'post-1'}},
-      {'data': [post()], 'meta': {'nextCursor': null}},
+      {'data': post()},
     ]);
 
     await harness.repository.createPost(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/navigation/app_deep_link.dart';
 import '../../../../core/widgets/app_bottom_sheet.dart';
 import '../../../community/application/community_feed_controller.dart';
 import '../../../community/application/story_controller.dart';
@@ -11,6 +12,7 @@ import '../../../community/domain/repositories/community_repository.dart';
 import '../../../community/application/community_special_request_controller.dart';
 import '../../../events/application/events_controller.dart';
 import '../../../marketplace/application/marketplace_controller.dart';
+import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../journey/application/journey_controller.dart';
@@ -19,6 +21,7 @@ import '../../../community/domain/repositories/content_moderation_repository.dar
 import '../../../community/presentation/screens/community_screen.dart';
 import '../../../community/domain/entities/community_post.dart';
 import '../../../community/presentation/screens/post_composer_screen.dart';
+import '../../../community/presentation/widgets/post_comments.dart';
 import '../../../marketplace/presentation/screens/marketplace_screen.dart';
 import '../../../forum/application/forum_controller.dart';
 import '../../../forum/domain/entities/forum.dart';
@@ -164,8 +167,14 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       storyController: widget.storyController,
       mediaUploadController: widget.mediaUploadController,
       postCommands: widget.postCommands,
+      tabRequests: _profileTab,
     ),
   ];
+
+  /// Profil sekmesinin hangi alt sekmesinin açılacağı. Yalnızca bildirimden
+  /// gelindiğinde değişiyor; sayfalar bir kez kurulduğu için istek buradan
+  /// iletiliyor.
+  final ValueNotifier<int> _profileTab = ValueNotifier<int>(0);
 
   /// The home screen's badge card promised a destination and never had one.
   /// It leads where the profile's badge counter leads: the Journey cabinet,
@@ -255,6 +264,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   @override
   void dispose() {
     _pulseController.dispose();
+    _profileTab.dispose();
     super.dispose();
   }
 
@@ -334,10 +344,92 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
   void _openNotifications() => Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) =>
-          NotificationsScreen(controller: widget.notificationsController),
+      builder: (_) => NotificationsScreen(
+        controller: widget.notificationsController,
+        onOpen: _openDeepLink,
+      ),
     ),
   );
+
+  /// Bildirimin gittiği yer.
+  ///
+  /// Zil aylardır gerçek satırlar gösteriyordu ama dokunmak hiçbir yere
+  /// götürmüyordu: çözülen bağlantı okunup atılıyordu. Konu, satırın kendi
+  /// cümlesinin işaret ettiği şey — yorum yapılan paylaşım, kaydedilen ilan,
+  /// isteği gönderen kişi.
+  ///
+  /// Konu artık yoksa (paylaşım silinmiş, ilan satılmış) sessizce hiçbir şey
+  /// yapmak yerine bunu söylüyor.
+  Future<void> _openDeepLink(AppDeepLink link) async {
+    switch (link) {
+      case PostDeepLink(:final postId):
+        await _openPostFromNotification(postId);
+      case ListingDeepLink(:final listingId):
+        await _openListingFromNotification(listingId);
+      case FriendRequestDeepLink():
+        // İstek profilin Arkadaşlar sekmesinde duruyor; kişinin kendi profili
+        // diye bir ekran henüz yok, o yüzden gidilecek yer istek listesi.
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        _selectPage(3);
+        _profileTab.value = 2;
+      case EventDeepLink() || SpecialRequestDeepLink() || UnknownDeepLink():
+        // Bu türlerde bildirim üretilmiyor; üretildiğinde buraya bir satır
+        // eklenecek. Uydurma bir hedefe götürmek, hiçbir yere götürmemekten
+        // kötü.
+        break;
+    }
+  }
+
+  Future<void> _openPostFromNotification(String postId) async {
+    final CommunityPost post;
+    try {
+      post = await widget.communityController.fetchPost(postId);
+    } catch (_) {
+      _notifyMissing('Bu paylaşım artık yok.');
+      return;
+    }
+    if (!mounted) return;
+    await openPostComments(
+      context: context,
+      post: post,
+      controller: widget.commentsController,
+      moderationRepository: widget.contentModerationRepository,
+      viewerId: widget.authController.user?.id ?? 'local-user',
+      // Hangi paylaşım olduğu tabakanın kendisinde yazsın: bildirimden gelen
+      // üye kartı görmüyor, yalnızca yorumları görüyor.
+      subtitle: _postSubtitle(post),
+    );
+  }
+
+  static String _postSubtitle(CommunityPost post) {
+    final message = post.message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (message.isEmpty) return '${post.authorName} paylaşımı';
+    return message.length <= 80 ? message : '${message.substring(0, 79)}…';
+  }
+
+  Future<void> _openListingFromNotification(String listingId) async {
+    final MarketplaceListing listing;
+    try {
+      listing = await widget.marketplaceController.getListing(listingId);
+    } catch (_) {
+      _notifyMissing('Bu ilan artık yayında değil.');
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MarketplaceDetailScreen(
+          listing: listing,
+          controller: widget.marketplaceController,
+        ),
+      ),
+    );
+  }
+
+  void _notifyMissing(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   /// The compose sheet, reachable from the ➕ in the middle of the nav bar.
   ///

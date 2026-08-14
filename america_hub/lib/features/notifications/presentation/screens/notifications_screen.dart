@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/navigation/app_deep_link.dart';
 import '../../application/notifications_controller.dart';
 import '../../domain/entities/app_notification.dart';
 
@@ -12,9 +13,18 @@ import '../../domain/entities/app_notification.dart';
 /// not appear. An empty list remains the honest answer for a member nobody has
 /// reacted to yet, rather than a demo item dressed up as news.
 class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key, required this.controller});
+  const NotificationsScreen({
+    super.key,
+    required this.controller,
+    required this.onOpen,
+  });
 
   final NotificationsController controller;
+
+  /// Satırın gittiği yer. Bildirim uzun süre hiçbir yere gitmiyordu: dokunmak
+  /// yalnızca okundu işaretliyor, çözülen bağlantı atılıyordu. Nereye
+  /// gidileceğini kabuk bilir, bu ekran değil.
+  final Future<void> Function(AppDeepLink) onOpen;
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -25,6 +35,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     widget.controller.load();
+  }
+
+  Future<void> _open(AppNotification notification) async {
+    final link = await widget.controller.open(notification);
+    if (!mounted) return;
+    await widget.onOpen(link);
   }
 
   @override
@@ -69,7 +85,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, index) => _NotificationTile(
               notification: controller.items[index],
-              onTap: () => controller.open(controller.items[index]),
+              onTap: () => _open(controller.items[index]),
             ),
           ),
         );

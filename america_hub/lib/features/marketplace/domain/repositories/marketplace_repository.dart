@@ -4,6 +4,11 @@ import '../entities/marketplace_seller.dart';
 
 abstract interface class MarketplaceRepository implements CursorDataSource<MarketplaceListing> {
   Future<List<MarketplaceListing>> getListings();
+
+  /// Tek bir ilan, kimliğiyle. Bildirimden gelen kişi ilanı listede aramak
+  /// zorunda kalmasın diye. Satılmış ya da kaldırılmış ilan yanıt vermiyor:
+  /// artık işlem yapılamayacak bir sayfayı açmanın anlamı yok.
+  Future<MarketplaceListing> getListing(String listingId);
   Future<MarketplaceSellerDashboard> getSellerDashboard();
   Future<MarketplaceSellerProfile> getSellerProfile(String sellerId);
   Future<List<MarketplaceListing>> getSellerListings(String sellerId);

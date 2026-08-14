@@ -7,7 +7,6 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_image_source.dart';
 import '../../../../core/widgets/app_remote_image.dart';
-import '../../../../core/widgets/app_bottom_sheet.dart';
 import '../../../../core/widgets/app_screen_header.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../../../core/widgets/paged_list_footer.dart';
@@ -19,18 +18,17 @@ import '../../application/community_special_request_controller.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/domain/entities/friendship.dart';
 import '../../../promotions/application/promotions_controller.dart';
-import '../widgets/comments_sheet.dart';
 import '../widgets/post_requests_sheet.dart';
 import '../widgets/special_post_request_sheet.dart';
 import '../../domain/repositories/content_moderation_repository.dart';
 import '../widgets/content_report_sheet.dart';
+import '../widgets/post_comments.dart';
 import '../widgets/story_composer_sheet.dart';
 import 'post_composer_screen.dart';
 import 'story_viewer_screen.dart';
 import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 import '../../domain/entities/content_report.dart';
-import '../../domain/services/post_access_policy.dart';
 
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({
@@ -196,31 +194,12 @@ class _FeedState extends State<_Feed> {
 
   /// Yorum tabakası artık paylaşılan bir bileşen; akışa özgü olan yalnızca
   /// erişim politikası, o da buradan geçiriliyor.
-  void _openComments(CommunityPost post) => showAppBottomSheet(
+  void _openComments(CommunityPost post) => openPostComments(
     context: context,
-    child: CommentsSheet(
-      targetId: post.id,
-      controller: widget.commentsController,
-      moderationRepository: widget.moderationRepository,
-      commentsEnabled: post.commentsPolicy != CommentsPolicy.disabled,
-      onSubmit: (message, parentId) => widget.commentsController.addComment(
-        post: post,
-        viewerId: _viewerId,
-        isFriend: true,
-        message: message,
-        parentId: parentId,
-      ),
-      onDelete: (comment) => widget.commentsController.deleteComment(
-        comment: comment,
-        post: post,
-        viewerId: _viewerId,
-      ),
-      canDelete: (comment) => PostAccessPolicy.canDeleteComment(
-        comment: comment,
-        post: post,
-        viewerId: _viewerId,
-      ),
-    ),
+    post: post,
+    controller: widget.commentsController,
+    moderationRepository: widget.moderationRepository,
+    viewerId: _viewerId,
   );
 
   Future<void> _vote(

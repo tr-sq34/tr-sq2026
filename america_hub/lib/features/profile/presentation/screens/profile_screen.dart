@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -37,6 +38,7 @@ class ProfileScreen extends StatefulWidget {
     required this.storyController,
     required this.mediaUploadController,
     required this.postCommands,
+    this.tabRequests,
   });
 
   final ProfileController controller;
@@ -48,6 +50,10 @@ class ProfileScreen extends StatefulWidget {
   final MediaUploadController mediaUploadController;
   final CommunityPostCommands postCommands;
 
+  /// Dışarıdan gelen sekme isteği: arkadaşlık bildirimine dokunan üye profile
+  /// değil, isteğin durduğu Arkadaşlar sekmesine gelmeli.
+  final ValueListenable<int>? tabRequests;
+
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
@@ -55,6 +61,12 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
+
+  void _openRequestedTab() {
+    final index = widget.tabRequests?.value ?? 0;
+    if (index < 0 || index >= _tabs.length) return;
+    _tabs.animateTo(index);
+  }
   final _picker = ImagePicker();
   bool _showArchive = false;
   bool _uploadingAvatar = false;
@@ -62,6 +74,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   void initState() {
     super.initState();
+    widget.tabRequests?.addListener(_openRequestedTab);
     widget.controller.load();
     widget.journeyController.load();
     widget.memberCapabilitiesController.load();
@@ -71,6 +84,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    widget.tabRequests?.removeListener(_openRequestedTab);
     _tabs.dispose();
     super.dispose();
   }

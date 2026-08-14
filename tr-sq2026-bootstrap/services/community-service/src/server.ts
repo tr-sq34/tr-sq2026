@@ -389,6 +389,29 @@ const FEED_TRAVELER = `(SELECT json_build_object('from',t.from_place,'to',t.to_p
 
 const FEED_PURPOSE: Record<string, string> = { imece_help: 'imeceHelp', traveler_match: 'travelerMatch' };
 
+/// The feed's columns and the feed's JSON, named so that a single post can be
+/// read with exactly the shape the feed hands back. A card fetched from a
+/// notification that differed from the same card in the list - one with a poll,
+/// one without - would be a second definition of what a post is.
+const feedColumns = (viewerParam: string) => `p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=${viewerParam} AND x.kind='like') is_liked,p.purpose,(p.author_id=${viewerParam}) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll(viewerParam)}`;
+
+const feedPostJson = async (p: FeedRow) => ({
+  id: p.id,
+  authorId: p.author_id,
+  authorName: p.author_name,
+  location: p.location_label ?? '',
+  createdAtLabel: p.created_at.toISOString(),
+  message: p.body,
+  likes: Number(p.likes),
+  comments: Number(p.comments),
+  isLiked: p.is_liked,
+  isAuthor: p.is_author,
+  purpose: FEED_PURPOSE[p.purpose] ?? 'standard',
+  travelerMatch: p.traveler ? { ...p.traveler, travelAt: new Date(p.traveler.travelAt).toISOString() } : null,
+  media: await feedMediaJson(p.media),
+  poll: feedPollJson(p.poll),
+});
+
 const feedMediaJson = async (media: FeedMediaRow[] | null) => Promise.all(
   (media ?? []).filter((item) => item.safeUrl).map(async (item) => ({
     id: item.id,
@@ -423,14 +446,14 @@ app.get('/v1/community/feed', async (request, reply) => {
     if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const result = await db.query<FeedRow>(`SELECT p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked,p.purpose,(p.author_id=$1) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
+    const result = await db.query<FeedRow>(`SELECT ${feedColumns('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
     const page = result.rows.slice(0, input.limit); const next = result.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null;
     // authorId travels with the card. Without it the app had nothing to compare
     // the viewer against, so it fell back to a hardcoded 'local-user' and every
     // post in production looked like it belonged to somebody else - which is
     // why the delete button on your own post never appeared, and why a post
     // owner could not moderate the comments under it.
-    return { data: await Promise.all(page.map(async (p) => ({ id:p.id, authorId:p.author_id, authorName:p.author_name, location:p.location_label ?? '', createdAtLabel:p.created_at.toISOString(), message:p.body, likes:Number(p.likes), comments:Number(p.comments), isLiked:p.is_liked, isAuthor:p.is_author, purpose: FEED_PURPOSE[p.purpose] ?? 'standard', travelerMatch: p.traveler ? { ...p.traveler, travelAt: new Date(p.traveler.travelAt).toISOString() } : null, media: await feedMediaJson(p.media), poll: feedPollJson(p.poll) }))), meta: { nextCursor: next } };
+    return { data: await Promise.all(page.map(feedPostJson)), meta: { nextCursor: next } };
   } catch (error) { return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'FEED_UNAVAILABLE', message: 'Akış yüklenemedi.' } }); }
 });
 
@@ -624,6 +647,33 @@ const postCommentJson = (row: PostCommentRow) => ({
  */
 const postReadableWhere = (postParam: string, viewerParam: string) =>
   `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+
+/**
+ * One post, by id.
+ *
+ * Written for the bell: "Elif paylaşımına yorum yaptı" pointed at a post the
+ * app had no way to fetch, so the notification opened nothing. The comment
+ * thread under it has been readable by id since the beginning; the post itself
+ * was not.
+ *
+ * Visibility is the feed's question, asked with the same predicate the comment
+ * route uses - knowing the uuid is not permission to read a friends-only post.
+ */
+app.get('/v1/community/posts/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const postId = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<FeedRow>(
+      `SELECT ${feedColumns('$2')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id WHERE ${postReadableWhere('$1', '$2')}`,
+      [postId, userId],
+    );
+    const post = rows.rows[0];
+    if (!post) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    return { data: await feedPostJson(post) };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'POST_UNAVAILABLE', message: 'Paylaşım yüklenemedi.' } });
+  }
+});
 
 app.get('/v1/community/posts/:id/comments', async (request, reply) => {
   try {
@@ -914,6 +964,31 @@ app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await
  * rating, no response time and no sales count in this system yet, so none is
  * invented - a fabricated "0 out of 5" is a worse answer than no answer.
  */
+/**
+ * One listing, by id. Same reason as the post route above: a "kaydetti" or
+ * "beğendi" notification names a listing the app could only find by paging
+ * through the whole board.
+ *
+ * Only active listings answer. A sold or withdrawn listing is gone for the
+ * reader as well as the board - the alternative is a notification opening a
+ * page that can no longer be acted on.
+ */
+app.get('/v1/marketplace/listings/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const listingId = z.string().uuid().parse((request.params as { id: string }).id);
+    const rows = await db.query<ListingRow>(
+      `SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id WHERE l.id=$2 AND l.status='active'`,
+      [userId, listingId],
+    );
+    const listing = rows.rows[0];
+    if (!listing) return reply.code(404).send({ error: { code: 'LISTING_NOT_FOUND', message: 'İlan bulunamadı.' } });
+    return { data: await listingJson(listing) };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'LISTING_UNAVAILABLE', message: 'İlan yüklenemedi.' } });
+  }
+});
+
 app.get('/v1/marketplace/sellers/:id', async (request, reply) => {
   try {
     // Read for authentication only: a seller's page is for members, and the
