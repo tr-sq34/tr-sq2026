@@ -41,13 +41,19 @@ export default async function CommandCenter() {
   const session = await getSession();
   const roles = session?.member.roles ?? [];
 
+  // Every one of these catches, without exception. This page asks seven
+  // services and `Promise.all` rejects on the first refusal, so a single one of
+  // them throwing is a server error page instead of a dashboard - which is
+  // exactly what happened when Identity started refusing delegation tokens.
+  // Each loader already reports its own failure; the catch is the guarantee
+  // that none of them can reach the renderer.
   const [messaging, content, health, safety, verification, marketplace, promotions] = await Promise.all([
     canReviewReports(roles) ? moderationOverview().catch(() => null) : Promise.resolve(null),
     canReviewReports(roles) ? contentOverview().catch(() => null) : Promise.resolve(null),
     canSeeServiceHealth(roles) ? serviceHealth().catch(() => null) : Promise.resolve(null),
-    canSeeSafety(roles) ? safetyPage() : Promise.resolve(null),
-    canSeeVerification(roles) ? verificationPage() : Promise.resolve(null),
-    canSeeMarketplace(roles) ? marketplacePage() : Promise.resolve(null),
+    canSeeSafety(roles) ? safetyPage().catch(() => null) : Promise.resolve(null),
+    canSeeVerification(roles) ? verificationPage().catch(() => null) : Promise.resolve(null),
+    canSeeMarketplace(roles) ? marketplacePage().catch(() => null) : Promise.resolve(null),
     listPromotions('pending').catch(() => null),
   ]) as [
     ModerationOverview | null,
