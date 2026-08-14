@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { delegation } from './gatework';
 import type { PromotionSummary } from './promotion-labels';
 import { getSession } from './session';
+import type { GateworkRole } from './types';
 
 /**
  * Console side of Tanitim Yap: the sponsored story slot, the in-app banner and
@@ -44,6 +45,13 @@ export {
   type PromotionSummary,
 } from './promotion-labels';
 
+// Mirrors what the community service enforces. A moderator sees the queue -
+// promotions are content and land in their reports - but does not decide it.
+export const canDecidePromotions = (roles: GateworkRole[]) =>
+  roles.some((role) => ['owner', 'operations_admin', 'content_editor'].includes(role));
+export const canSeePromotions = (roles: GateworkRole[]) =>
+  roles.some((role) => ['owner', 'operations_admin', 'content_editor', 'moderator'].includes(role));
+
 export const promotionDecisionSchema = z.object({
   action: z.enum(['approve', 'reject', 'end']),
   reason: z.string().trim().min(3).max(500),
@@ -79,6 +87,22 @@ export async function decidePromotion(id: string, raw: unknown) {
     method: 'POST',
     body: JSON.stringify({ ...input, idempotencyKey: randomUUID() }),
   })).data as { id: string; status: string; duplicate: boolean };
+}
+
+// The whole running order goes up at once rather than one "move up" per card.
+// Two operators dragging at the same time then overwrite each other's list
+// instead of interleaving into an order neither of them chose.
+export const reorderPromotionsSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(50),
+  reason: z.string().trim().min(5).max(500),
+});
+
+export async function reorderPromotions(raw: unknown) {
+  const input = reorderPromotionsSchema.parse(raw);
+  return (await communityFetch('/v1/internal/gatework/promotions/order', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })).data as { ordered: number };
 }
 
 export async function placePromotion(raw: unknown) {

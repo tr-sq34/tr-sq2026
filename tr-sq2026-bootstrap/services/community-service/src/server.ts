@@ -3109,18 +3109,26 @@ const promotionQueueQuery = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 const promotionEventBody = z.object({ kind: z.enum(['impression', 'click']) });
+// The whole running order arrives at once rather than one "move up" per card.
+// Two operators dragging at the same time then overwrite each other's list
+// instead of interleaving into an order neither of them chose.
+const promotionOrderBody = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(50),
+  reason: z.string().trim().min(5).max(500),
+});
 
 type PromotionRow = {
   id: string; owner_id: string; placement: string; title: string; subtitle: string | null;
   media_url: string | null; target_kind: string | null; target_value: string | null;
   region_code: string | null; city: string | null; starts_at: Date; ends_at: Date;
   status: string; decision_reason: string | null; request_note?: string | null;
-  created_at: Date; owner_name?: string; impressions?: string; clicks?: string;
+  created_at: Date; display_order: number | null; owner_name?: string; impressions?: string; clicks?: string;
 };
 
 const PROMOTION_SELECT = `
   SELECT p.id,p.owner_id,p.placement,p.title,p.subtitle,m.safe_url media_url,p.target_kind,p.target_value,
-         p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at
+         p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at,
+         p.display_order
     FROM promotions p
     LEFT JOIN media_assets m ON m.id=p.media_id AND m.status='ready'`;
 
@@ -3141,6 +3149,8 @@ const promotionJson = async (row: PromotionRow) => ({
   status: row.status,
   decisionReason: row.decision_reason,
   createdAt: row.created_at.toISOString(),
+  // NULL is "not hand-ordered", which is a different thing from "first".
+  displayOrder: row.display_order,
 });
 
 /// What the home screen reads. "Live" is computed here rather than stored: an
@@ -3158,7 +3168,9 @@ app.get('/v1/community/promotions/active', async (request, reply) => {
           -- nationwide ones, never somebody else's city.
           AND (p.region_code IS NULL OR p.region_code=v.region_code)
           AND (p.city IS NULL OR p.city=v.city)
-        ORDER BY p.starts_at DESC,p.id DESC LIMIT 20`,
+        -- Hand order first when an operator has set one; everything else keeps
+        -- the newest-first behaviour it had before the column existed.
+        ORDER BY p.display_order ASC NULLS LAST,p.starts_at DESC,p.id DESC LIMIT 20`,
       [userId],
     );
     return { data: await Promise.all(rows.rows.map(promotionJson)) };
@@ -3248,20 +3260,38 @@ app.get('/v1/internal/gatework/promotions', async (request, reply) => {
     requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator']);
     const input = promotionQueueQuery.parse(request.query);
     const rows = await db.query<PromotionRow>(
-      `${PROMOTION_SELECT} WHERE p.status=$1 ORDER BY p.created_at ASC LIMIT $2 OFFSET $3`,
+      // A pending queue is worked oldest-first, but an approved list is the
+      // running order - so it is read in the order the home screen will use it.
+      `${PROMOTION_SELECT} WHERE p.status=$1
+        ORDER BY ${input.status === 'approved' ? 'p.display_order ASC NULLS LAST,p.starts_at DESC,p.id DESC' : 'p.created_at ASC'}
+        LIMIT $2 OFFSET $3`,
       [input.status, input.limit, input.offset],
     );
-    const owners = await db.query<{ user_id: string; display_name: string }>(
-      'SELECT user_id,display_name FROM community_profile_projection WHERE user_id=ANY($1::uuid[])',
-      [rows.rows.map((row) => row.owner_id)],
-    );
+    const ids = rows.rows.map((row) => row.id);
+    const [owners, totals] = await Promise.all([
+      db.query<{ user_id: string; display_name: string }>(
+        'SELECT user_id,display_name FROM community_profile_projection WHERE user_id=ANY($1::uuid[])',
+        [rows.rows.map((row) => row.owner_id)],
+      ),
+      // These counters already existed and the member could see their own; the
+      // operator deciding whether to keep a placement running could not. Without
+      // them "is this working" was answered by opinion.
+      db.query<{ promotion_id: string; impressions: string; clicks: string }>(
+        `SELECT promotion_id,sum(impressions) impressions,sum(clicks) clicks
+           FROM promotion_impressions WHERE promotion_id=ANY($1::uuid[]) GROUP BY promotion_id`,
+        [ids],
+      ),
+    ]);
     const names = new Map(owners.rows.map((row) => [row.user_id, row.display_name]));
+    const counters = new Map(totals.rows.map((row) => [row.promotion_id, row]));
     return {
       data: await Promise.all(rows.rows.map(async (row) => ({
         ...await promotionJson(row),
         ownerId: row.owner_id,
         ownerName: names.get(row.owner_id) ?? 'TurkSquare üyesi',
         requestNote: row.request_note ?? null,
+        impressions: Number(counters.get(row.id)?.impressions ?? 0),
+        clicks: Number(counters.get(row.id)?.clicks ?? 0),
       }))),
       nextOffset: rows.rows.length === input.limit ? input.offset + input.limit : null,
     };
@@ -3305,6 +3335,47 @@ app.post('/v1/internal/gatework/promotions/:id/decision', async (request, reply)
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROMOTION_DECISION_FAILED', message: 'Karar kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+/// Hand ordering the live cards. Only approved rows can be ordered: a pending
+/// request has no place on the home screen, so dragging one into the running
+/// list must fail loudly rather than quietly place it.
+app.put('/v1/internal/gatework/promotions/order', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = promotionOrderBody.parse(request.body);
+    // A repeated id would give one card two positions and steal one from
+    // another card, and the row count check below would still pass.
+    if (new Set(input.ids).size !== input.ids.length) throw Error('DUPLICATE_ID');
+    await client.query('BEGIN');
+    // Written as one statement, so the home screen cannot read a half-applied
+    // order in which two cards share a position.
+    const updated = await client.query(
+      `UPDATE promotions p SET display_order=v.rank,updated_at=now()
+         FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id,rank)
+        WHERE p.id=v.id AND p.status='approved'`,
+      [input.ids],
+    );
+    // The console sends the list it was showing. A short count means that list
+    // is stale - something ended or was pulled while it was open - and applying
+    // the rest would order a screen the operator never actually saw.
+    if (updated.rowCount !== input.ids.length) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'PROMOTION_ORDER_STALE', message: 'Liste değişmiş. Sayfayı yenileyip sıralamayı tekrar kaydet.' } });
+    }
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'promotion.reorder', targetType: 'promotion', targetId: input.ids[0]!, reason: `${input.reason} (${input.ids.length} kart)`, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return { data: { ordered: updated.rowCount } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'PROMOTION_ORDER_FAILED', message: 'Sıralama kaydedilemedi.' } });
   } finally {
     client.release();
   }
