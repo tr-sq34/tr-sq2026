@@ -17,6 +17,7 @@ class MarketplaceListingDto {
     this.likeCount = 0,
     this.shareCount = 0,
     this.createdAt,
+    this.mediaUrls = const [],
   });
   final String id, title, category, condition, location, sellerName, imageUrl;
   final double price;
@@ -30,6 +31,10 @@ class MarketplaceListingDto {
   final int likeCount;
   final int shareCount;
   final DateTime? createdAt;
+
+  /// İlanın kendi fotoğrafları, satıcının seçtiği sırayla. Boş gelirse ilanda
+  /// gerçekten fotoğraf yok demektir; ekran yerine bir stok görsel koymuyor.
+  final List<String> mediaUrls;
 
   factory MarketplaceListingDto.fromJson(Map<String, dynamic> json) =>
       MarketplaceListingDto(
@@ -48,6 +53,10 @@ class MarketplaceListingDto {
         likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
         shareCount: (json['shareCount'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
+        mediaUrls: [
+          for (final item in (json['media'] as List? ?? const []))
+            if ((item as Map)['url'] is String) item['url'] as String,
+        ],
       );
 
   MarketplaceListing toDomain() => MarketplaceListing(
@@ -66,5 +75,6 @@ class MarketplaceListingDto {
     isLiked: isLiked,
     likeCount: likeCount,
     shareCount: shareCount,
+    mediaUrls: mediaUrls,
   );
 }

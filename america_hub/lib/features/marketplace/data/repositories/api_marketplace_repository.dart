@@ -125,6 +125,9 @@ class ApiMarketplaceRepository implements MarketplaceRepository {
         'description': draft.description,
         'price': draft.price,
         'city': draft.location.isEmpty ? null : draft.location,
+        // Sunucuya adres değil kimlik gidiyor: hangi fotoğrafın kime ait
+        // olduğuna ve taramadan geçip geçmediğine orada bakılıyor.
+        if (draft.mediaIds.isNotEmpty) 'mediaIds': draft.mediaIds,
       },
     );
     final data = response.data?['data'] as Map<String, dynamic>? ?? const {};

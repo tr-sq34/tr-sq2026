@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/widgets/app_remote_image.dart';
@@ -790,6 +791,35 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
   final _description = TextEditingController();
   final _location = TextEditingController(text: 'New York, NY');
   final _fields = <String, TextEditingController>{};
+  final _picker = ImagePicker();
+  bool _uploading = false;
+
+  /// Seçilen fotoğraflar tek tek yükleniyor ve her biri taramadan geçtikçe
+  /// şeride ekleniyor. Biri reddedilirse yalnızca o düşüyor, diğerleri kalıyor:
+  /// altı fotoğraf seçen birine "hepsini baştan seç" demek gereksiz.
+  Future<void> _pickPhotos() async {
+    final files = await _picker.pickMultiImage(imageQuality: 85);
+    if (files.isEmpty || !mounted) return;
+    final draft = widget.controller.draft;
+    if (draft == null) return;
+    final room = MarketplaceController.maxDraftPhotos - draft.mediaIds.length;
+    if (room <= 0) return;
+    setState(() => _uploading = true);
+    for (final file in files.take(room)) {
+      final bytes = await file.readAsBytes();
+      final error = await widget.controller.attachDraftPhoto(
+        localUri: file.path,
+        fileName: file.name,
+        sizeBytes: bytes.length,
+      );
+      if (!mounted) return;
+      setState(() {});
+      if (error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+      }
+    }
+    if (mounted) setState(() => _uploading = false);
+  }
 
   @override
   void initState() {
@@ -868,11 +898,6 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
         fields: {
           for (final entry in _fields.entries) entry.key: entry.value.text,
         },
-        mediaUrls: current.mediaUrls.isEmpty
-            ? [
-                'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=700&q=80',
-              ]
-            : current.mediaUrls,
       ),
     );
     if (!publish) return;
@@ -931,12 +956,11 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
         children: [
-          Row(
-            children: [
-              Expanded(child: _MediaBox(label: 'Video oluştur')),
-              const SizedBox(width: 8),
-              Expanded(child: _MediaBox(label: 'Fotoğraf / video ekle')),
-            ],
+          _ListingPhotoStrip(
+            urls: widget.controller.draft!.mediaUrls,
+            busy: _uploading,
+            onAdd: widget.controller.canAttachPhotos ? _pickPhotos : null,
+            onRemove: widget.controller.removeDraftPhoto,
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
@@ -1079,29 +1103,119 @@ class _Field extends StatelessWidget {
   );
 }
 
-class _MediaBox extends StatelessWidget {
-  const _MediaBox({required this.label});
-  final String label;
+/// İlanın fotoğraf şeridi. Buradaki kutu eskiden yalnızca bir çizimdi:
+/// dokunulduğunda hiçbir şey olmuyordu ve her ilan aynı stok mutfak
+/// fotoğrafıyla yayına giriyordu.
+class _ListingPhotoStrip extends StatelessWidget {
+  const _ListingPhotoStrip({
+    required this.urls,
+    required this.busy,
+    required this.onAdd,
+    required this.onRemove,
+  });
+  final List<String> urls;
+  final bool busy;
+  final VoidCallback? onAdd;
+  final Future<void> Function(int index) onRemove;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 116,
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      children: [
+        for (final (index, url) in urls.indexed)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: 116,
+                    height: 116,
+                    child: AppRemoteImage(
+                      imageUrl: url,
+                      semanticLabel: 'İlan fotoğrafı ${index + 1}',
+                    ),
+                  ),
+                ),
+                // İlk fotoğraf kapak oluyor; satıcının bunu bilmesi gerekiyor.
+                if (index == 0)
+                  const Positioned(
+                    left: 6,
+                    bottom: 6,
+                    child: _CoverTag(),
+                  ),
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: IconButton(
+                    tooltip: 'Fotoğrafı kaldır',
+                    icon: const CircleAvatar(
+                      radius: 12,
+                      backgroundColor: Colors.black54,
+                      child: Icon(Icons.close_rounded, size: 14, color: Colors.white),
+                    ),
+                    onPressed: () => onRemove(index),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (urls.length < MarketplaceController.maxDraftPhotos)
+          SizedBox(
+            width: 116,
+            child: InkWell(
+              onTap: busy ? null : onAdd,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.surfaceBorder),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: busy
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.add_a_photo_outlined),
+                            const SizedBox(height: 6),
+                            Text(
+                              onAdd == null
+                                  ? 'Fotoğraf eklenemiyor'
+                                  : 'Fotoğraf ekle',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _CoverTag extends StatelessWidget {
+  const _CoverTag();
   @override
   Widget build(BuildContext context) => Container(
-    height: 116,
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
     decoration: BoxDecoration(
-      border: Border.all(color: AppColors.surfaceBorder),
-      borderRadius: BorderRadius.circular(12),
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(6),
     ),
-    child: Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.add_a_photo_outlined),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12),
-          ),
-        ],
-      ),
+    child: const Text(
+      'Kapak',
+      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
     ),
   );
 }

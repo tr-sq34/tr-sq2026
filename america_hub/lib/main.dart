@@ -244,6 +244,9 @@ Future<void> main() async {
     ),
     analyzer: MockMarketplaceListingAnalyzer(),
     draftStore: cacheStore,
+    // İlan fotoğrafları Topluluk'takiyle aynı yükleme akışını kullanıyor:
+    // dosya karantinaya çıkıyor, taraması bitmeden ilana yazılmıyor.
+    mediaUploads: mediaUploadRepository,
   );
 
   final ProfileRepository profileRepository = useMockServices
