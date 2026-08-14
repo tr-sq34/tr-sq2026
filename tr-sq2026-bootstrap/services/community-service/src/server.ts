@@ -365,7 +365,7 @@ app.get('/v1/community/feed', async (request, reply) => {
     if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const result = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; author_name: string; likes: string; comments: string; is_liked: boolean }>(`SELECT p.id,p.created_at,p.body,p.location_label,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,0 comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
+    const result = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; author_name: string; likes: string; comments: string; is_liked: boolean }>(`SELECT p.id,p.created_at,p.body,p.location_label,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$1 AND x.kind='like') is_liked FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
     const page = result.rows.slice(0, input.limit); const next = result.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null;
     return { data: page.map((p) => ({ id:p.id, authorName:p.author_name, location:p.location_label ?? '', createdAtLabel:p.created_at.toISOString(), message:p.body, likes:Number(p.likes), comments:Number(p.comments), isLiked:p.is_liked })), meta: { nextCursor: next } };
   } catch (error) { return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'FEED_UNAVAILABLE', message: 'Akış yüklenemedi.' } }); }
@@ -495,13 +495,106 @@ app.get('/v1/community/users/:userId/story-highlights',async(request,reply)=>{tr
 app.get('/v1/community/me/story-highlights',async(request,reply)=>{try{const userId=await viewer(request.headers);const rows=await db.query<{highlight_id:string;title:string;visibility:'network'|'public';created_at:Date;story_id:string;media_id:string;safe_url:string;thumbnail_url:string|null;kind:'image'|'video'}>(`SELECT h.id highlight_id,h.title,h.visibility,h.created_at,si.story_id,m.id media_id,m.safe_url,m.thumbnail_url,m.kind FROM story_highlights h JOIN story_highlight_items si ON si.highlight_id=h.id JOIN media_assets m ON m.id=(SELECT media_id FROM stories WHERE id=si.story_id) WHERE h.owner_id=$1 AND m.status='ready' ORDER BY h.created_at DESC,si.position ASC`,[userId]);const groups=new Map<string,{id:string;title:string;visibility:string;createdAt:string;items:unknown[]}>();for(const row of rows.rows){const group=groups.get(row.highlight_id)??{id:row.highlight_id,title:row.title,visibility:row.visibility,createdAt:row.created_at.toISOString(),items:[]};group.items.push({storyId:row.story_id,media:{id:row.media_id,type:row.kind,url:await mediaObjectUrl(row.safe_url),thumbnailUrl:row.thumbnail_url?await mediaObjectUrl(row.thumbnail_url):null}});groups.set(row.highlight_id,group);}return{data:[...groups.values()]};}catch{return reply.code(400).send({error:{code:'HIGHLIGHTS_UNAVAILABLE',message:'Öne çıkan Storyler yüklenemedi.'}});}});
 app.post('/v1/community/stories/:id/views',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});await db.query('INSERT INTO story_views(story_id,viewer_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
 app.put('/v1/community/stories/:id/likes',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);const input=interactionBody.parse(request.body);const access=await db.query(`SELECT 1 FROM stories s WHERE s.id=$1 AND s.expires_at>now() AND ${storyAccessWhere('s','$2')}`,[id,userId]);if(!access.rows[0])return reply.code(404).send({error:{code:'STORY_NOT_FOUND'}});if(input.enabled)await db.query('INSERT INTO story_likes(story_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,userId]);else await db.query('DELETE FROM story_likes WHERE story_id=$1 AND actor_id=$2',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
-app.get('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {id:string}).id);const rows=await db.query('SELECT id,author_id,parent_id,body,created_at FROM community_comments WHERE post_id=$1 AND deleted_at IS NULL AND moderation_state=\'active\' ORDER BY created_at DESC LIMIT 50',[postId]);return{data:rows.rows};}catch{return reply.code(401).send({error:{code:'COMMENTS_FAILED',message:'Yorumlar yüklenemedi.'}});}});
-app.post('/v1/community/posts/:id/comments',async(request,reply)=>{try{const userId=await viewer(request.headers);const restricted=await activeRestriction(userId);if(restricted)return reply.code(403).send(restrictionError(restricted));const postId=z.string().uuid().parse((request.params as {id:string}).id);const input=commentBody.parse(request.body);const post=await db.query('SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL AND comments_enabled',[postId]);if(!post.rows[0])return reply.code(403).send({error:{code:'COMMENTS_DISABLED',message:'Yorumlar kapalı.'}});const result=await db.query('INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id,created_at',[postId,userId,input.parentId??null,input.body]);
+// Feed comments.
+//
+// The routes below have existed since 005 and nothing has ever called them: the
+// app was wired to a mock repository, so every comment a member wrote lived in
+// that phone's memory until the screen closed. Connecting it exposed two things
+// this list never did - who wrote the comment, and whether the reader is even
+// allowed to be reading it.
+//
+// The display name is joined here rather than left to the caller, exactly as the
+// news list does it, because a comment is drawn under a name and an author id is
+// not one.
+const POST_COMMENT_SELECT = `
+  SELECT c.id,c.author_id,c.parent_id,c.body,c.created_at,
+         COALESCE(p.display_name,'TurkSquare üyesi') author_name
+    FROM community_comments c
+    LEFT JOIN community_profile_projection p ON p.user_id=c.author_id`;
+
+type PostCommentRow = { id: string; author_id: string; parent_id: string | null; body: string; created_at: Date; author_name: string };
+const postCommentJson = (row: PostCommentRow) => ({
+  id: row.id,
+  authorId: row.author_id,
+  authorName: row.author_name,
+  parentId: row.parent_id,
+  body: row.body,
+  createdAt: row.created_at.toISOString(),
+});
+
+/**
+ * A comment thread is exactly as visible as the post it hangs under. Asking for
+ * it by id used to be the way around that - a friends-only post answered anybody
+ * who knew the uuid - so both routes now ask the question the feed asks, plus
+ * the author, who can always read under their own post.
+ */
+const postReadableWhere = (postParam: string, viewerParam: string) =>
+  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+
+app.get('/v1/community/posts/:id/comments', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const postId = z.string().uuid().parse((request.params as { id: string }).id);
+    const post = await db.query(`SELECT 1 FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Oldest first: a thread reads top to bottom, and the app appends a comment
+    // it has just written to the end of the list it is already holding.
+    const rows = await db.query<PostCommentRow>(
+      `${POST_COMMENT_SELECT} WHERE c.post_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+      [postId],
+    );
+    return { data: rows.rows.map(postCommentJson) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENTS_FAILED', message: 'Yorumlar yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/posts/:id/comments', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const restricted = await activeRestriction(userId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const postId = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = commentBody.parse(request.body);
+    const post = await db.query(`SELECT p.comments_enabled FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    if (!(post.rows[0] as { comments_enabled: boolean }).comments_enabled) {
+      return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Yorumlar kapalı.' } });
+    }
+    const inserted = await db.query<{ id: string }>(
+      'INSERT INTO community_comments(post_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
+      [postId, userId, input.parentId ?? null, input.body],
+    );
+    const row = await db.query<PostCommentRow>(`${POST_COMMENT_SELECT} WHERE c.id=$1`, [inserted.rows[0]!.id]);
     // Ses Ver: the first comment. Everything else about commenting is counted
     // elsewhere; this is the one badge the act itself earns.
     void grantInBackground('comment', async (journey) => { await touchStreak(journey, userId); await awardBadge(journey, userId, 'vocalist'); });
-    return reply.code(201).send({data:result.rows[0]});}catch{return reply.code(400).send({error:{code:'COMMENT_CREATE_FAILED',message:'Yorum gönderilemedi.'}});}});
-app.delete('/v1/community/comments/:id',async(request,reply)=>{try{const userId=await viewer(request.headers);const id=z.string().uuid().parse((request.params as {id:string}).id);await db.query('UPDATE community_comments SET deleted_at=now(),moderation_state=\'removed\' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',[id,userId]);return reply.code(204).send();}catch{return reply.code(400).send();}});
+    return reply.code(201).send({ data: postCommentJson(row.rows[0]!) });
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_CREATE_FAILED', message: 'Yorum gönderilemedi.' } });
+  }
+});
+app.delete('/v1/community/comments/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    // Two people can take a comment down: whoever wrote it, and whoever owns the
+    // post it is sitting under. The app has always offered the post owner that
+    // button; the server used to accept the request, change nothing and answer
+    // 204, so the comment came back on the next open.
+    const removed = await db.query(
+      `UPDATE community_comments c SET deleted_at=now(),moderation_state='removed'
+        WHERE c.id=$1 AND c.deleted_at IS NULL
+          AND (c.author_id=$2 OR EXISTS(SELECT 1 FROM community_posts p WHERE p.id=c.post_id AND p.author_id=$2))
+        RETURNING c.id`,
+      [id, userId],
+    );
+    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
+  }
+});
 app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<{id:string;title:string;description:string;price:string;city:string|null;region_code:string|null;created_at:Date;seller_name:string}>(`SELECT l.id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,COALESCE(cp.display_name,'TurkSquare üyesi') seller_name FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;return{data:page.map((l)=>({id:l.id,title:l.title,description:l.description,price:Number(l.price),category:'Diğer',condition:'',location:[l.city,l.region_code].filter(Boolean).join(', '),sellerName:l.seller_name,imageUrl:'',isSaved:false,createdAt:l.created_at.toISOString()})),meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 app.post('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingBody.parse(request.body);const row=await db.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'LISTING_CREATE_FAILED'}});}});
 app.post('/v1/marketplace/listings/:id/auction',async(request,reply)=>{try{const userId=await viewer(request.headers);const listingId=z.string().uuid().parse((request.params as {id:string}).id);const input=auctionBody.parse(request.body);const eligible=await db.query('SELECT 1 FROM member_capabilities WHERE user_id=$1 AND auction_seller_eligible',[userId]);if(!eligible.rows[0])return reply.code(403).send({error:{code:'VERIFICATION_REQUIRED',message:'İhale açmak için Onaylı Hesap rozeti gerekir.'}});const row=await db.query<{id:string}>('INSERT INTO marketplace_auctions(listing_id,seller_id,starting_price,minimum_increment,starts_at,ends_at) SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND owner_id=$2 AND status=\'active\') RETURNING id',[listingId,userId,input.startingPrice,input.minimumIncrement,input.startsAt,input.endsAt]);if(!row.rows[0])return reply.code(404).send({error:{code:'LISTING_NOT_AVAILABLE'}});return reply.code(201).send({data:row.rows[0]});}catch{return reply.code(400).send({error:{code:'AUCTION_CREATE_FAILED'}});}});
