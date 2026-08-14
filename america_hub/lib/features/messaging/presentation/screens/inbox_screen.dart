@@ -5,10 +5,14 @@ import '../../../../core/constants/app_colors.dart';
 import '../../application/direct_conversation_controller.dart';
 import '../../application/messaging_controller.dart';
 import '../../domain/entities/conversation.dart';
+import '../../domain/repositories/direct_message_repository.dart';
 import '../../domain/repositories/message_moderation_repository.dart';
+import '../../../profile/application/friendship_controller.dart';
+import '../../../profile/domain/entities/friendship.dart';
 import 'conversation_screen.dart';
 import '../widgets/create_group_sheet.dart';
 import '../widgets/join_requests_sheet.dart';
+import '../widgets/new_conversation_sheet.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({
@@ -16,6 +20,8 @@ class InboxScreen extends StatefulWidget {
     required this.controller,
     required this.createConversationController,
     required this.moderationRepository,
+    required this.friendshipController,
+    required this.directMessageRepository,
   });
 
   final MessagingController controller;
@@ -27,6 +33,13 @@ class InboxScreen extends StatefulWidget {
   /// Also passed straight through: reporting and blocking belong to an open
   /// thread, not to the list of them.
   final MessageModerationRepository moderationRepository;
+
+  /// Yeni sohbetin kiminle açılacağını arkadaş listesi belirliyor.
+  final FriendshipController friendshipController;
+
+  /// Sohbeti açan çağrı burada: sunucu aynı iki kişi için var olan sohbeti
+  /// döndürüyor, o yüzden ikinci kez basmak ikinci bir oda açmıyor.
+  final DirectMessageRepository directMessageRepository;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -47,6 +60,44 @@ class _InboxScreenState extends State<InboxScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Arkadaşı seç, sohbeti aç, içine gir.
+  ///
+  /// Sunucudaki uç ve depo metodu aylardır duruyordu; onu çağıran hiçbir yer
+  /// yoktu, düğme "yakında" diyordu.
+  Future<void> _startConversation() async {
+    HapticFeedback.selectionClick();
+    final friend = await showModalBottomSheet<FriendSummary>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => NewConversationSheet(
+        controller: widget.friendshipController,
+      ),
+    );
+    if (friend == null || !mounted) return;
+    final Conversation conversation;
+    try {
+      conversation = await widget.directMessageRepository
+          .openDirectConversation(friend.userId);
+    } catch (_) {
+      if (mounted) _showSnackBar('Sohbet şu anda açılamadı.');
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ConversationScreen(
+          conversation: conversation,
+          createController: widget.createConversationController,
+          moderationRepository: widget.moderationRepository,
+        ),
+      ),
+    );
+    // Yeni sohbet listede yok; dönüşte liste tazeleniyor.
+    if (mounted) await widget.controller.load();
   }
 
   void _showSnackBar(String message) {
@@ -148,7 +199,7 @@ class _InboxScreenState extends State<InboxScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: IconButton(
-                  onPressed: () => _showSnackBar('Yeni sohbet özelliği yakında'),
+                  onPressed: _startConversation,
                   icon: const Icon(Icons.edit_rounded,
                       color: Color(0xFF6C5CE7)),
                 ),
