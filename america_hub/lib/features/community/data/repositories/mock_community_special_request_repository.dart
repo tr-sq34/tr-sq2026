@@ -26,10 +26,6 @@ class MockCommunitySpecialRequestRepository implements CommunitySpecialRequestRe
   Future<void> updateStatus(String requestId, CommunitySpecialRequestStatus status) async {
     final index = _requests.indexWhere((item) => item.id == requestId);
     if (index < 0) throw StateError('İstek bulunamadı.');
-    final previous = _requests[index];
-    _requests[index] = CommunitySpecialRequest(
-      id: previous.id, postId: previous.postId, type: previous.type, senderId: previous.senderId,
-      message: previous.message, createdAt: previous.createdAt, status: status,
-    );
+    _requests[index] = _requests[index].copyWith(status: status);
   }
 }

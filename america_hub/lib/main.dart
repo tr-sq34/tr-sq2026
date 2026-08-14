@@ -19,6 +19,7 @@ import 'features/community/application/media_upload_controller.dart';
 import 'features/community/application/community_special_request_controller.dart';
 import 'features/community/data/repositories/mock_community_repository.dart';
 import 'features/community/data/repositories/api_community_repository.dart';
+import 'features/community/data/repositories/api_community_special_request_repository.dart';
 import 'features/community/domain/repositories/community_repository.dart';
 import 'features/community/data/repositories/mock_community_comments_repository.dart';
 import 'features/community/data/repositories/api_community_comments_repository.dart';
@@ -223,8 +224,13 @@ Future<void> main() async {
     repository: mediaUploadRepository,
   );
 
+  // Sahte depo iki kipte de bağlıydı: gerçek kipte de istek, gönderenin kendi
+  // belleğindeki listeye yazılıp uygulamayla birlikte yok oluyordu. Paylaşımın
+  // sahibi hiçbir zaman haberdar olmadı.
   final specialRequestController = CommunitySpecialRequestController(
-    repository: MockCommunitySpecialRequestRepository(),
+    repository: useMockServices
+        ? MockCommunitySpecialRequestRepository()
+        : ApiCommunitySpecialRequestRepository(client: communityApiClient),
   );
 
   final eventsController = EventsController(

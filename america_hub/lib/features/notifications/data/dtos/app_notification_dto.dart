@@ -6,9 +6,11 @@ import '../../domain/entities/app_notification.dart';
 /// kişi. Türkçe metin burada yazılıyor - uygulamanın geri kalanındaki bütün
 /// kullanıcıya görünen yazılar gibi.
 ///
-/// [actorName] yalnızca yorumlarda dolu geliyor. Beğeni ve kaydetme kimseyi
-/// adıyla anmıyor: satıcı ilanını kaç kişinin kaydettiğini görüyor, kimlerin
-/// kaydettiğini değil. Sunucu bu ismi zaten göndermiyor, burada da uydurulmuyor.
+/// [actorName] yalnızca yorumlarda ve isteklerde dolu geliyor. Beğeni ve
+/// kaydetme kimseyi adıyla anmıyor: satıcı ilanını kaç kişinin kaydettiğini
+/// görüyor, kimlerin kaydettiğini değil. İstek bunun tersi: karşı taraf mesaj
+/// yazıp tanışmak istediğini kendisi söylüyor. Sunucu göndermediği yerde burada
+/// da uydurulmuyor.
 class AppNotificationDto {
   const AppNotificationDto({
     required this.id,
@@ -53,10 +55,10 @@ class AppNotificationDto {
       body: _bodyOf(type),
       createdAt: createdAt,
       deepLink: Uri.parse(
-        type == AppNotificationType.postComment ||
-                type == AppNotificationType.postLike
-            ? 'turksquare://post/$subjectId'
-            : 'turksquare://listing/$subjectId',
+        type == AppNotificationType.listingSaved ||
+                type == AppNotificationType.listingLiked
+            ? 'turksquare://listing/$subjectId'
+            : 'turksquare://post/$subjectId',
       ),
       isRead: isRead,
     );
@@ -67,6 +69,7 @@ class AppNotificationDto {
     'post_like' => AppNotificationType.postLike,
     'listing_save' => AppNotificationType.listingSaved,
     'listing_like' => AppNotificationType.listingLiked,
+    'special_request' => AppNotificationType.specialRequest,
     _ => AppNotificationType.system,
   };
 
@@ -75,6 +78,7 @@ class AppNotificationDto {
     AppNotificationType.postLike => 'Paylaşımın beğenildi',
     AppNotificationType.listingSaved => 'İlanın kaydedildi',
     AppNotificationType.listingLiked => 'İlanın beğenildi',
+    AppNotificationType.specialRequest => 'Yeni istek',
     _ => 'Bildirim',
   };
 
@@ -92,6 +96,13 @@ class AppNotificationDto {
         '${_people(actorCount)} "$subject" ilanını kaydetti.',
       AppNotificationType.listingLiked =>
         '${_people(actorCount)} "$subject" ilanını beğendi.',
+      // Burada sayı bekleyen istek sayısı: sahibi hepsini yanıtladığında satır
+      // tamamen kayboluyor, çünkü yapılacak bir şey kalmıyor.
+      AppNotificationType.specialRequest =>
+        actorCount > 1
+            ? '${actorName ?? 'Bir üye'} ve ${actorCount - 1} kişi daha '
+                  '"$subject" paylaşımına istek gönderdi.'
+            : '${actorName ?? 'Bir üye'} "$subject" paylaşımına istek gönderdi.',
       _ => subject,
     };
   }
