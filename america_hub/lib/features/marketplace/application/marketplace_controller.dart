@@ -18,6 +18,11 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
   String _category = 'all';
   MarketplaceSort _sort = MarketplaceSort.newest;
   MarketplaceFeed _feed = MarketplaceFeed.forYou;
+
+  /// "Kaydedilenler" bir sayfa değil, açık bir süzgeç: nereden açıldıysa orada
+  /// kalıyor ve üstteki şeritten tek dokunuşla kapanıyor. Kaydettiğini
+  /// bulamayan bir üye için kaydetmenin bir anlamı yok.
+  bool _savedOnly = false;
   MarketplaceSellerOverview? overview;
   MarketplaceSellerAnalytics? analytics;
   MarketplaceListingDraft? draft;
@@ -25,41 +30,49 @@ class MarketplaceController extends PagedController<MarketplaceListing> {
   MarketplaceFeed get feed => _feed;
   String get category => _category;
   MarketplaceSort get sort => _sort;
+  bool get savedOnly => _savedOnly;
   List<MarketplaceListing> get visibleItems {
     final query = _query.trim().toLowerCase();
     final result = items.where((listing) {
       final matches = query.isEmpty || listing.title.toLowerCase().contains(query) || listing.location.toLowerCase().contains(query) || listing.category.toLowerCase().contains(query);
       final local = _feed != MarketplaceFeed.local || listing.location.contains('New York') || listing.location.contains('Paterson') || listing.location.contains('Jersey');
-      return matches && local && (_category == 'all' || listing.category == _category);
+      return matches && local && (_category == 'all' || listing.category == _category) && (!_savedOnly || listing.isSaved);
     }).toList(growable: false);
     result.sort((a, b) => switch (_sort) { MarketplaceSort.newest => (b.createdAt ?? DateTime(2000)).compareTo(a.createdAt ?? DateTime(2000)), MarketplaceSort.priceLowToHigh => a.price.compareTo(b.price), MarketplaceSort.priceHighToLow => b.price.compareTo(a.price) });
     return result;
   }
 
   void selectFeed(MarketplaceFeed value) { _feed = value; notifyListeners(); }
-  void updateFilters({String? query, String? category, MarketplaceSort? sort}) { _query = query ?? _query; _category = category ?? _category; _sort = sort ?? _sort; notifyListeners(); }
+  void updateFilters({String? query, String? category, MarketplaceSort? sort, bool? savedOnly}) { _query = query ?? _query; _category = category ?? _category; _sort = sort ?? _sort; _savedOnly = savedOnly ?? _savedOnly; notifyListeners(); }
+  /// Dokunuş anında görünüyor, sunucunun cevabı gelince yerini gerçeğine
+  /// bırakıyor: sayaç bizim tahminimiz değil, kaç kişinin dokunduğu.
+  /// Ulaşamazsak ilan eski haline dönüyor, olmamış bir şey olmuş gibi durmuyor.
+  Future<void> _applyReaction(String listingId, MarketplaceListing optimistic, Future<MarketplaceListing> Function() send) async {
+    final item = items.where((value) => value.id == listingId).firstOrNull;
+    if (item == null) return;
+    void put(MarketplaceListing value) => replaceItems([for (final current in items) if (current.id == listingId) value else current]);
+    put(optimistic);
+    try { put(await send()); } catch (_) { put(item); }
+  }
+
   Future<void> toggleSaved(String listingId) async {
     final item = items.where((value) => value.id == listingId).firstOrNull;
     if (item == null) return;
-    final optimistic = item.copyWith(isSaved: !item.isSaved);
-    replaceItems([for (final value in items) if (value.id == listingId) optimistic else value]);
-    try { await _repository.setSaved(listingId, optimistic.isSaved); } catch (_) { replaceItems([for (final value in items) if (value.id == listingId) item else value]); }
+    final saved = !item.isSaved;
+    await _applyReaction(listingId, item.copyWith(isSaved: saved), () => _repository.setSaved(listingId, saved));
   }
 
   Future<void> toggleLiked(String listingId) async {
     final item = items.where((value) => value.id == listingId).firstOrNull;
     if (item == null) return;
-    final optimistic = item.copyWith(isLiked: !item.isLiked, likeCount: item.likeCount + (item.isLiked ? -1 : 1));
-    replaceItems([for (final value in items) if (value.id == listingId) optimistic else value]);
-    try { await _repository.setLiked(listingId, optimistic.isLiked); } catch (_) { replaceItems([for (final value in items) if (value.id == listingId) item else value]); }
+    final liked = !item.isLiked;
+    await _applyReaction(listingId, item.copyWith(isLiked: liked, likeCount: item.likeCount + (liked ? 1 : -1)), () => _repository.setLiked(listingId, liked));
   }
 
   Future<void> registerShare(String listingId) async {
     final item = items.where((value) => value.id == listingId).firstOrNull;
     if (item == null) return;
-    final optimistic = item.copyWith(shareCount: item.shareCount + 1);
-    replaceItems([for (final value in items) if (value.id == listingId) optimistic else value]);
-    try { await _repository.registerShare(listingId); } catch (_) { replaceItems([for (final value in items) if (value.id == listingId) item else value]); }
+    await _applyReaction(listingId, item.copyWith(shareCount: item.shareCount + 1), () => _repository.registerShare(listingId));
   }
 
   Future<void> loadSellerOverview() async { overview = await _repository.getSellerOverview(); notifyListeners(); }

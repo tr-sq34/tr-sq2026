@@ -11,11 +11,24 @@ class MarketplaceListingDto {
     required this.sellerName,
     required this.imageUrl,
     required this.isSaved,
+    this.sellerId = '',
+    this.description = '',
+    this.isLiked = false,
+    this.likeCount = 0,
+    this.shareCount = 0,
     this.createdAt,
   });
   final String id, title, category, condition, location, sellerName, imageUrl;
   final double price;
   final bool isSaved;
+
+  /// İlanın sahibi. Bunu okumadan her ilan aynı varsayılan kimliğe ait
+  /// görünüyordu; ekran kendi ilanını yabancınınkinden ayıramıyordu.
+  final String sellerId;
+  final String description;
+  final bool isLiked;
+  final int likeCount;
+  final int shareCount;
   final DateTime? createdAt;
 
   factory MarketplaceListingDto.fromJson(Map<String, dynamic> json) =>
@@ -29,6 +42,11 @@ class MarketplaceListingDto {
         sellerName: json['sellerName'] as String? ?? '',
         imageUrl: json['imageUrl'] as String? ?? '',
         isSaved: json['isSaved'] as bool? ?? false,
+        sellerId: json['sellerId'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        isLiked: json['isLiked'] as bool? ?? false,
+        likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
+        shareCount: (json['shareCount'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? ''),
       );
 
@@ -43,5 +61,10 @@ class MarketplaceListingDto {
     imageUrl: imageUrl,
     isSaved: isSaved,
     createdAt: createdAt,
+    sellerId: sellerId.isEmpty ? 'user-demo' : sellerId,
+    description: description,
+    isLiked: isLiked,
+    likeCount: likeCount,
+    shareCount: shareCount,
   );
 }
