@@ -422,6 +422,11 @@ app.put('/v1/community/posts/:id/reactions/:kind', async (request, reply) => {
   try { const userId = await viewer(request.headers); const postId = z.string().uuid().parse((request.params as { id: string }).id); const kind = z.enum(['like','save']).parse((request.params as { kind: string }).kind); const input = interactionBody.parse(request.body);
     if (input.enabled) await db.query('INSERT INTO post_reactions(post_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL) ON CONFLICT DO NOTHING', [postId,userId,kind]);
     else await db.query('DELETE FROM post_reactions WHERE post_id=$1 AND actor_id=$2 AND kind=$3', [postId,userId,kind]);
+    // A save is private - the member is filing the post away for themselves, not
+    // telling the author anything - so only a like reaches the bell. Nothing is
+    // deleted on un-liking either: the notification counts its people live, so
+    // the number drops on its own and the line disappears when it hits zero.
+    if (input.enabled && kind === 'like') notifyOwner('post_like', postId, userId);
     // Gozcu wants five *different* posts, so the counter is a DISTINCT count and
     // not a tally of taps. Un-reacting therefore walks the progress back, which
     // is the honest reading of "five posts you interacted with".
@@ -635,6 +640,7 @@ app.post('/v1/community/posts/:id/comments', { config: { rateLimit: { max: 20, t
       [postId, userId, input.parentId ?? null, input.body],
     );
     const row = await db.query<PostCommentRow>(`${postCommentSelect('$2')} WHERE c.id=$1`, [inserted.rows[0]!.id, userId]);
+    notifyOwner('post_comment', postId, userId);
     // Ses Ver: the first comment. Everything else about commenting is counted
     // elsewhere; this is the one badge the act itself earns.
     void grantInBackground('comment', async (journey) => { await touchStreak(journey, userId); await awardBadge(journey, userId, 'vocalist'); });
@@ -852,6 +858,9 @@ app.put('/v1/marketplace/listings/:id/reactions/:kind', async (request, reply) =
     // answer as the first one.
     if (input.enabled) await db.query("INSERT INTO marketplace_listing_reactions(listing_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM marketplace_listings WHERE id=$1 AND status='active') ON CONFLICT DO NOTHING", [listingId, userId, kind]);
     else await db.query('DELETE FROM marketplace_listing_reactions WHERE listing_id=$1 AND actor_id=$2 AND kind=$3', [listingId, userId, kind]);
+    // The seller learns that somebody saved it, never who. That is the same
+    // line the counts on the card already draw, and the bell does not cross it.
+    if (input.enabled) notifyOwner(kind === 'save' ? 'listing_save' : 'listing_like', listingId, userId);
     const listing = await readListing(listingId, userId);
     if (!listing) return reply.code(404).send({ error: { code: 'LISTING_NOT_AVAILABLE', message: 'İlan bulunamadı.' } });
     return { data: await listingJson(listing) };
@@ -1527,6 +1536,123 @@ const leaderboardQuery = z.object({
   scope: z.enum(['city', 'region', 'global']).default('city'),
   window: z.enum(['week', 'all']).default('week'),
   limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+/**
+ * Where each kind of notification finds its recipient.
+ *
+ * The owner is looked up inside the insert rather than fetched first, so there
+ * is no window where the post is deleted between the two statements and a
+ * notification lands for something that no longer exists.
+ */
+const NOTIFICATION_SUBJECTS = {
+  post_comment: 'SELECT p.author_id,p.id FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL',
+  post_like: 'SELECT p.author_id,p.id FROM community_posts p WHERE p.id=$1 AND p.deleted_at IS NULL',
+  listing_save: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
+  listing_like: "SELECT l.owner_id,l.id FROM marketplace_listings l WHERE l.id=$1 AND l.status='active'",
+} as const;
+type NotificationKind = keyof typeof NOTIFICATION_SUBJECTS;
+
+/// Like a badge, a notification is a side effect: it must never be the reason a
+/// comment fails to post. Fire and forget, logged on failure. The `owner<>$2`
+/// clause is what keeps the bell from telling members about their own taps.
+function notifyOwner(kind: NotificationKind, subjectId: string, actorId: string) {
+  void db.query(
+    `INSERT INTO member_notifications(user_id,kind,subject_id,last_actor_id)
+     SELECT owner,$3,subject,$2 FROM (${NOTIFICATION_SUBJECTS[kind]}) s(owner,subject) WHERE owner<>$2
+     ON CONFLICT(user_id,kind,subject_id) DO UPDATE SET last_actor_id=EXCLUDED.last_actor_id,updated_at=now(),read_at=NULL`,
+    [subjectId, actorId, kind],
+  ).catch((error) => app.log.warn({ err: error, kind }, 'Notification skipped'));
+}
+
+type NotificationRow = {
+  id: string;
+  kind: NotificationKind;
+  subject_id: string;
+  actor_name: string;
+  actor_count: string;
+  subject_title: string | null;
+  updated_at: Date;
+  read_at: Date | null;
+};
+
+/**
+ * The bell.
+ *
+ * Two things are computed here rather than stored. The number of people is
+ * counted live in the table the act lives in, so unliking takes it back down
+ * instead of leaving a permanent "3 kişi beğendi" behind. And the subject's
+ * own title is read live too, so a notification whose post has since been
+ * deleted - or whose listing was taken down - simply is not in the answer,
+ * rather than being a line that opens onto nothing.
+ *
+ * The actor's name is sent only for comments. A comment is public writing and
+ * carries its author's name anyway. A like and a save do not: the rest of this
+ * service refuses to answer "who saved this listing" and this route is not a
+ * back door into that question.
+ */
+app.get('/v1/notifications', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query<NotificationRow>(
+      `SELECT n.id,n.kind,n.subject_id,n.updated_at,n.read_at,
+         COALESCE(cp.display_name,'TurkSquare üyesi') actor_name,
+         CASE n.kind
+           WHEN 'post_comment' THEN (SELECT count(DISTINCT c.author_id) FROM community_comments c WHERE c.post_id=n.subject_id AND c.deleted_at IS NULL AND c.moderation_state='active' AND c.author_id<>n.user_id)
+           WHEN 'post_like' THEN (SELECT count(*) FROM post_reactions x WHERE x.post_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
+           WHEN 'listing_save' THEN (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='save' AND x.actor_id<>n.user_id)
+           ELSE (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=n.subject_id AND x.kind='like' AND x.actor_id<>n.user_id)
+         END actor_count,
+         CASE WHEN n.kind IN ('post_comment','post_like')
+           THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
+           ELSE (SELECT l.title FROM marketplace_listings l WHERE l.id=n.subject_id AND l.status<>'draft')
+         END subject_title
+       FROM member_notifications n
+       LEFT JOIN community_profile_projection cp ON cp.user_id=n.last_actor_id
+       WHERE n.user_id=$1
+       ORDER BY n.updated_at DESC
+       LIMIT 60`,
+      [userId],
+    );
+    const data = rows.rows
+      .filter((row) => row.subject_title !== null && Number(row.actor_count) > 0)
+      .map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        subjectId: row.subject_id,
+        subjectTitle: row.subject_title,
+        actorCount: Number(row.actor_count),
+        actorName: row.kind === 'post_comment' ? row.actor_name : null,
+        createdAt: row.updated_at.toISOString(),
+        isRead: row.read_at !== null,
+      }));
+    return { data };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Bildirimler yüklenemedi.' } });
+  }
+});
+
+app.put('/v1/notifications/read-all', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    await db.query('UPDATE member_notifications SET read_at=now() WHERE user_id=$1 AND read_at IS NULL', [userId]);
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NOTIFICATION_READ_FAILED', message: 'Bildirim güncellenemedi.' } });
+  }
+});
+
+app.put('/v1/notifications/:id/read', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    // Scoped to the viewer, so an id guessed from somebody else's inbox marks
+    // nothing. Already-read rows keep their first timestamp.
+    await db.query('UPDATE member_notifications SET read_at=now() WHERE id=$1 AND user_id=$2 AND read_at IS NULL', [id, userId]);
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NOTIFICATION_READ_FAILED', message: 'Bildirim güncellenemedi.' } });
+  }
 });
 
 /// A badge is only ever granted as a side effect of something the member did,

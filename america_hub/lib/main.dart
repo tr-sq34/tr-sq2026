@@ -72,6 +72,7 @@ import 'features/promotions/application/promotions_controller.dart';
 import 'features/promotions/data/repositories/api_promotion_repository.dart';
 import 'features/promotions/data/repositories/mock_promotion_repository.dart';
 import 'features/promotions/domain/repositories/promotion_repository.dart';
+import 'features/notifications/data/repositories/api_notification_repository.dart';
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/safety/application/sos_controller.dart';
 import 'features/safety/data/sos_repository.dart';
@@ -330,10 +331,12 @@ Future<void> main() async {
     repository: ApiSosRepository(client: communityApiClient),
   );
 
-  // Deliberately empty on both sides of the mock flag: no service publishes
-  // member notifications yet, so the bell stays at zero until one does.
+  // Zil artık gerçek bir kaynağa bağlı. Sahte kipte hâlâ boş: uydurma bir
+  // "Yeni eşleşme isteği", hiç bildirim olmamasından daha kötü.
   final notificationsController = NotificationsController(
-    repository: const EmptyNotificationRepository(),
+    repository: useMockServices
+        ? const EmptyNotificationRepository()
+        : ApiNotificationRepository(client: communityApiClient),
   );
 
   runApp(

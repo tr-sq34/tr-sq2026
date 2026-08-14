@@ -1,4 +1,4 @@
-enum AppNotificationType { specialRequest, postComment, postLike, eventReminder, system }
+enum AppNotificationType { specialRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, system }
 
 class AppNotification {
   const AppNotification({
