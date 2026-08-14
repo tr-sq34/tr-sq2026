@@ -3766,6 +3766,14 @@ const gateworkForumCategoryPatch = z.object({
   reason: z.string().trim().min(5).max(500),
 }).refine((value) => value.title !== undefined || value.emoji !== undefined || value.description !== undefined || value.ordinal !== undefined || value.isActive !== undefined);
 
+// The whole order at once, like the promotion one: setting ordinals one row at
+// a time leaves the list briefly holding two categories with the same number,
+// and the tie is broken by title - so the forum reshuffles itself mid-edit.
+const gateworkForumCategoryOrder = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(60),
+  reason: z.string().trim().min(5).max(500),
+});
+
 const gateworkForumTopicState = z.object({
   isPinned: z.boolean().optional(),
   isLocked: z.boolean().optional(),
@@ -3858,6 +3866,48 @@ app.patch('/v1/internal/gatework/forum/categories/:id', { config: { rateLimit: {
   }
 });
 
+/// The order the sections appear in, for members and here. Both the app's list
+/// and the console's read ORDER BY ordinal, so this is the one write that
+/// decides what people see first when they open the forum.
+app.put('/v1/internal/gatework/forum/categories/order', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, FORUM_EDIT_ROLES);
+    const input = gateworkForumCategoryOrder.parse(request.body);
+    // A repeated id would give one category two positions and steal one from
+    // another, and the row count check below would still pass.
+    if (new Set(input.ids).size !== input.ids.length) throw Error('DUPLICATE_ID');
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `UPDATE forum_categories c SET ordinal=v.rank
+         FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id,rank)
+        WHERE c.id=v.id`,
+      [input.ids],
+    );
+    // A short count means the console is ordering a list that no longer
+    // matches the table; applying the rest would order a forum nobody saw.
+    if (updated.rowCount !== input.ids.length) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'FORUM_ORDER_STALE', message: 'Kategori listesi değişmiş. Sayfayı yenileyip sıralamayı tekrar kaydet.' } });
+    }
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'forum_category.reorder', targetType: 'forum_category',
+      targetId: input.ids[0]!, reason: `${input.reason} (${input.ids.length} kategori)`, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return { data: { ordered: updated.rowCount } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'FORUM_ORDER_REJECTED', message: 'Sıralama kaydedilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
 // The member-facing topic list is not reusable here: it filters to active rows
 // and answers a member token. An operator has to be able to reach the topic that
 // is already hidden, which is usually the one they are looking for.
@@ -3873,8 +3923,12 @@ app.get('/v1/internal/gatework/forum/topics', async (request, reply) => {
     const actor = await gateworkActor(request.headers);
     requireGateworkRole(actor, [...FORUM_MODERATE_ROLES, 'content_editor', 'analyst', 'auditor']);
     const input = gateworkForumTopicsQuery.parse(request.query);
-    const rows = await db.query<{ id: string; title: string; category_title: string; author_id: string; author_name: string | null; reply_count: number; view_count: string; is_pinned: boolean; is_locked: boolean; moderation_state: string; created_at: Date; last_activity_at: Date }>(
-      `SELECT t.id,t.title,c.title category_title,t.author_id,p.display_name author_name,
+    const rows = await db.query<{ id: string; title: string; category_id: string; category_title: string; author_id: string; author_name: string | null; excerpt: string; reply_count: number; view_count: string; is_pinned: boolean; is_locked: boolean; moderation_state: string; created_at: Date; last_activity_at: Date }>(
+      // An excerpt rather than the whole body: locking a thread is a judgement
+      // about what it says, and a title alone does not carry that. Truncated
+      // because fifty full topics is half a megabyte to read one paragraph of.
+      `SELECT t.id,t.title,t.category_id,c.title category_title,t.author_id,p.display_name author_name,
+              left(t.body,600) excerpt,
               t.reply_count,t.view_count,t.is_pinned,t.is_locked,t.moderation_state,
               t.created_at,COALESCE(t.last_reply_at,t.created_at) last_activity_at
          FROM forum_topics t
@@ -3890,8 +3944,8 @@ app.get('/v1/internal/gatework/forum/topics', async (request, reply) => {
     );
     return {
       data: rows.rows.map((row) => ({
-        id: row.id, title: row.title, categoryTitle: row.category_title, authorId: row.author_id,
-        authorName: row.author_name, replyCount: row.reply_count, viewCount: Number(row.view_count),
+        id: row.id, title: row.title, categoryId: row.category_id, categoryTitle: row.category_title, authorId: row.author_id,
+        authorName: row.author_name, excerpt: row.excerpt, replyCount: row.reply_count, viewCount: Number(row.view_count),
         isPinned: row.is_pinned, isLocked: row.is_locked, moderationState: row.moderation_state,
         createdAt: row.created_at.toISOString(), lastActivityAt: row.last_activity_at.toISOString(),
       })),
