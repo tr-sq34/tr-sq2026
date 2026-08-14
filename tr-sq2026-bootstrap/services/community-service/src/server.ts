@@ -42,8 +42,13 @@ const mediaPresignBody=z.object({
 });
 const mediaCompleteBody=z.object({uploadId:z.string().uuid()});
 const commentBody=z.object({body:z.string().trim().min(1).max(1000),parentId:z.string().uuid().optional()});
-const listingBody=z.object({title:z.string().trim().min(3).max(140),description:z.string().trim().min(10).max(4000),price:z.coerce.number().nonnegative(),city:z.string().trim().min(2).max(100).optional(),regionCode:z.string().regex(/^[A-Za-z]{2}$/).optional(),mediaIds:z.array(z.string().uuid()).max(10).optional()});
-const listingQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(20),sellerId:z.string().uuid().optional()});
+// The sections Çarşı actually has. Keys, not labels: the chip's Turkish wording
+// belongs to the app and can change without touching a stored row. Anything the
+// app does not know about would be a listing nobody can reach, so this is a
+// closed list on both sides - see migration 030.
+const LISTING_CATEGORIES=['vehicle','rental','home','electronics','collectible','art','other'] as const;
+const listingBody=z.object({title:z.string().trim().min(3).max(140),description:z.string().trim().min(10).max(4000),price:z.coerce.number().nonnegative(),category:z.enum(LISTING_CATEGORIES).default('other'),city:z.string().trim().min(2).max(100).optional(),regionCode:z.string().regex(/^[A-Za-z]{2}$/).optional(),mediaIds:z.array(z.string().uuid()).max(10).optional()});
+const listingQuery=z.object({cursor:z.string().max(128).optional(),limit:z.coerce.number().int().min(1).max(50).default(20),sellerId:z.string().uuid().optional(),category:z.enum(LISTING_CATEGORIES).optional()});
 const auctionBody=z.object({startingPrice:z.coerce.number().nonnegative(),minimumIncrement:z.coerce.number().positive(),startsAt:z.string().datetime(),endsAt:z.string().datetime()}).refine((v)=>Date.parse(v.endsAt)>Date.parse(v.startsAt));
 const bidBody=z.object({amount:z.coerce.number().positive()});
 const gateworkSystemAccountBody=z.object({principalId:z.string().uuid(),displayName:z.string().trim().min(2).max(100),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
@@ -911,7 +916,7 @@ app.put('/v1/community/requests/:id/status', async (request, reply) => {
  * never which eleven: wanting a used sofa is not an introduction the buyer
  * agreed to make.
  */
-const listingColumns = (viewerParam: string) => `l.id,l.owner_id,l.title,l.description,l.price,l.city,l.region_code,l.created_at,
+const listingColumns = (viewerParam: string) => `l.id,l.owner_id,l.title,l.description,l.price,l.category,l.city,l.region_code,l.created_at,
   COALESCE(cp.display_name,'TurkSquare üyesi') seller_name,
   (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.kind='like') like_count,
   (SELECT count(*) FROM marketplace_listing_reactions x WHERE x.listing_id=l.id AND x.kind='share') share_count,
@@ -920,7 +925,7 @@ const listingColumns = (viewerParam: string) => `l.id,l.owner_id,l.title,l.descr
   (SELECT json_agg(json_build_object('id',m.id,'safeUrl',m.safe_url,'thumbnailUrl',m.thumbnail_url) ORDER BY r.ordinal) FROM marketplace_listing_media r JOIN media_assets m ON m.id=r.media_id WHERE r.listing_id=l.id AND m.status='ready') media`;
 
 type ListingMediaRow = { id: string; safeUrl: string | null; thumbnailUrl: string | null };
-type ListingRow = { id: string; owner_id: string; title: string; description: string; price: string; city: string | null; region_code: string | null; created_at: Date; seller_name: string; like_count: string; share_count: string; is_saved: boolean; is_liked: boolean; media: ListingMediaRow[] | null };
+type ListingRow = { id: string; owner_id: string; title: string; description: string; price: string; category: string; city: string | null; region_code: string | null; created_at: Date; seller_name: string; like_count: string; share_count: string; is_saved: boolean; is_liked: boolean; media: ListingMediaRow[] | null };
 
 // A photo travels as an id and leaves as a URL that expires. The object store
 // is never addressed directly by the app, so a link copied out of one response
@@ -934,14 +939,15 @@ const listingMediaJson = async (rows: ListingMediaRow[] | null) => Promise.all(
   })),
 );
 
-// Category and condition are still the app's own vocabulary; the table has no
-// column for either, so the card falls back rather than inventing one here.
+// Condition is still the app's own vocabulary and the table has no column for
+// it, so the card gets an empty string rather than a guess. Category is a real
+// column since migration 030 and is passed through as the seller chose it.
 const listingJson = async (l: ListingRow) => {
   const media = await listingMediaJson(l.media);
   // The first photo is the cover. imageUrl stays in the payload because the
   // card only ever draws one, and an empty string there is what the app already
   // reads as "this listing has no photo".
-  return { id:l.id, sellerId:l.owner_id, title:l.title, description:l.description, price:Number(l.price), category:'Diğer', condition:'', location:[l.city,l.region_code].filter(Boolean).join(', '), sellerName:l.seller_name, imageUrl:media[0]?.url ?? '', media, isSaved:l.is_saved, isLiked:l.is_liked, likeCount:Number(l.like_count), shareCount:Number(l.share_count), createdAt:l.created_at.toISOString() };
+  return { id:l.id, sellerId:l.owner_id, title:l.title, description:l.description, price:Number(l.price), category:l.category, condition:'', location:[l.city,l.region_code].filter(Boolean).join(', '), sellerName:l.seller_name, imageUrl:media[0]?.url ?? '', media, isSaved:l.is_saved, isLiked:l.is_liked, likeCount:Number(l.like_count), shareCount:Number(l.share_count), createdAt:l.created_at.toISOString() };
 };
 
 const readListing = async (listingId: string, userId: string) => {
@@ -949,7 +955,7 @@ const readListing = async (listingId: string, userId: string) => {
   return row.rows[0] ?? null;
 };
 
-app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(input.sellerId){params.push(input.sellerId);where+=` AND l.owner_id=$${params.length}`;}if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;const data=await Promise.all(page.map(listingJson));return{data,meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(input.sellerId){params.push(input.sellerId);where+=` AND l.owner_id=$${params.length}`;}if(input.category){params.push(input.category);where+=` AND l.category=$${params.length}`;}if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;const data=await Promise.all(page.map(listingJson));return{data,meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 
 /**
  * The seller behind a listing.
@@ -1116,7 +1122,7 @@ app.post('/v1/marketplace/listings',async(request,reply)=>{
     const userId=await viewer(request.headers);
     const input=listingBody.parse(request.body);
     await client.query('BEGIN');
-    const row=await client.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,city,region_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',[userId,input.title,input.description,input.price,input.city??null,input.regionCode?.toUpperCase()??null]);
+    const row=await client.query<{id:string}>('INSERT INTO marketplace_listings(owner_id,title,description,price,category,city,region_code) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',[userId,input.title,input.description,input.price,input.category,input.city??null,input.regionCode?.toUpperCase()??null]);
     const id=row.rows[0]!.id;
     if(input.mediaIds?.length){
       const distinct=new Set(input.mediaIds);

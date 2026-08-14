@@ -5,6 +5,7 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/widgets/app_remote_image.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../application/marketplace_controller.dart';
+import '../../domain/entities/marketplace_category.dart';
 import '../../domain/entities/marketplace_listing.dart';
 import '../../domain/entities/marketplace_seller.dart';
 import 'marketplace_seller_profile_screen.dart';
@@ -208,25 +209,18 @@ class MarketplaceFeedView extends StatelessWidget {
           // Açık süzgeç ekranda görünüyor ve kapatması tek dokunuş: aksi halde
           // üye boş bir listeye bakıp Çarşı'da hiç ilan yok sanıyor.
           if (controller.savedOnly) ...[
-            Row(
-              children: [
-                const Icon(
-                  Icons.bookmark_rounded,
-                  size: 18,
-                  color: AppColors.primary,
-                ),
-                const SizedBox(width: 6),
-                const Expanded(
-                  child: Text(
-                    'Kaydedilenler',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => controller.updateFilters(savedOnly: false),
-                  child: const Text('Tüm ilanlar'),
-                ),
-              ],
+            _OpenFilterRow(
+              icon: Icons.bookmark_rounded,
+              label: 'Kaydedilenler',
+              onClear: () => controller.updateFilters(savedOnly: false),
+            ),
+            const SizedBox(height: 4),
+          ],
+          if (controller.category != 'all') ...[
+            _OpenFilterRow(
+              icon: MarketplaceCategory.of(controller.category).icon,
+              label: MarketplaceCategory.labelOf(controller.category),
+              onClear: () => controller.updateFilters(category: 'all'),
             ),
             const SizedBox(height: 4),
           ],
@@ -239,6 +233,13 @@ class MarketplaceFeedView extends StatelessWidget {
                       title: 'Kaydedilen ilan yok',
                       message:
                           'Beğendiğin ilanı kaydet, buradan kolayca geri dön.',
+                    )
+                  : controller.category != 'all'
+                  ? AppEmptyState(
+                      icon: MarketplaceCategory.of(controller.category).icon,
+                      title:
+                          '${MarketplaceCategory.labelOf(controller.category)} bölümünde ilan yok',
+                      message: 'Başka bir bölüme bakmayı dene.',
                     )
                   : const AppEmptyState(
                       icon: Icons.location_off_outlined,
@@ -384,14 +385,6 @@ class MarketplaceCategoriesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const categories = [
-      ('Araçlar', Icons.directions_car_outlined),
-      ('Kiralamalar', Icons.home_outlined),
-      ('Ev & eşya', Icons.chair_outlined),
-      ('Elektronik', Icons.phone_android_outlined),
-      ('Koleksiyon', Icons.collections_bookmark_outlined),
-      ('Sanat & hobi', Icons.brush_outlined),
-    ];
     return Scaffold(
       appBar: AppBar(title: const Text('Kategoriler')),
       body: ListView(
@@ -419,22 +412,24 @@ class MarketplaceCategoriesScreen extends StatelessWidget {
               Navigator.of(context).pop();
             },
           ),
-          const _CategoryRow(
-            label: 'Etkinlik biletleri',
-            icon: Icons.confirmation_number_outlined,
-          ),
+          // "Etkinlik biletleri" satırı buradaydı ve hiçbir yere gitmiyordu:
+          // dokunulabilir görünen, dokunulunca hiçbir şey olmayan bir satır.
+          // Bilet diye bir kayıt yok; olduğu gün geri gelir.
           const Divider(height: 24),
           const Text(
-            'Öne çıkan kategoriler',
+            'Bölümler',
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
           const SizedBox(height: 6),
-          for (final item in categories)
+          // Bu satırların dördü eskiden hiçbir şey süzmüyordu: "Araçlar"a
+          // dokunmak da "Elektronik"e dokunmak da tüm Çarşı'yı geri veriyordu,
+          // çünkü sunucu her ilana aynı kategoriyi yazıyordu.
+          for (final category in MarketplaceCategory.values)
             _CategoryRow(
-              label: item.$1,
-              icon: item.$2,
+              label: category.label,
+              icon: category.icon,
               onTap: () {
-                controller.updateFilters(category: _mapCategory(item.$1));
+                controller.updateFilters(category: category.key);
                 Navigator.of(context).pop();
               },
             ),
@@ -444,11 +439,28 @@ class MarketplaceCategoriesScreen extends StatelessWidget {
   }
 }
 
-String _mapCategory(String label) => switch (label) {
-  'Ev & eşya' => 'Ev & Dekor',
-  'Koleksiyon' => 'Koleksiyon',
-  _ => 'all',
-};
+/// Açık bir süzgeç ve onu kapatan düğme.
+class _OpenFilterRow extends StatelessWidget {
+  const _OpenFilterRow({
+    required this.icon,
+    required this.label,
+    required this.onClear,
+  });
+  final IconData icon;
+  final String label;
+  final VoidCallback onClear;
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 18, color: AppColors.primary),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+      ),
+      TextButton(onPressed: onClear, child: const Text('Tüm ilanlar')),
+    ],
+  );
+}
 
 class _CategoryRow extends StatelessWidget {
   const _CategoryRow({required this.label, required this.icon, this.onTap});
@@ -952,29 +964,30 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
             onAdd: widget.controller.canAttachPhotos ? _pickPhotos : null,
             onRemove: widget.controller.removeDraftPhoto,
           ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: () async {
-              await _save();
-              await widget.controller.analyzeDraft();
-              if (mounted)
-                setState(() {
-                  final draft = widget.controller.draft!;
-                  _title.text = draft.title;
-                  _price.text = draft.price?.toStringAsFixed(0) ?? '';
-                  _description.text = draft.description;
-                });
-            },
-            icon: const Icon(Icons.auto_awesome_rounded),
-            label: const Text('AI ile taslağı doldur'),
-          ),
           const SizedBox(height: 14),
+          // Burada "AI ile taslağı doldur" düğmesi vardı. Fotoğrafa hiç
+          // bakmadan, yalnızca ilan türüne göre başlık, fiyat ve açıklama
+          // uyduruyordu; sattığı arabaya kendiliğinden 8500 yazıyordu. Yerini
+          // aldığı tek gerçek iş buydu: kategoriyi seçmek. Onu da satıcı
+          // seçiyor artık ve seçtiği şey sunucuya gidiyor.
+          _CategoryField(
+            value: MarketplaceCategory.of(widget.controller.draft!.category),
+            onChanged: (category) async {
+              await _save();
+              await widget.controller.updateDraft(
+                widget.controller.draft!.copyWith(category: category.key),
+              );
+              if (mounted) setState(() {});
+            },
+          ),
           _Field(controller: _title, hint: 'Başlık', icon: Icons.title_rounded),
           _Field(
             controller: _price,
             hint: 'Fiyat',
             icon: Icons.sell_outlined,
-            suffixText: 'TL',
+            // Kutuda 'TL' yazıyordu, ilan yayınlanınca aynı sayı listede
+            // "$145" olarak çiziliyordu. Çarşı Amerika'da: para dolar.
+            suffixText: r'$',
             keyboardType: TextInputType.number,
           ),
           _Field(
@@ -1087,6 +1100,81 @@ class _Field extends StatelessWidget {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: const BorderSide(color: AppColors.primary, width: 2),
+        ),
+      ),
+    ),
+  );
+}
+
+/// İlanın hangi bölümde görüneceği. Alıcının Çarşı'da "Araçlar"a dokunduğunda
+/// bu ilanı bulup bulamayacağı buna bakıyor, o yüzden düzenleyicinin en
+/// üstünde ve her zaman dolu.
+class _CategoryField extends StatelessWidget {
+  const _CategoryField({required this.value, required this.onChanged});
+  final MarketplaceCategory value;
+  final ValueChanged<MarketplaceCategory> onChanged;
+
+  Future<void> _pick(BuildContext context) async {
+    final selection = await showModalBottomSheet<MarketplaceCategory>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'İlan hangi bölümde görünsün?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            for (final category in MarketplaceCategory.values)
+              ListTile(
+                leading: Icon(category.icon, color: AppColors.textPrimary),
+                title: Text(category.label),
+                trailing: category == value
+                    ? const Icon(Icons.check_rounded, color: AppColors.primary)
+                    : null,
+                onTap: () => Navigator.of(sheetContext).pop(category),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selection != null) onChanged(selection);
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: InkWell(
+      onTap: () => _pick(context),
+      borderRadius: BorderRadius.circular(16),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Bölüm',
+          prefixIcon: Icon(value.icon, color: AppColors.primary),
+          filled: true,
+          fillColor: const Color(0xFFFCFBFE),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppColors.surfaceBorder),
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                value.label,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const Icon(Icons.expand_more_rounded, color: AppColors.textMuted),
+          ],
         ),
       ),
     ),

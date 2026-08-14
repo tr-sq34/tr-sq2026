@@ -5,10 +5,10 @@ import '../../domain/entities/marketplace_seller.dart';
 
 class MockMarketplaceRepository implements MarketplaceRepository {
   final List<MarketplaceListing> _listings = [
-    MarketplaceListing(id: 'listing-1', title: 'El yapımı çay seti', category: 'Ev & Mutfak', price: 32, condition: 'Yeni gibi', location: 'New York, NY', sellerName: 'Zeynep A.', imageUrl: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=700&q=80'),
-    MarketplaceListing(id: 'listing-2', title: 'Vintage kilim', category: 'Ev & Dekor', price: 145, condition: 'İyi durumda', location: 'Chicago, IL', sellerName: 'Can B.', imageUrl: 'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=700&q=80', isSaved: true),
-    MarketplaceListing(id: 'listing-3', title: 'Türk yemek kitapları', category: 'Kitap', price: 18, condition: 'Yeni gibi', location: 'Austin, TX', sellerName: 'Deniz K.', imageUrl: 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?auto=format&fit=crop&w=700&q=80'),
-    MarketplaceListing(id: 'listing-4', title: 'Tavla seti', category: 'Koleksiyon', price: 54, condition: 'Yeni', location: 'Los Angeles, CA', sellerName: 'Emre T.', imageUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?auto=format&fit=crop&w=700&q=80'),
+    MarketplaceListing(id: 'listing-1', title: 'El yapımı çay seti', category: 'home', price: 32, condition: 'Yeni gibi', location: 'New York, NY', sellerName: 'Zeynep A.', imageUrl: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=700&q=80'),
+    MarketplaceListing(id: 'listing-2', title: 'Vintage kilim', category: 'home', price: 145, condition: 'İyi durumda', location: 'Chicago, IL', sellerName: 'Can B.', imageUrl: 'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=700&q=80', isSaved: true),
+    MarketplaceListing(id: 'listing-3', title: 'Türk yemek kitapları', category: 'collectible', price: 18, condition: 'Yeni gibi', location: 'Austin, TX', sellerName: 'Deniz K.', imageUrl: 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?auto=format&fit=crop&w=700&q=80'),
+    MarketplaceListing(id: 'listing-4', title: 'Tavla seti', category: 'collectible', price: 54, condition: 'Yeni', location: 'Los Angeles, CA', sellerName: 'Emre T.', imageUrl: 'https://images.unsplash.com/photo-1529699211952-734e80c4d42b?auto=format&fit=crop&w=700&q=80'),
   ];
   final List<MarketplaceOffer> _offers = [];
 
@@ -77,7 +77,7 @@ class MockMarketplaceRepository implements MarketplaceRepository {
 
   @override
   Future<MarketplaceListing> publishListing(MarketplaceListingDraft draft) async {
-    final listing = MarketplaceListing(id: 'listing-${DateTime.now().microsecondsSinceEpoch}', title: draft.title, category: draft.category.isEmpty ? 'Diger' : draft.category, price: draft.price ?? 0, condition: draft.fields['condition'] ?? 'Yeni gibi', location: draft.location.isEmpty ? 'New York, NY' : draft.location, sellerName: 'Ahmet Yilmaz', imageUrl: draft.mediaUrls.isEmpty ? 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=700&q=80' : draft.mediaUrls.first, mediaUrls: draft.mediaUrls, description: draft.description, type: draft.type, commentsEnabled: draft.commentsEnabled, createdAt: DateTime.now());
+    final listing = MarketplaceListing(id: 'listing-${DateTime.now().microsecondsSinceEpoch}', title: draft.title, category: draft.category.isEmpty ? 'other' : draft.category, price: draft.price ?? 0, condition: draft.fields['condition'] ?? 'Yeni gibi', location: draft.location.isEmpty ? 'New York, NY' : draft.location, sellerName: 'Ahmet Yilmaz', imageUrl: draft.mediaUrls.isEmpty ? 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=700&q=80' : draft.mediaUrls.first, mediaUrls: draft.mediaUrls, description: draft.description, type: draft.type, commentsEnabled: draft.commentsEnabled, createdAt: DateTime.now());
     _listings.insert(0, listing);
     return listing;
   }
