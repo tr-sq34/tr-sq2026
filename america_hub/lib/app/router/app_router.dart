@@ -167,6 +167,8 @@ class AppRouter {
                   viewerId: authController.user?.id ?? '',
                 ),
             moderationRepository: messageModerationRepository,
+            friendshipController: friendshipController,
+            directMessageRepository: directMessageRepository,
           ),
         );
       case AppRoutes.register:

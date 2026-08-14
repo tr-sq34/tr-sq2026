@@ -86,10 +86,10 @@ class _FakeProfileRepository implements ProfileRepository {
 /// Arkadaşlık deposu: gelen kutusunu ve listeyi testin dikte ettiği hâliyle
 /// verir, yanıtları kaydeder.
 class _FakeFriendships implements FriendshipRepository {
-  _FakeFriendships({this.requests = const [], this.friends = const []});
+  _FakeFriendships({this.requests = const []});
 
   List<FriendRequest> requests;
-  List<FriendSummary> friends;
+  List<FriendSummary> friends = const [];
   final List<String> answers = [];
 
   @override
