@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { gateworkMe, identityLogin } from '@/lib/identity';
-import { setSession } from '@/lib/session';
+import { accessTokenExpiry, setSession } from '@/lib/session';
 
 const inputSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(128) });
 
@@ -10,7 +10,17 @@ export async function POST(request: Request) {
     const input = inputSchema.parse(await request.json());
     const login = await identityLogin(input.email, input.password);
     const member = await gateworkMe(login.accessToken);
-    await setSession({ member, accessToken: login.accessToken, refreshToken: login.refreshToken, issuedAt: Date.now(), expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+    // Two clocks: the session is good for eight hours, the access token inside
+    // it for fifteen minutes. The middleware renews the second one; recording
+    // its expiry here is what tells it when.
+    await setSession({
+      member,
+      accessToken: login.accessToken,
+      refreshToken: login.refreshToken,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+      accessExpiresAt: accessTokenExpiry(login.accessToken),
+    });
     return NextResponse.json({ data: { member } }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     const code = error instanceof Error ? error.message : 'LOGIN_FAILED';

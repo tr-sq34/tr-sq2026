@@ -57,13 +57,17 @@ async function memberNames(userIds: string[], accessToken: string) {
 }
 
 export async function verificationPage(params: { status?: string } = {}): Promise<{ overview: VerificationOverview | null; sessions: VerificationSession[]; failure: string | null }> {
-  const session = await getSession();
-  if (!session) throw new Error('UNAUTHENTICATED');
-  const token = await delegation(session.accessToken);
   const search = new URLSearchParams({ limit: '100' });
   if (params.status) search.set('status', params.status);
 
+  // Minting the delegation token used to sit outside this try, and that is how
+  // an Identity hiccup became a 500 on the Komuta Merkezi rather than one card
+  // saying the vault did not answer. Everything that talks to another service
+  // belongs inside.
   try {
+    const session = await getSession();
+    if (!session) throw new Error('UNAUTHENTICATED');
+    const token = await delegation(session.accessToken);
     const [overview, list] = await Promise.all([
       vaultFetch('/v1/internal/gatework/verification/overview', token),
       vaultFetch(`/v1/internal/gatework/verification/sessions?${search}`, token),

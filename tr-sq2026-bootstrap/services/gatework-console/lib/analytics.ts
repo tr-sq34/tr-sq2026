@@ -51,8 +51,17 @@ export type AnalyticsPage = {
 // rather than as a zero.
 export async function analyticsPage(): Promise<AnalyticsPage> {
   const session = await getSession();
-  if (!session) throw new Error('UNAUTHENTICATED');
-  const token = await delegation(session.accessToken);
+  if (!session) return { accounts: null, community: null, locations: null, failures: ['Oturum: yeniden giriş yapılmalı.'] };
+
+  // A failed mint is a named failure like any other, not an exception. It used
+  // to escape and take the whole screen with it, which turned "Identity is
+  // busy" into a server error page.
+  let token: string;
+  try {
+    token = await delegation(session.accessToken);
+  } catch (error) {
+    return { accounts: null, community: null, locations: null, failures: [`Kimlik: ${error instanceof Error ? error.message : 'yetki alınamadı'}`] };
+  }
 
   const [accounts, community, locations] = await Promise.all([
     readJson(`${identityBase()}/v1/auth/gatework/analytics`, session.accessToken).then((body) => body.data as AccountAnalytics).catch((error: Error) => error),
