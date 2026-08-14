@@ -1,5 +1,29 @@
-import Fastify from 'fastify'; import cors from '@fastify/cors'; import rawBody from 'fastify-raw-body'; import helmet from '@fastify/helmet'; import rateLimit from '@fastify/rate-limit'; import Stripe from 'stripe'; import { z } from 'zod'; import { importJWK, jwtVerify } from 'jose'; import { createDatabasePool } from './database.js'; import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js'; import { sendVerificationCapabilityEvent } from './infrastructure/azureServiceBus.js';
+import Fastify, { type FastifyError } from 'fastify'; import cors from '@fastify/cors'; import rawBody from 'fastify-raw-body'; import helmet from '@fastify/helmet'; import rateLimit from '@fastify/rate-limit'; import Stripe from 'stripe'; import { z } from 'zod'; import { importJWK, jwtVerify } from 'jose'; import { createDatabasePool } from './database.js'; import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js'; import { sendVerificationCapabilityEvent } from './infrastructure/azureServiceBus.js';
 const required=(k:string)=>{const v=process.env[k];if(!v)throw Error(`Missing ${k}`);return v;}; const db=createDatabasePool(); const stripe=new Stripe(required('STRIPE_SECRET_KEY')); const identityKey=await getIdentityVerificationKey(); const verifyKey=await importJWK(identityKey,'RS256'); const app=Fastify({logger:{redact:['req.headers.authorization','req.body']}}); await app.register(helmet);await app.register(rateLimit,{global:true,max:60,timeWindow:'1 minute'});await app.register(cors,{origin:(origin,callback)=>callback(null,!origin||origin==='https://turksquare.com'||origin==='https://www.turksquare.com'||/^http:\/\/localhost:\d+$/.test(origin)),methods:['GET','POST','OPTIONS'],allowedHeaders:['Authorization','Content-Type'],maxAge:600});await app.register(rawBody,{field:'rawBody',global:false,encoding:false,runFirst:true});
+/**
+ * The last stop for anything a handler did not catch. Whatever slips past the
+ * per-route try/catch went out as Fastify's default 500 with the exception's
+ * own message in it - a ZodError's dump of the schema, or a driver error naming
+ * columns. Neither belongs in a response, and neither is a sentence a screen
+ * can show.
+ */
+app.setErrorHandler((error: FastifyError, request, reply) => {
+  if (error instanceof z.ZodError) {
+    request.log.warn({ url: request.url, issues: error.issues }, 'request body rejected by schema');
+    return reply.code(400).send({ error: { code: 'INVALID_REQUEST', message: 'Gönderilen bilgiler geçersiz.' } });
+  }
+  const status = error.statusCode ?? 500;
+  if (status === 429) {
+    return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Çok fazla istek gönderildi. Lütfen biraz sonra tekrar deneyin.' } });
+  }
+  if (status >= 400 && status < 500) {
+    request.log.warn({ url: request.url, err: error }, 'request rejected');
+    return reply.code(status).send({ error: { code: 'BAD_REQUEST', message: 'İstek işlenemedi.' } });
+  }
+  request.log.error({ url: request.url, err: error }, 'unhandled error');
+  return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
+});
+
 const capabilityQueueEnabled=Boolean(process.env.AZURE_SERVICE_BUS_CONNECTION_STRING&&process.env.AZURE_VERIFICATION_CAPABILITY_QUEUE_NAME);
 async function publishCapabilities(){if(!capabilityQueueEnabled)return;const events=await db.query<{id:string;event_type:string;payload:unknown}>('SELECT id,event_type,payload FROM verification_outbox_events WHERE published_at IS NULL ORDER BY created_at LIMIT 20');for(const e of events.rows){try{await sendVerificationCapabilityEvent({eventId:e.id,eventType:e.event_type,payload:e.payload});await db.query('UPDATE verification_outbox_events SET published_at=now() WHERE id=$1 AND published_at IS NULL',[e.id]);}catch(error){app.log.warn({err:error,eventId:e.id},'Verification capability outbox deferred');}}}
 async function user(headers:{authorization?:string}){const t=headers.authorization?.replace(/^Bearer\s+/i,'');if(!t)throw Error('UNAUTHORIZED');const p=await jwtVerify(t,verifyKey,{issuer:required('JWT_ISSUER'),audience:required('JWT_AUDIENCE'),algorithms:['RS256']});if(!p.payload.sub)throw Error('UNAUTHORIZED');return p.payload.sub;}
