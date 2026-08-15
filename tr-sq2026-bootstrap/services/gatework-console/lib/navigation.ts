@@ -2,6 +2,7 @@ import { canSeeAnalytics } from './analytics';
 import { canSeeAudit } from './audit';
 import { canSeeEvents } from './events';
 import { canSeeForum } from './forum';
+import { canSeeServiceHealth } from './health';
 import { canSeeMarketplace } from './marketplace';
 import { canSeeMembers } from './members';
 import { canReviewReports } from './moderation';
@@ -50,6 +51,7 @@ export function navigationFor(roles: GateworkRole[]): NavGroup[] {
       label: 'Sistem ve Genel Bakış',
       items: [
         { key: 'command-center', label: 'Komuta Merkezi', href: '/command-center' },
+        canSeeServiceHealth(roles) ? { key: 'health', label: 'Sistem Sağlığı', href: '/health' } : null,
         canSeeAnalytics(roles) ? { key: 'analytics', label: 'Analitik ve Konum', href: '/analytics' } : null,
         canSeeAudit(roles) ? { key: 'system', label: 'Sistem ve Denetim', href: '/system' } : null,
       ].filter(Boolean) as NavItem[],

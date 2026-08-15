@@ -1,18 +1,19 @@
+import Link from 'next/link';
 import {
-  Activity, BadgeCheck, Gavel, Megaphone, MessageSquare, Radio, ShieldAlert, Siren, TrendingUp, Wrench,
+  Activity, BadgeCheck, Gavel, Megaphone, MessageSquare, Radio, ShieldAlert, Siren, TrendingUp,
 } from 'lucide-react';
 import { canSendAnnouncement } from '@/lib/announcements';
 import { canReviewReports, moderationOverview, type ModerationOverview } from '@/lib/moderation';
 import { contentOverview, type ContentOverview } from '@/lib/content-moderation';
-import { canSeeServiceHealth, serviceHealth, type ServiceHealth } from '@/lib/health';
+import { RISK_LEVELS, canSeeServiceHealth, systemHealthSnapshot, type SystemHealthSnapshot } from '@/lib/health';
 import { canSeeSafety, isOpen, safetyPage, waitedFor } from '@/lib/safety';
 import { canSeeVerification, verificationPage } from '@/lib/verification';
 import { canSeeMarketplace, marketplacePage } from '@/lib/marketplace';
 import { listPromotions } from '@/lib/promotions';
 import { getSession } from '@/lib/session';
 import { AnnouncementDialog } from '@/components/command-center/announcement-dialog';
+import { HealthBoard } from '@/components/system/health-board';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page';
 import { StatCard } from '@/components/ui/stat-card';
@@ -52,7 +53,7 @@ export default async function CommandCenter() {
   const [messaging, content, health, safety, verification, marketplace, promotions] = await Promise.all([
     canReviewReports(roles) ? moderationOverview().catch(() => null) : Promise.resolve(null),
     canReviewReports(roles) ? contentOverview().catch(() => null) : Promise.resolve(null),
-    canSeeServiceHealth(roles) ? serviceHealth().catch(() => null) : Promise.resolve(null),
+    canSeeServiceHealth(roles) ? systemHealthSnapshot(24).catch(() => null) : Promise.resolve(null),
     canSeeSafety(roles) ? safetyPage().catch(() => null) : Promise.resolve(null),
     canSeeVerification(roles) ? verificationPage().catch(() => null) : Promise.resolve(null),
     canSeeMarketplace(roles) ? marketplacePage().catch(() => null) : Promise.resolve(null),
@@ -60,7 +61,7 @@ export default async function CommandCenter() {
   ]) as [
     ModerationOverview | null,
     ContentOverview | null,
-    ServiceHealth[] | null,
+    SystemHealthSnapshot | null,
     Awaited<ReturnType<typeof safetyPage>> | null,
     Awaited<ReturnType<typeof verificationPage>> | null,
     Awaited<ReturnType<typeof marketplacePage>> | null,
@@ -75,7 +76,6 @@ export default async function CommandCenter() {
     null,
   );
 
-  const down = (health ?? []).filter((check) => !check.healthy);
   const pendingVerification =
     (verification?.overview?.counts.created ?? 0) + (verification?.overview?.counts.requires_input ?? 0);
 
@@ -127,14 +127,26 @@ export default async function CommandCenter() {
         actions={
           <>
             {/* Duyuru writes for real now: migration 033 gave the community
-                service a table and a fan-out, and the button opens the composer.
-                Bakım modu still has no switch in any service, so it stays
-                disabled and labelled - that beats a button that silently does
-                nothing. */}
+                service a table and a fan-out, and the button opens the composer. */}
             <AnnouncementDialog canSend={canSendAnnouncement(roles)} />
-            <Button variant="outline" size="sm" disabled title="Bakım modu anahtarı henüz yok">
-              <Wrench size={15} /> Bakım modu
-            </Button>
+            {/* The header carries the risk number itself, not a link to where it
+                lives. An operator who opens the console and reads nothing else
+                should still learn whether anything is on fire. Bakım modu moved
+                to that page too: it has no switch in any service yet, and the
+                sentence explaining why belongs next to the rest of the system
+                state rather than under a disabled button here. */}
+            {canSeeServiceHealth(roles) && (
+              <Link
+                href="/health"
+                className="flex items-center gap-2 rounded-lg border border-hairline px-3 py-2 text-sm text-ink-muted transition hover:border-brand-400/50 hover:text-ink"
+              >
+                <Activity size={15} className="text-ink-faint" />
+                Sistem sağlığı
+                <Badge tone={health?.risk.level ? RISK_LEVELS[health.risk.level].tone : 'warning'} dot>
+                  {health?.risk.score === null || health === null ? 'Ölçülemedi' : `%${health.risk.score}`}
+                </Badge>
+              </Link>
+            )}
           </>
         }
       />
@@ -163,45 +175,30 @@ export default async function CommandCenter() {
       </section>
 
       <section className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <div>
-              <CardTitle>Servis sağlığı</CardTitle>
-              <CardDescription>Her servisin kendi /health ucu, üç saniyelik zaman aşımıyla. Yavaş servis, düşmüş servis sayılır.</CardDescription>
-            </div>
-            {health && (
-              <Badge tone={down.length === 0 ? 'success' : 'danger'} dot>
-                {down.length === 0 ? 'Tümü ayakta' : `${down.length} servis düşük`}
-              </Badge>
-            )}
-          </CardHeader>
-          <CardContent>
-            {!canSeeServiceHealth(roles) ? (
-              <p className="text-sm text-ink-faint">Bu rol için servis durumu gösterilmez.</p>
-            ) : !health ? (
-              <p className="text-sm text-warning">Servis durumu okunamadı.</p>
-            ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {health.map((check) => (
-                  <div
-                    key={check.name}
-                    className={`flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3 ${
-                      check.healthy ? 'border-hairline bg-surface-raised' : 'border-danger/40 bg-danger-soft'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2.5 text-sm text-ink">
-                      <Activity size={15} className={check.healthy ? 'text-success' : 'text-danger'} />
-                      {check.name}
-                    </span>
-                    <Badge tone={check.healthy ? 'success' : 'danger'} dot>
-                      {check.healthy ? 'Ayakta' : 'Yanıt yok'}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* The board refreshes itself every thirty seconds, so this half of the
+            dashboard stays true while an operator reads the rest of it. */}
+        <div className="lg:col-span-2">
+          {!canSeeServiceHealth(roles) ? (
+            <Card>
+              <CardHeader><div><CardTitle>Sistem sağlığı</CardTitle></div></CardHeader>
+              <CardContent><p className="text-sm text-ink-faint">Bu rol için servis durumu gösterilmez.</p></CardContent>
+            </Card>
+          ) : health === null ? (
+            <Card>
+              <CardHeader>
+                <div><CardTitle>Sistem sağlığı</CardTitle></div>
+                <Badge tone="warning" dot>Ölçülemedi</Badge>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-warning">
+                  Sistem durumu okunamadı. Bu kutunun boş olması da bir bulgu; yeşil göstermek yerine söylüyoruz.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <HealthBoard initial={health} compact />
+          )}
+        </div>
 
         <Card>
           <CardHeader>

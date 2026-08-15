@@ -1,0 +1,79 @@
+name: uptime-watch
+
+# The console's health board only alerts while somebody has it open. This is the
+# other half: a probe from outside Azure, on a schedule, for the hours when
+# nobody is looking. It deliberately checks the public hostnames rather than the
+# container apps directly, because that is the path a member takes - if
+# Cloudflare, the certificate or the ingress is broken, the container being
+# healthy is no comfort.
+#
+# It is off until somebody turns it on. Set the repository variable
+# UPTIME_WATCH_ENABLED to "true" and the secret OPS_ALERT_WEBHOOK_URL to a Slack
+# or Discord webhook; without both, every run exits immediately and costs
+# nothing.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: vars.UPTIME_WATCH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe public health endpoints
+        env:
+          WEBHOOK_URL: ${{ secrets.OPS_ALERT_WEBHOOK_URL }}
+          TARGETS: ${{ vars.UPTIME_WATCH_TARGETS }}
+        run: |
+          set -u
+          targets="${TARGETS:-Kimlik=https://api.turksquare.com/health Topluluk=https://community-api.turksquare.com/health Mesajlasma=https://messages-api.turksquare.com/health Dogrulama=https://verify.turksquare.com/health}"
+
+          failures=""
+          for target in $targets; do
+            name="${target%%=*}"
+            url="${target#*=}"
+            # Two attempts before calling it down: a single dropped connection
+            # from a GitHub runner is not an outage, and a false alarm at 03:00
+            # teaches people to ignore the channel.
+            code=""
+            for attempt in 1 2; do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url" || echo "000")
+              [ "$code" = "200" ] && break
+              sleep 5
+            done
+            if [ "$code" = "200" ]; then
+              echo "🟢 $name ($url)"
+            else
+              echo "🔴 $name ($url) → HTTP $code"
+              failures="$failures\n• $name yanıt vermiyor (HTTP $code)"
+            fi
+          done
+
+          if [ -z "$failures" ]; then
+            echo "Tüm servisler ayakta."
+            exit 0
+          fi
+
+          if [ -n "${WEBHOOK_URL:-}" ]; then
+            # Same three keys as lib/alerting.ts, for the same reason: Slack
+            # reads `text`, Discord reads `content`, generic relays read
+            # `message`.
+            text="TurkSquare · Dış kontrol: servis yanıt vermiyor.$failures"
+            printf '{"text":%s,"content":%s,"message":%s}' \
+              "$(jq -Rs . <<< "$(printf '%b' "$text")")" \
+              "$(jq -Rs . <<< "$(printf '%b' "$text")")" \
+              "$(jq -Rs . <<< "$(printf '%b' "$text")")" \
+              | curl -sS -X POST -H 'content-type: application/json' --max-time 10 --data @- "$WEBHOOK_URL" > /dev/null || true
+          else
+            echo "OPS_ALERT_WEBHOOK_URL tanımlı değil; uyarı gönderilemedi."
+          fi
+
+          # The job fails so the run shows red in the Actions list even when no
+          # webhook is configured.
+          exit 1
