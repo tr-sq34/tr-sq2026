@@ -16,12 +16,14 @@ Map<String, dynamic> row({
   String subjectTitle = 'Kanepe',
   int actorCount = 1,
   String? actorName,
+  String? body,
   bool isRead = false,
 }) => {
   'id': 'notification-1',
   'kind': kind,
   'subjectId': subjectId,
   'subjectTitle': subjectTitle,
+  'body': body,
   'actorCount': actorCount,
   'actorName': actorName,
   'createdAt': '2026-08-13T10:00:00.000Z',
@@ -144,6 +146,45 @@ void main() {
     final items = await harness.repository.getNotifications();
     expect(items.single.body, contains('…'));
     expect(items.single.body, contains('Bu çok uzun bir paylaşım'));
+  });
+
+  // Duyuru diğer türlerin tersi: cümleyi uygulama kurmuyor. Panelde yazılan
+  // metin ne ise üyeye o gidiyor, kırpılmadan ve başına kimsenin adı eklenmeden.
+  test('duyurunun başlığı ve metni panelde yazıldığı gibi geliyor', () async {
+    final harness = build([
+      {
+        'data': [
+          row(
+            kind: 'announcement',
+            subjectId: 'announcement-1',
+            subjectTitle: 'Bakım çalışması',
+            body: 'Cumartesi 02:00–04:00 arasında uygulama kapalı olacak.',
+          ),
+        ],
+      },
+    ]);
+    final items = await harness.repository.getNotifications();
+    expect(items.single.type, AppNotificationType.announcement);
+    expect(items.single.title, 'Bakım çalışması');
+    expect(
+      items.single.body,
+      'Cumartesi 02:00–04:00 arasında uygulama kapalı olacak.',
+    );
+  });
+
+  // Duyurunun gideceği bir ekran yok; satır kendi metnini taşıyor. Paylaşım
+  // bağlantısı üretmek, olmayan bir paylaşımı açmaya çalışmak olurdu.
+  test('duyuru bir paylaşıma bağlanmıyor', () async {
+    final harness = build([
+      {
+        'data': [
+          row(kind: 'announcement', subjectId: 'announcement-1', body: 'Metin'),
+        ],
+      },
+    ]);
+    final items = await harness.repository.getNotifications();
+    expect(items.single.deepLink.toString(), 'turksquare://announcement/announcement-1');
+    expect(AppDeepLink.parse(items.single.deepLink), isA<UnknownDeepLink>());
   });
 
   test('okundu işaretleme sunucuya gidiyor', () async {

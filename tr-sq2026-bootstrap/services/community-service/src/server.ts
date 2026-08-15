@@ -2134,11 +2134,18 @@ function notifyOwner(kind: NotificationKind, subjectId: string, actorId: string)
 
 type NotificationRow = {
   id: string;
-  kind: NotificationKind;
+  // 'announcement' is not in NOTIFICATION_SUBJECTS: it has no owner to look up
+  // and nothing a member did to trigger it, so it is written by the operator
+  // route rather than by notifyOwner.
+  kind: NotificationKind | 'announcement';
   subject_id: string;
   actor_name: string;
   actor_count: string;
   subject_title: string | null;
+  // Only announcements carry one. Every other kind's sentence is composed in
+  // the app out of the subject and the count; an announcement's sentence was
+  // typed by a person and has to travel as it was written.
+  subject_body: string | null;
   updated_at: Date;
   read_at: Date | null;
 };
@@ -2174,9 +2181,18 @@ app.get('/v1/notifications', async (request, reply) => {
            -- Only the ones still waiting. Once the owner has answered them all
            -- the line goes, because there is nothing left to act on.
            WHEN 'special_request' THEN (SELECT count(*) FROM post_special_requests r WHERE r.post_id=n.subject_id AND r.status='pending')
+           -- Nobody "did" an announcement, so there is nothing to count. It is
+           -- one because the filter below drops rows that count zero, and an
+           -- announcement is always worth showing.
+           WHEN 'announcement' THEN 1
            ELSE (SELECT count(*) FROM friend_requests f WHERE f.requester_id=n.subject_id AND f.addressee_id=n.user_id AND f.status='pending')
          END actor_count,
-         CASE WHEN n.kind IN ('post_comment','post_like','special_request')
+         CASE WHEN n.kind='announcement'
+           THEN (SELECT a.body FROM member_announcements a WHERE a.id=n.subject_id)
+         END subject_body,
+         CASE WHEN n.kind='announcement'
+           THEN (SELECT a.title FROM member_announcements a WHERE a.id=n.subject_id)
+           WHEN n.kind IN ('post_comment','post_like','special_request')
            THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
            -- A friend request has no title of its own; who is asking is the
            -- whole of it.
@@ -2198,6 +2214,7 @@ app.get('/v1/notifications', async (request, reply) => {
         kind: row.kind,
         subjectId: row.subject_id,
         subjectTitle: row.subject_title,
+        body: row.subject_body,
         actorCount: Number(row.actor_count),
         actorName: row.kind === 'post_comment' || row.kind === 'special_request' || row.kind === 'friend_request' ? row.actor_name : null,
         createdAt: row.updated_at.toISOString(),
@@ -4797,6 +4814,107 @@ app.post('/v1/internal/gatework/events/:id/cancel', async (request, reply) => {
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'EVENT_CANCEL_REJECTED', message: 'Etkinlik iptal edilemedi.' } });
+  }
+});
+
+// --- Announcements --------------------------------------------------------
+/**
+ * "Global duyuru geç".
+ *
+ * The button has been in the command centre since it was built and disabled the
+ * whole time: no service could put a sentence in every member's inbox. It can
+ * now, and the shape is deliberately the narrowest thing that does the job.
+ *
+ * It writes to the bell rather than sending mail or a push. The bell is a place
+ * a member already checks, it costs nothing to deliver, and it is the one
+ * channel that cannot reach somebody who has left. An announcement that must
+ * arrive on a phone that is not open is a different feature with a different
+ * consent question, and it is not this one.
+ *
+ * There is no audience picker. Reaching some members and not others is a
+ * decision that needs a way to say who and why, and inventing one here - "only
+ * New Jersey", "only verified" - would ship a targeting system nobody reviewed.
+ * Everybody, or nothing.
+ */
+const announcementBody = z.object({
+  title: z.string().trim().min(3).max(120),
+  body: z.string().trim().min(3).max(2000),
+  idempotencyKey: z.string().uuid(),
+});
+
+app.post('/v1/internal/gatework/announcements', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    // Deliberately the shortest list on any write route here. This is the only
+    // operation in the console that speaks to every member at once, in the
+    // platform's own voice, and it cannot be recalled once the rows are in.
+    requireGateworkRole(actor, ['owner', 'operations_admin']);
+    const input = announcementBody.parse(request.body);
+    await client.query('BEGIN');
+    // A double-clicked button must not be two announcements: every member would
+    // get the same sentence twice and there is no way to take one back.
+    const prior = await client.query<{ result_id: string | null }>(
+      "SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='announcement.send' FOR UPDATE",
+      [actor.actorId, input.idempotencyKey],
+    );
+    if (prior.rows[0]?.result_id) { await client.query('COMMIT'); return reply.code(200).send({ data: { id: prior.rows[0].result_id, recipientCount: 0, duplicate: true } }); }
+    const created = await client.query<{ id: string }>(
+      'INSERT INTO member_announcements(title,body,created_by) VALUES($1,$2,$3) RETURNING id',
+      [input.title, input.body, actor.actorId],
+    );
+    const id = created.rows[0]!.id;
+    // One statement, no read-then-write: the recipient list is whoever the
+    // projection holds at this instant. `last_actor_id` is the operator, which
+    // is why the bell's LEFT JOIN on the member projection has to stay a LEFT
+    // JOIN - an operator need not be a member.
+    const fanout = await client.query(
+      `INSERT INTO member_notifications(user_id,kind,subject_id,last_actor_id)
+       SELECT p.user_id,'announcement',$1,$2 FROM community_profile_projection p
+       ON CONFLICT(user_id,kind,subject_id) DO NOTHING`,
+      [id, actor.actorId],
+    );
+    await client.query('UPDATE member_announcements SET recipient_count=$2 WHERE id=$1', [id, fanout.rowCount ?? 0]);
+    await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'announcement.send',$3)", [actor.actorId, input.idempotencyKey, id]);
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'announcement.send', targetType: 'announcement', targetId: id, reason: input.title, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return reply.code(201).send({ data: { id, recipientCount: fanout.rowCount ?? 0, duplicate: false } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'ANNOUNCEMENT_REJECTED', message: 'Duyuru gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+/// What was already said, so the next operator does not repeat it an hour later.
+/// `read_count` is how many of the inboxes it landed in have opened it - the
+/// only feedback there is on whether an announcement was worth sending.
+app.get('/v1/internal/gatework/announcements', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'analyst', 'auditor']);
+    const rows = await db.query<{ id: string; title: string; body: string; recipient_count: number; read_count: string; created_at: Date; author_name: string }>(
+      `SELECT a.id,a.title,a.body,a.recipient_count,a.created_at,
+         COALESCE(cp.display_name,'Panel') author_name,
+         (SELECT count(*) FROM member_notifications n WHERE n.kind='announcement' AND n.subject_id=a.id AND n.read_at IS NOT NULL) read_count
+       FROM member_announcements a
+       LEFT JOIN community_profile_projection cp ON cp.user_id=a.created_by
+       ORDER BY a.created_at DESC LIMIT 30`,
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        recipientCount: row.recipient_count,
+        readCount: Number(row.read_count),
+        authorName: row.author_name,
+        createdAt: row.created_at.toISOString(),
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'ANNOUNCEMENTS_UNAVAILABLE', message: 'Duyurular okunamadı.' } });
   }
 });
 

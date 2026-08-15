@@ -1,4 +1,8 @@
-enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, system }
+/// [announcement] diğerlerinden bir yönüyle ayrılıyor: metnini uygulama
+/// kurmuyor, TurkSquare yetkilisi yazıyor. Bu yüzden başlığı da gövdesi de
+/// sunucudan olduğu gibi geliyor ve satıra dokunmak bir paylaşıma değil,
+/// duyurunun tam metnine götürüyor.
+enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, announcement, system }
 
 class AppNotification {
   const AppNotification({

@@ -41,8 +41,39 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _open(AppNotification notification) async {
     final link = await widget.controller.open(notification);
     if (!mounted) return;
+    // Duyurunun gideceği bir ekran yok, metnin kendisi zaten burada. Satırda
+    // tek satır görünüyor; dokunan kişi tamamını okumak istiyor demektir.
+    if (notification.type == AppNotificationType.announcement) {
+      await _showAnnouncement(notification);
+      return;
+    }
     await widget.onOpen(link);
   }
+
+  Future<void> _showAnnouncement(AppNotification notification) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: Colors.white,
+      title: Text(
+        notification.title,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+      ),
+      content: SingleChildScrollView(
+        child: Text(
+          notification.body.isEmpty
+              ? 'Bu duyurunun metni artık görüntülenemiyor.'
+              : notification.body,
+          style: const TextStyle(fontSize: 14, height: 1.45),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Kapat'),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -161,6 +192,10 @@ class _NotificationTile extends StatelessWidget {
     ),
     subtitle: Text(
       notification.body,
+      // Duyuru metni iki bin karaktere kadar çıkabiliyor; listede iki satır
+      // görünüp gerisi dokununca açılıyor. Kalan türlerin cümlesi zaten kısa.
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
       style: const TextStyle(fontSize: 12.5, color: Color(0xFF64748B)),
     ),
   );
@@ -173,6 +208,7 @@ class _NotificationTile extends StatelessWidget {
     AppNotificationType.listingSaved => Icons.bookmark_border_rounded,
     AppNotificationType.listingLiked => Icons.storefront_outlined,
     AppNotificationType.eventReminder => Icons.event_outlined,
+    AppNotificationType.announcement => Icons.campaign_outlined,
     AppNotificationType.system => Icons.info_outline_rounded,
   };
 }

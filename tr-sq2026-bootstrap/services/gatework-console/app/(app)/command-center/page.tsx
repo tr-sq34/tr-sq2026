@@ -1,6 +1,7 @@
 import {
   Activity, BadgeCheck, Gavel, Megaphone, MessageSquare, Radio, ShieldAlert, Siren, TrendingUp, Wrench,
 } from 'lucide-react';
+import { canSendAnnouncement } from '@/lib/announcements';
 import { canReviewReports, moderationOverview, type ModerationOverview } from '@/lib/moderation';
 import { contentOverview, type ContentOverview } from '@/lib/content-moderation';
 import { canSeeServiceHealth, serviceHealth, type ServiceHealth } from '@/lib/health';
@@ -9,6 +10,7 @@ import { canSeeVerification, verificationPage } from '@/lib/verification';
 import { canSeeMarketplace, marketplacePage } from '@/lib/marketplace';
 import { listPromotions } from '@/lib/promotions';
 import { getSession } from '@/lib/session';
+import { AnnouncementDialog } from '@/components/command-center/announcement-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -124,13 +126,12 @@ export default async function CommandCenter() {
         description="Buradaki her sayı bir servisin verdiği yanıttır. Servis yanıt vermediğinde kart eski sayıyı göstermez, ulaşılamadığını söyler."
         actions={
           <>
-            {/* Both actions are on the specification and neither has a backend:
-                there is no announcement fan-out and no maintenance switch in any
-                service. Disabled and labelled beats a button that silently does
+            {/* Duyuru writes for real now: migration 033 gave the community
+                service a table and a fan-out, and the button opens the composer.
+                Bakım modu still has no switch in any service, so it stays
+                disabled and labelled - that beats a button that silently does
                 nothing. */}
-            <Button variant="outline" size="sm" disabled title="Duyuru servisi henüz yok">
-              <Megaphone size={15} /> Global duyuru geç
-            </Button>
+            <AnnouncementDialog canSend={canSendAnnouncement(roles)} />
             <Button variant="outline" size="sm" disabled title="Bakım modu anahtarı henüz yok">
               <Wrench size={15} /> Bakım modu
             </Button>
