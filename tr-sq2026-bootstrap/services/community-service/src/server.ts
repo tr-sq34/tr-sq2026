@@ -101,6 +101,21 @@ const mediaObjectUrl = async (safeUrlOrKey: string) => {
 };
 
 async function viewer(headers: { authorization?: string }) { const token = headers.authorization?.replace(/^Bearer\s+/i, ''); if (!token) throw Error('UNAUTHORIZED'); const verified = await jwtVerify(token, identityVerificationKey, { issuer: required('JWT_ISSUER'), audience: required('JWT_AUDIENCE'), algorithms: ['RS256'] }); if (!verified.payload.sub) throw Error('UNAUTHORIZED'); return verified.payload.sub; }
+/// Six read routes used to answer `statusCode ?? 401`, which meant a SQL error,
+/// a missing blob credential or any other internal fault left the service as a
+/// 401. That is not a cosmetic mislabel: the app treats 401 on an authenticated
+/// request as "this session is over", clears the token store and signs the
+/// member out. One broken query on the story strip was enough to empty every
+/// other screen in the app, and the log said "unauthorized" while the token was
+/// perfectly valid.
+///
+/// 401 is now reserved for the one thing that means it - `viewer()` refusing
+/// the token. Everything else is a 500 and gets logged, because a fault the
+/// server cannot explain is not the member's session's fault.
+const readFailureStatus = (error: unknown) =>
+  (error as { statusCode?: number }).statusCode
+  ?? ((error as Error)?.message === 'UNAUTHORIZED' ? 401 : 500);
+
 type GateworkRole='owner'|'security_admin'|'operations_admin'|'content_editor'|'moderator'|'analyst'|'auditor';
 const gateworkRoles=new Set<GateworkRole>(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']);
 async function gateworkActor(headers:{authorization?:string}) { const token=headers.authorization?.replace(/^Bearer\s+/i,''); if(!token) throw Error('UNAUTHORIZED'); const verified=await jwtVerify(token,identityVerificationKey,{issuer:required('JWT_ISSUER'),audience:required('GATEWORK_JWT_AUDIENCE'),algorithms:['RS256']}); const actorId=verified.payload.sub; const scopes=Array.isArray(verified.payload.scope)?verified.payload.scope.filter((v):v is GateworkRole=>typeof v==='string'&&gateworkRoles.has(v as GateworkRole)):[]; if(!actorId||!scopes.length) throw Error('UNAUTHORIZED'); return {actorId,roles:scopes}; }
@@ -536,7 +551,7 @@ app.get('/v1/community/feed', async (request, reply) => {
     // why the delete button on your own post never appeared, and why a post
     // owner could not moderate the comments under it.
     return { data: await Promise.all(page.map(feedPostJson)), meta: { nextCursor: next } };
-  } catch (error) { return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'FEED_UNAVAILABLE', message: 'Akış yüklenemedi.' } }); }
+  } catch (error) { const status = readFailureStatus(error); if (status >= 500) request.log.error({ err: error }, 'feed read failed'); return reply.code(status).send({ error: { code: 'FEED_UNAVAILABLE', message: 'Akış yüklenemedi.' } }); }
 });
 
 app.put('/v1/community/posts/:id/reactions/:kind', async (request, reply) => {
@@ -653,7 +668,9 @@ app.get('/v1/community/stories', async (request, reply) => {
     })));
     return { data, meta: { nextCursor: rows.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null } };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({
+    const status = readFailureStatus(error);
+    if (status >= 500) request.log.error({ err: error }, 'story read failed');
+    return reply.code(status).send({
       error: { code: 'STORIES_FAILED', message: 'Story yüklenemedi.' },
     });
   }
@@ -753,7 +770,9 @@ app.get('/v1/community/posts/:id', async (request, reply) => {
     if (!post) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
     return { data: await feedPostJson(post) };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'POST_UNAVAILABLE', message: 'Paylaşım yüklenemedi.' } });
+    const status = readFailureStatus(error);
+    if (status >= 500) request.log.error({ err: error }, 'post read failed');
+    return reply.code(status).send({ error: { code: 'POST_UNAVAILABLE', message: 'Paylaşım yüklenemedi.' } });
   }
 });
 
@@ -1068,7 +1087,9 @@ app.get('/v1/marketplace/listings/:id', async (request, reply) => {
     if (!listing) return reply.code(404).send({ error: { code: 'LISTING_NOT_FOUND', message: 'İlan bulunamadı.' } });
     return { data: await listingJson(listing) };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'LISTING_UNAVAILABLE', message: 'İlan yüklenemedi.' } });
+    const status = readFailureStatus(error);
+    if (status >= 500) request.log.error({ err: error }, 'listing read failed');
+    return reply.code(status).send({ error: { code: 'LISTING_UNAVAILABLE', message: 'İlan yüklenemedi.' } });
   }
 });
 
@@ -4669,7 +4690,9 @@ app.get('/v1/events', async (request, reply) => {
     const next = result.rows.length > input.limit ? eventCursor(page[page.length - 1]!) : null;
     return { data: await Promise.all(page.map(eventJson)), meta: { nextCursor: next } };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'EVENTS_UNAVAILABLE', message: 'Etkinlikler yüklenemedi.' } });
+    const status = readFailureStatus(error);
+    if (status >= 500) request.log.error({ err: error }, 'events read failed');
+    return reply.code(status).send({ error: { code: 'EVENTS_UNAVAILABLE', message: 'Etkinlikler yüklenemedi.' } });
   }
 });
 
@@ -4684,7 +4707,9 @@ app.get('/v1/events/:id', async (request, reply) => {
     if (!row.rows[0]) return reply.code(404).send({ error: { code: 'EVENT_NOT_FOUND', message: 'Etkinlik bulunamadı.' } });
     return { data: await eventJson(row.rows[0]) };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 401).send({ error: { code: 'EVENT_UNAVAILABLE', message: 'Etkinlik yüklenemedi.' } });
+    const status = readFailureStatus(error);
+    if (status >= 500) request.log.error({ err: error }, 'event read failed');
+    return reply.code(status).send({ error: { code: 'EVENT_UNAVAILABLE', message: 'Etkinlik yüklenemedi.' } });
   }
 });
 
