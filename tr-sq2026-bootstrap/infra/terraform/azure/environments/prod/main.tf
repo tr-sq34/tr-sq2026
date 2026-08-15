@@ -60,11 +60,10 @@ module "shared" {
 module "identity_container_app" {
   source = "../../modules/container-app"
 
-  service_name   = "identity"
-  custom_domains = try(var.public_api_domains["identity"], [])
-  environment    = var.environment
-  location       = var.location
-  tenant_id      = var.tenant_id
+  service_name = "identity"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
 
   resource_group_name        = module.shared.resource_group_name
   acr_id                     = module.shared.acr_id
@@ -126,11 +125,10 @@ module "identity_container_app" {
 module "verification_vault_container_app" {
   source = "../../modules/container-app"
 
-  service_name   = "verification-vault"
-  custom_domains = try(var.public_api_domains["verification"], [])
-  environment    = var.environment
-  location       = var.location
-  tenant_id      = var.tenant_id
+  service_name = "verification-vault"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
 
   # Every app shares the one environment identity created. The module would
   # otherwise declare its own, and each of those carries the same name, so the
@@ -189,11 +187,10 @@ module "verification_vault_container_app" {
 module "community_container_app" {
   source = "../../modules/container-app"
 
-  service_name   = "community"
-  custom_domains = try(var.public_api_domains["community"], [])
-  environment    = var.environment
-  location       = var.location
-  tenant_id      = var.tenant_id
+  service_name = "community"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
 
   container_app_environment_id = module.identity_container_app.container_app_environment_id
 
@@ -251,11 +248,10 @@ module "community_container_app" {
 module "messaging_gateway_container_app" {
   source = "../../modules/container-app"
 
-  service_name   = "messaging-gateway"
-  custom_domains = try(var.public_api_domains["messaging"], [])
-  environment    = var.environment
-  location       = var.location
-  tenant_id      = var.tenant_id
+  service_name = "messaging-gateway"
+  environment  = var.environment
+  location     = var.location
+  tenant_id    = var.tenant_id
 
   container_app_environment_id = module.identity_container_app.container_app_environment_id
 

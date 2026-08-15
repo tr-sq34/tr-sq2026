@@ -134,25 +134,42 @@ for h in api community-api messages-api verify; do
 done
 ```
 
-## 3. Declare the hostnames in Terraform
+## 3. Add the hostname to the app
 
 Only after step 2 has propagated. Azure refuses a binding whose DNS does not
-already point at it, and this apply runs on **every push to main** - a binding
-declared too early fails the deploy of whatever was actually being shipped.
+already point at it.
 
-In `environments/prod/terraform.tfvars`:
-
-```hcl
-public_api_domains = {
-  identity     = ["api.turksquare.com"]
-  community    = ["community-api.turksquare.com"]
-  messaging    = ["messages-api.turksquare.com"]
-  verification = ["verify.turksquare.com"]
-}
+```sh
+az containerapp hostname add -n ca-identity-prod -g rg-turksquare-prod-centralus \
+  --hostname api.turksquare.com
 ```
 
-Until this variable is set it is `{}` and Terraform declares no hostname at all,
-which is the safe state to be in while the records do not exist yet.
+**Terraform does not own these hostnames, and cannot.** It was tried, in
+`public_api_domains`, and it lasted exactly as long as it took step 4 to issue
+the first certificate. `azurerm_container_app_custom_domain` reads
+`container_app_environment_certificate_id` back through a parser that only
+accepts `/certificates/<name>`; an Azure managed certificate lives under
+`/managedCertificates/<name>`, so every plan after the first binding died with:
+
+```
+parsing segment "staticCertificates": parsing the Certificate ID: the segment
+at position 8 didn't match
+```
+
+That is a read, not a diff, so `ignore_changes` on the certificate fields does
+not help - it was already there. 3.117.1 is the last 3.x release and it does not
+fix it. Since this apply runs on **every push to main**, one unreadable resource
+failed the deploy of everything else being shipped, so the four resources were
+removed from state and the block deleted.
+
+What guards the hostnames instead is `ignore_changes = [ingress[0].custom_domain]`
+on `azurerm_container_app` in the module. Without it an apply would carry an
+empty customDomains list alongside the image it was actually shipping. Check
+after the first deploy that follows any change to that module - the four
+`/health` checks in step 6 are the test.
+
+Getting these back into Terraform means the azurerm 4.x upgrade, which is its
+own piece of work with its own blast radius.
 
 ## 4. Ask for the certificates
 
@@ -171,12 +188,16 @@ one of parameters: --certificate and --environment". The three remaining
 hostnames can be bound in parallel - each takes a few minutes, and they do not
 touch each other.
 
-Repeat for the other three. Terraform ignores `certificate_binding_type` and
-`container_app_environment_certificate_id` precisely so that the next `apply`
-does not strip the certificate back off a live hostname.
+Repeat for the other three.
 
-Do not add hostnames with `az containerapp hostname add` instead of step 3. A
-hostname Terraform does not know about is a hostname the next apply may remove.
+Confirm afterwards that all four report `SniEnabled` rather than `Disabled`:
+
+```sh
+for app in ca-identity-prod ca-community-prod ca-messaging-gateway-prod ca-verification-vault-prod; do
+  az containerapp show -n "$app" -g rg-turksquare-prod-centralus \
+    --query "properties.configuration.ingress.customDomains[].{n:name,b:bindingType}" -o tsv
+done
+```
 
 ## 5. Turn the proxy back on
 
