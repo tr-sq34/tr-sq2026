@@ -55,11 +55,59 @@ class JourneySummary {
   }
 }
 
+/// Takipçi ya da takip edilen listesindeki tek satır.
+class FollowSummary {
+  const FollowSummary({
+    required this.userId,
+    required this.displayName,
+    this.username,
+    this.city,
+    this.regionCode,
+    this.avatarUrl,
+    this.viewerFollows = false,
+  });
+
+  final String userId;
+  final String displayName;
+  final String? username;
+  final String? city;
+  final String? regionCode;
+  final String? avatarUrl;
+
+  /// Bakan kişinin bu üyeyi takip edip etmediği. Listedeki düğmenin "Takip et"
+  /// mi "Takiptesin" mi yazacağını bu belirliyor.
+  final bool viewerFollows;
+
+  String get placeLabel =>
+      [city, regionCode].where((part) => (part ?? '').isNotEmpty).join(', ');
+
+  FollowSummary copyWith({bool? viewerFollows}) => FollowSummary(
+    userId: userId,
+    displayName: displayName,
+    username: username,
+    city: city,
+    regionCode: regionCode,
+    avatarUrl: avatarUrl,
+    viewerFollows: viewerFollows ?? this.viewerFollows,
+  );
+}
+
+/// Kullanıcı adı denetiminin cevabı. "Müsait değil" tek başına yeterli değil:
+/// kuralı çiğnediği için mi yoksa alındığı için mi reddedildiğini bilmeyen üye
+/// aynı adı bir daha dener.
+class UsernameCheck {
+  const UsernameCheck({required this.available, required this.message});
+
+  final bool available;
+  final String message;
+}
+
 class UserProfile {
   const UserProfile({
     required this.id,
     required this.displayName,
     required this.email,
+    this.username,
     this.city,
     this.state,
     this.interests = const [],
@@ -78,7 +126,11 @@ class UserProfile {
     this.journey = const JourneySummary(),
     this.postCount = 0,
     this.friendCount = 0,
+    this.followerCount = 0,
+    this.followingCount = 0,
     this.badgeCount = 0,
+    this.viewerFollows = false,
+    this.followsViewer = false,
     this.isSelf = true,
     this.canViewFullProfile = true,
   });
@@ -86,6 +138,11 @@ class UserProfile {
   final String id;
   final String displayName;
   final String email;
+
+  /// `@` olmadan saklanıyor, `@` ile gösteriliyor. Üye henüz seçmediyse null:
+  /// görünen addan türetilmiş bir tanıtıcı uydurmak, kimsenin sahiplenmediği
+  /// bir adı profile yazmak olurdu.
+  final String? username;
   final String? city;
   final String? state;
   final List<String> interests;
@@ -109,7 +166,18 @@ class UserProfile {
   final JourneySummary journey;
   final int postCount;
   final int friendCount;
+
+  /// Takip tek yönlü, arkadaşlık çift yönlü. Arkadaşlık kabul edildiğinde iki
+  /// yönlü satır yazıldığı için her arkadaş aynı zamanda hem takipçi hem takip
+  /// edilen sayılıyor; iki sayaç bu yüzden arkadaş sayısından küçük olamaz.
+  final int followerCount;
+  final int followingCount;
   final int badgeCount;
+
+  /// Bakan kişi ile bu profil arasındaki takip ilişkisi. Kendi profilinde
+  /// ikisi de false: kimse kendini takip etmiyor.
+  final bool viewerFollows;
+  final bool followsViewer;
 
   /// Whether this is the signed-in member, and whether the server let them see
   /// the whole profile. `canViewFullProfile` is the server's answer, not a
@@ -130,6 +198,7 @@ class UserProfile {
 
   UserProfile copyWith({
     String? displayName,
+    String? username,
     String? city,
     String? state,
     List<String>? interests,
@@ -148,13 +217,18 @@ class UserProfile {
     JourneySummary? journey,
     int? postCount,
     int? friendCount,
+    int? followerCount,
+    int? followingCount,
     int? badgeCount,
+    bool? viewerFollows,
+    bool? followsViewer,
     bool? isSelf,
     bool? canViewFullProfile,
   }) => UserProfile(
     id: id,
     displayName: displayName ?? this.displayName,
     email: email,
+    username: username ?? this.username,
     city: city ?? this.city,
     state: state ?? this.state,
     interests: interests ?? this.interests,
@@ -173,7 +247,11 @@ class UserProfile {
     journey: journey ?? this.journey,
     postCount: postCount ?? this.postCount,
     friendCount: friendCount ?? this.friendCount,
+    followerCount: followerCount ?? this.followerCount,
+    followingCount: followingCount ?? this.followingCount,
     badgeCount: badgeCount ?? this.badgeCount,
+    viewerFollows: viewerFollows ?? this.viewerFollows,
+    followsViewer: followsViewer ?? this.followsViewer,
     isSelf: isSelf ?? this.isSelf,
     canViewFullProfile: canViewFullProfile ?? this.canViewFullProfile,
   );

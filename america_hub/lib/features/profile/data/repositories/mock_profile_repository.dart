@@ -101,9 +101,12 @@ class MockProfileRepository implements ProfileRepository {
       // account carries it so a reviewer can see the ✓ next to a name; nobody
       // else gets it for free.
       identityVerified: isDemo,
+      username: edits['username'] as String?,
       // Başlıktaki sayı ızgaradaki kareleri sayar; arşivlenenler ikisinden de
       // düşer.
       postCount: (await getPosts(_auth.currentUserId ?? 'local-user')).length,
+      followerCount: _followers.length,
+      followingCount: _following.length,
     );
   }
 
@@ -126,10 +129,20 @@ class MockProfileRepository implements ProfileRepository {
     ({String? value})? avatarMediaId,
     ProfileVisibility? visibility,
     List<String>? showcasedBadges,
+    ({String? value})? username,
   }) async {
     final email = _auth.currentEmail ?? '';
     final edits = await _readEdits(email);
     if (bio != null) edits['bio'] = bio.value;
+    if (username != null) {
+      final wanted = username.value;
+      // Çevrimdışı kopyada da benzersizlik var: aksi halde "alınmış" ekranını
+      // hiç görmeden geliştirilen bir akış, sunucuda ilk denemede çakılır.
+      if (wanted != null && _takenUsernames.contains(wanted)) {
+        throw StateError('USERNAME_TAKEN');
+      }
+      edits['username'] = wanted;
+    }
     if (avatarMediaId != null) {
       // The id is not an address. Turning it into one is the media service's
       // job on the server and the upload registry's job here; storing the id
@@ -209,6 +222,103 @@ class MockProfileRepository implements ProfileRepository {
 
   @override
   Future<void> unarchivePost(String postId) async => _archivedIds.remove(postId);
+
+  /// Sunucuda benzersizliği indeks garanti ediyor; burada bir avuç ad, "bu
+  /// alınmış" yolunun da çalıştığını görebilmek için.
+  static const _takenUsernames = {'ahmet', 'elif', 'turksquare_resmi'};
+
+  /// Kimin kimi takip ettiği. Demo hesabın iki takipçisi ve bir takip ettiği
+  /// var; yeni kurulan bir hesabın hiçbiri yok, çünkü kimse onu tanımıyor.
+  final List<FollowSummary> _followers = [
+    const FollowSummary(
+      userId: 'member-elif',
+      displayName: 'Elif Demir',
+      username: 'elif',
+      city: 'Paterson',
+      regionCode: 'NJ',
+    ),
+    const FollowSummary(
+      userId: 'member-mert',
+      displayName: 'Mert Kaya',
+      username: 'mertkaya',
+      city: 'Brooklyn',
+      regionCode: 'NY',
+      viewerFollows: true,
+    ),
+  ];
+
+  final List<FollowSummary> _following = [
+    const FollowSummary(
+      userId: 'member-mert',
+      displayName: 'Mert Kaya',
+      username: 'mertkaya',
+      city: 'Brooklyn',
+      regionCode: 'NY',
+      viewerFollows: true,
+    ),
+  ];
+
+  @override
+  Future<UsernameCheck> checkUsername(String username) async {
+    final value = username.trim().toLowerCase();
+    if (value.length < 3 || value.length > 24) {
+      return const UsernameCheck(
+        available: false,
+        message: 'Kullanıcı adı 3-24 karakter olmalı.',
+      );
+    }
+    if (!RegExp(r'^[a-z0-9][a-z0-9_.]{1,22}[a-z0-9]$').hasMatch(value) ||
+        value.contains('..')) {
+      return const UsernameCheck(
+        available: false,
+        message: 'Yalnızca küçük harf, rakam, alt çizgi ve nokta kullanabilirsin.',
+      );
+    }
+    return _takenUsernames.contains(value)
+        ? const UsernameCheck(available: false, message: 'Bu kullanıcı adı alınmış.')
+        : const UsernameCheck(available: true, message: 'Bu kullanıcı adı senin olabilir.');
+  }
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowers(String userId) async =>
+      (items: List.of(_followers), locked: false);
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowing(String userId) async =>
+      (items: List.of(_following), locked: false);
+
+  @override
+  Future<bool> follow(String userId) async {
+    if (_following.any((item) => item.userId == userId)) return true;
+    final known = _followers.where((item) => item.userId == userId);
+    _following.add(
+      (known.isEmpty
+              ? FollowSummary(userId: userId, displayName: 'TurkSquare üyesi')
+              : known.first)
+          .copyWith(viewerFollows: true),
+    );
+    _markViewerFollows(userId, true);
+    return true;
+  }
+
+  @override
+  Future<bool> unfollow(String userId) async {
+    _following.removeWhere((item) => item.userId == userId);
+    _markViewerFollows(userId, false);
+    return false;
+  }
+
+  @override
+  Future<void> removeFollower(String userId) async =>
+      _followers.removeWhere((item) => item.userId == userId);
+
+  void _markViewerFollows(String userId, bool value) {
+    for (var index = 0; index < _followers.length; index++) {
+      if (_followers[index].userId == userId) {
+        _followers[index] = _followers[index].copyWith(viewerFollows: value);
+      }
+    }
+  }
 
   /// The handful of fields the member edits from inside the app, kept apart
   /// from the onboarding answers because those have a different writer.

@@ -55,7 +55,36 @@ class _FakeProfileRepository implements ProfileRepository {
     ({String? value})? avatarMediaId,
     ProfileVisibility? visibility,
     List<String>? showcasedBadges,
-  }) async => profile = profile.copyWith(bio: bio?.value ?? profile.bio);
+    ({String? value})? username,
+  }) async => profile = profile.copyWith(
+    bio: bio?.value ?? profile.bio,
+    username: username?.value ?? profile.username,
+  );
+
+  /// Takip tarafı bu testlerde kullanılmıyor; boş liste dönmek yerine "kilitli
+  /// değil, gerçekten boş" diyor ki bir gün kullanılırsa yalan söylemesin.
+  @override
+  Future<UsernameCheck> checkUsername(String username) async =>
+      const UsernameCheck(available: true, message: 'Bu ad boşta.');
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowers(
+    String userId,
+  ) async => (items: const <FollowSummary>[], locked: false);
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowing(
+    String userId,
+  ) async => (items: const <FollowSummary>[], locked: false);
+
+  @override
+  Future<bool> follow(String userId) async => true;
+
+  @override
+  Future<bool> unfollow(String userId) async => false;
+
+  @override
+  Future<void> removeFollower(String userId) async {}
 
   @override
   Future<List<ProfilePost>> getPosts(

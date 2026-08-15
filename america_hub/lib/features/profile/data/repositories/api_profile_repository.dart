@@ -37,6 +37,7 @@ class ApiProfileRepository implements ProfileRepository {
     ({String? value})? avatarMediaId,
     ProfileVisibility? visibility,
     List<String>? showcasedBadges,
+    ({String? value})? username,
   }) async {
     // Only the keys the caller actually passed are sent. An omitted key means
     // "leave it alone" on the server; including it with null would clear it.
@@ -46,6 +47,7 @@ class ApiProfileRepository implements ProfileRepository {
       if (visibility != null)
         'visibility': visibility == ProfileVisibility.public ? 'public' : 'friends_only',
       if (showcasedBadges != null) 'showcasedBadges': showcasedBadges,
+      if (username != null) 'username': username.value,
     };
     final response = await _client.patch<Map<String, dynamic>>(
       ApiEndpoints.communityProfileMe,
@@ -76,12 +78,82 @@ class ApiProfileRepository implements ProfileRepository {
   Future<void> unarchivePost(String postId) =>
       _client.delete<void>(ApiEndpoints.communityPostArchive(postId));
 
+  @override
+  Future<UsernameCheck> checkUsername(String username) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.communityUsernameAvailable,
+      queryParameters: {'username': username},
+    );
+    final data = response.data!['data'] as Map<String, dynamic>;
+    return UsernameCheck(
+      available: data['available'] as bool? ?? false,
+      // Sunucu neden reddettiğini yazıyla söylüyor; burada yeniden yazmak, iki
+      // yerde iki farklı cümle demek olurdu.
+      message: data['message'] as String? ?? 'Kullanıcı adı denetlenemedi.',
+    );
+  }
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowers(String userId) =>
+      _followList(ApiEndpoints.communityFollowers(userId));
+
+  @override
+  Future<({List<FollowSummary> items, bool locked})> getFollowing(String userId) =>
+      _followList(ApiEndpoints.communityFollowing(userId));
+
+  Future<({List<FollowSummary> items, bool locked})> _followList(String path) async {
+    final response = await _client.get<Map<String, dynamic>>(path);
+    final body = response.data!;
+    final meta = body['meta'] as Map<String, dynamic>? ?? const {};
+    return (
+      items: (body['data'] as List<dynamic>)
+          .map((raw) => _followFrom(raw as Map<String, dynamic>))
+          .toList(),
+      locked: meta['locked'] as bool? ?? false,
+    );
+  }
+
+  @override
+  Future<bool> follow(String userId) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.communityFollow(userId),
+    );
+    final data = response.data?['data'] as Map<String, dynamic>? ?? const {};
+    return data['following'] as bool? ?? true;
+  }
+
+  @override
+  Future<bool> unfollow(String userId) async {
+    final response = await _client.delete<Map<String, dynamic>>(
+      ApiEndpoints.communityFollow(userId),
+    );
+    final data = response.data?['data'] as Map<String, dynamic>? ?? const {};
+    // Arkadaşlık sürüyorsa sunucu hâlâ "takip ediliyor" diyor; ekran düğmeyi
+    // ona göre bırakıyor.
+    return data['following'] as bool? ?? false;
+  }
+
+  @override
+  Future<void> removeFollower(String userId) =>
+      _client.delete<void>(ApiEndpoints.communityFollower(userId));
+
+  FollowSummary _followFrom(Map<String, dynamic> json) => FollowSummary(
+    userId: json['userId'] as String,
+    displayName: json['displayName'] as String? ?? 'TurkSquare üyesi',
+    username: json['username'] as String?,
+    city: json['city'] as String?,
+    regionCode: json['regionCode'] as String?,
+    avatarUrl: json['avatarUrl'] as String?,
+    viewerFollows: json['viewerFollows'] as bool? ?? false,
+  );
+
   UserProfile _profileFrom(Map<String, dynamic> json) {
     final counts = json['counts'] as Map<String, dynamic>? ?? const {};
     final journey = json['journey'] as Map<String, dynamic>? ?? const {};
     return UserProfile(
       id: json['id'] as String,
       displayName: json['displayName'] as String? ?? 'TurkSquare üyesi',
+      username: json['username'] as String?,
       // Community never sees the address; it is identity's, and the profile
       // screen does not show it. Kept empty rather than faked.
       email: '',
@@ -121,7 +193,11 @@ class ApiProfileRepository implements ProfileRepository {
       ),
       postCount: (counts['posts'] as num?)?.toInt() ?? 0,
       friendCount: (counts['friends'] as num?)?.toInt() ?? 0,
+      followerCount: (counts['followers'] as num?)?.toInt() ?? 0,
+      followingCount: (counts['following'] as num?)?.toInt() ?? 0,
       badgeCount: (counts['badges'] as num?)?.toInt() ?? 0,
+      viewerFollows: json['viewerFollows'] as bool? ?? false,
+      followsViewer: json['followsViewer'] as bool? ?? false,
       isSelf: json['isSelf'] as bool? ?? false,
       canViewFullProfile: json['canViewFullProfile'] as bool? ?? false,
     );

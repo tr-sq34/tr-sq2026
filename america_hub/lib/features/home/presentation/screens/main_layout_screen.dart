@@ -40,6 +40,7 @@ import '../../../promotions/domain/entities/promotion.dart';
 import '../../../promotions/presentation/widgets/promotion_detail_sheet.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
 import '../../../community/presentation/screens/story_viewer_screen.dart';
+import '../../../profile/presentation/screens/member_profile_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
 import '../widgets/app_top_bar.dart';
@@ -166,6 +167,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         // Akıştaki Haber Bülteni kartı, ana sayfadaki haber şeridiyle aynı
         // ekrana gidiyor: haber tek yerde okunuyor, ikinci bir kopyası yok.
         onOpenArticle: _openArticle,
+        // Akıştaki bir ada dokunmak uzun süre hiçbir yere gitmiyordu; artık
+        // o üyenin profilini açıyor.
+        onOpenMember: _openMember,
       ),
     ),
     MarketplaceScreen(
@@ -185,6 +189,15 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       tabRequests: _profileTab,
     ),
   ];
+
+  /// Başka bir üyenin profili. Kendi profil sekmesinin yerine geçmiyor,
+  /// üstüne açılıyor: geri dönen üye akışta bıraktığı yere geliyor.
+  void _openMember(String userId) => openMemberProfile(
+    context,
+    userId: userId,
+    controller: widget.profileController,
+    friendshipController: widget.friendshipController,
+  );
 
   /// Profil sekmesinin hangi alt sekmesinin açılacağı. Yalnızca bildirimden
   /// gelindiğinde değişiyor; sayfalar bir kez kurulduğu için istek buradan

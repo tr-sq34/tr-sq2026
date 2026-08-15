@@ -1,4 +1,4 @@
-import Fastify, { type FastifyError } from 'fastify';
+import Fastify, { type FastifyError, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -2132,6 +2132,161 @@ app.get('/v1/community/friends/status/:userId', async (request, reply) => {
   }
 });
 
+/**
+ * Takip.
+ *
+ * Arkadaşlıktan farkı rızanın yönü: takip etmek için karşı tarafa sormuyorsun,
+ * arkadaş olmak için soruyorsun. Bu yüzden istek kuyruğu yok, tek bir INSERT
+ * var. Takip, arkadaşa özel paylaşımları açmıyor - onu yalnızca 'friend'
+ * satırları açıyor; takip yalnızca akıştaki "Takip ettiklerin" sekmesini ve
+ * Story şeridini besliyor.
+ *
+ * Satırlar 002'den beri şemada duran relationship_projection'a yazılıyor.
+ */
+// DISTINCT şart: bir kişi hem 'following' hem 'friend' satırı taşıyabiliyor
+// (önce takip etmiş, sonra arkadaş olmuşlar) ve o kişi listede iki kez çıkardı.
+const FOLLOW_LIST_SELECT = `
+  SELECT DISTINCT p.user_id,COALESCE(p.display_name,'TurkSquare üyesi') display_name,mp.username,p.city,p.region_code,
+         (SELECT m.safe_url FROM media_assets m WHERE m.id=mp.avatar_media_id AND m.status='ready') avatar_url,
+         EXISTS(SELECT 1 FROM relationship_projection vr WHERE vr.viewer_id=$2 AND vr.subject_id=p.user_id AND vr.active) viewer_follows
+    FROM relationship_projection r
+    JOIN community_profile_projection p ON p.user_id=`;
+
+type FollowRow = {
+  user_id: string; display_name: string; username: string | null; city: string | null;
+  region_code: string | null; avatar_url: string | null; viewer_follows: boolean;
+};
+
+async function toFollowDto(row: FollowRow) {
+  return {
+    userId: row.user_id,
+    displayName: row.display_name,
+    username: row.username,
+    city: row.city,
+    regionCode: row.region_code,
+    avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
+    viewerFollows: row.viewer_follows,
+  };
+}
+
+/// Kilitli bir profilin takipçi listesi de kilitli. Boş dizi ile kilit ayrı ayrı
+/// dönüyor: uygulama "kimse takip etmiyor" ile "göremiyorsun" arasındaki farkı
+/// ekranda söylemek zorunda.
+async function followList(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  direction: 'followers' | 'following',
+) {
+  const viewerId = await viewer(request.headers);
+  const ownerId = z.string().uuid().parse((request.params as { userId: string }).userId);
+  const access = await profileAccess(viewerId, ownerId);
+  if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+  if (!access.full) return { data: [], meta: { locked: true } };
+  const joinColumn = direction === 'followers' ? 'r.viewer_id' : 'r.subject_id';
+  const matchColumn = direction === 'followers' ? 'r.subject_id' : 'r.viewer_id';
+  const rows = await db.query<FollowRow>(
+    `${FOLLOW_LIST_SELECT}${joinColumn}
+     LEFT JOIN member_profiles mp ON mp.user_id=p.user_id
+     WHERE ${matchColumn}=$1 AND r.active
+     ORDER BY p.display_name
+     LIMIT 500`,
+    [ownerId, viewerId],
+  );
+  return { data: await Promise.all(rows.rows.map(toFollowDto)), meta: { locked: false } };
+}
+
+app.get('/v1/community/profiles/:userId/followers', async (request, reply) => {
+  try {
+    return await followList(request, reply, 'followers');
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWERS_UNAVAILABLE', message: 'Takipçi listesi yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/profiles/:userId/following', async (request, reply) => {
+  try {
+    return await followList(request, reply, 'following');
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWING_UNAVAILABLE', message: 'Takip listesi yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/members/:userId/follow', { config: { rateLimit: { max: 120, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const restricted = await activeRestriction(viewerId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    if (targetId === viewerId) return reply.code(400).send({ error: { code: 'CANNOT_FOLLOW_SELF', message: 'Kendini takip edemezsin.' } });
+    const blocked = await db.query(
+      'SELECT 1 FROM user_blocks WHERE (blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1)',
+      [viewerId, targetId],
+    );
+    // Engellenen profil 404 veriyor; takip de aynısını vermeli, yoksa engel bir
+    // "bu hesap var mı" sorgusuna dönüşür.
+    if (blocked.rowCount) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    const exists = await db.query('SELECT 1 FROM community_profile_projection WHERE user_id=$1', [targetId]);
+    if (!exists.rowCount) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    await db.query(
+      `INSERT INTO relationship_projection(viewer_id,subject_id,relationship,active)
+       VALUES($1,$2,'following',true)
+       ON CONFLICT (viewer_id,subject_id,relationship) DO UPDATE SET active=true,updated_at=now()`,
+      [viewerId, targetId],
+    );
+    return { data: { following: true } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOW_FAILED', message: 'Takip edilemedi.' } });
+  }
+});
+
+app.delete('/v1/community/members/:userId/follow', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    // Yalnızca 'following' satırı kalkıyor. Arkadaşlık simetrik ve karşılıklı
+    // onaylı: onu tek taraflı bir "takipten çık" dokunuşuyla bozmak, üyenin
+    // istemediği bir şeyi yapmak olurdu. Arkadaşlıktan çıkmanın kendi yolu var.
+    await db.query(
+      "UPDATE relationship_projection SET active=false,updated_at=now() WHERE viewer_id=$1 AND subject_id=$2 AND relationship='following' AND active",
+      [viewerId, targetId],
+    );
+    const stillFriends = await db.query(
+      "SELECT 1 FROM relationship_projection WHERE viewer_id=$1 AND subject_id=$2 AND relationship='friend' AND active",
+      [viewerId, targetId],
+    );
+    // Arkadaşlık devam ediyorsa kişi hâlâ takip edilenler arasında. Uygulamaya
+    // "takipten çıktın" dedirtip listede bırakmak, ekranın kendi kendisiyle
+    // çelişmesi olurdu; `keptByFriendship` bunun nedenini söylüyor.
+    const keptByFriendship = (stillFriends.rowCount ?? 0) > 0;
+    return { data: { following: keptByFriendship, keptByFriendship } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'UNFOLLOW_FAILED', message: 'Takipten çıkılamadı.' } });
+  }
+});
+
+/// Kendi takipçini listeden çıkarmak. Takipten çıkmanın aynası: bu sefer silinen
+/// satır karşı tarafın satırı, o yüzden yalnızca kendi profilinde çalışıyor.
+app.delete('/v1/community/members/:userId/follower', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const friends = await db.query(
+      "SELECT 1 FROM relationship_projection WHERE viewer_id=$1 AND subject_id=$2 AND relationship='friend' AND active",
+      [targetId, viewerId],
+    );
+    if (friends.rowCount) {
+      return reply.code(409).send({ error: { code: 'FOLLOWER_IS_FRIEND', message: 'Bu kişi arkadaşın. Listeden çıkarmak için önce arkadaşlıktan çıkarman gerekiyor.' } });
+    }
+    await db.query(
+      "UPDATE relationship_projection SET active=false,updated_at=now() WHERE viewer_id=$1 AND subject_id=$2 AND relationship='following' AND active",
+      [targetId, viewerId],
+    );
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWER_REMOVE_FAILED', message: 'Takipçi çıkarılamadı.' } });
+  }
+});
+
 // --- Content moderation -------------------------------------------------
 // Reporting for feed content. The app had a "Raporla" menu item that only
 // showed a snackbar, so a report reached nobody. Categories, priorities and the
@@ -2643,11 +2798,35 @@ app.delete('/v1/internal/gatework/community/restrictions/:userId', async (reques
 // the onboarding answers arrive as a projection and are never edited here, so
 // there is exactly one writer for each fact.
 
+/// Aynı kural üç yerde geçerli: burada, müsaitlik ucunda ve göç 037'deki CHECK
+/// içinde. Üçü ayrışırsa uygulama "müsait" deyip sunucu reddeder.
+const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_.]{1,22}[a-z0-9]$/;
+
+/// Kimsenin alamayacağı adlar. Bunlar bir kişiyi değil kurumu ya da bir ekranı
+/// işaret ediyor; "@destek" adlı bir üye, uygulamanın kendisi sanılabilir.
+const RESERVED_USERNAMES = new Set([
+  'admin', 'admins', 'administrator', 'destek', 'support', 'yardim', 'help',
+  'turksquare', 'turk_square', 'official', 'resmi', 'moderator', 'mod',
+  'guvenlik', 'security', 'sistem', 'system', 'root', 'me', 'ben', 'profil',
+  'profile', 'ayarlar', 'settings', 'null', 'undefined',
+]);
+
+const usernameField = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(USERNAME_PATTERN)
+  .refine((value) => !value.includes('..'))
+  .refine((value) => !RESERVED_USERNAMES.has(value));
+
 const profilePatchBody = z.object({
   bio: z.string().trim().max(280).nullable().optional(),
   avatarMediaId: z.string().uuid().nullable().optional(),
   visibility: z.enum(['public', 'friends_only']).optional(),
   showcasedBadges: z.array(z.string().regex(/^[a-z0-9_]{3,60}$/)).max(3).optional(),
+  // Bir kez boşaltılabiliyor ama boş dize ile değil: null "kullanıcı adım
+  // olmasın" demek, '' ise doğrulamadan geçmiş bir kaza olurdu.
+  username: usernameField.nullable().optional(),
 });
 const profilePostsQuery = z.object({
   state: z.enum(['active', 'archived']).default('active'),
@@ -2834,35 +3013,54 @@ async function grantInBackground(label: string, work: (client: pg.PoolClient) =>
 /// data and choose to hide it. A block in either direction closes the profile
 /// regardless of visibility - the point of a block is not to be seen.
 async function profileAccess(viewerId: string, ownerId: string) {
-  if (viewerId === ownerId) return { self: true, blocked: false, full: true };
-  const row = await db.query<{ blocked: boolean; friend: boolean; visibility: string }>(
+  if (viewerId === ownerId) {
+    return { self: true, blocked: false, full: true, viewerFollows: false, followsViewer: false };
+  }
+  const row = await db.query<{ blocked: boolean; friend: boolean; visibility: string; viewer_follows: boolean; follows_viewer: boolean }>(
     `SELECT
        EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=$2) OR (b.blocker_id=$2 AND b.blocked_id=$1)) blocked,
        EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.relationship='friend' AND r.active) friend,
-       COALESCE((SELECT visibility FROM member_profiles WHERE user_id=$2),'friends_only') visibility`,
+       COALESCE((SELECT visibility FROM member_profiles WHERE user_id=$2),'friends_only') visibility,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.active) viewer_follows,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$2 AND r.subject_id=$1 AND r.active) follows_viewer`,
     [viewerId, ownerId],
   );
   const access = row.rows[0]!;
-  return { self: false, blocked: access.blocked, full: !access.blocked && (access.visibility === 'public' || access.friend) };
+  return {
+    self: false,
+    blocked: access.blocked,
+    full: !access.blocked && (access.visibility === 'public' || access.friend),
+    viewerFollows: access.viewer_follows,
+    followsViewer: access.follows_viewer,
+  };
 }
 
 type ProfileRow = {
-  user_id: string; display_name: string; city: string | null; region_code: string | null; interests: string[];
+  user_id: string; display_name: string; username: string | null; city: string | null; region_code: string | null; interests: string[];
   born_in_us: boolean; arrived_month: number | null; arrived_year: number | null; origin_country: string | null;
   origin_city: string | null; primary_intent: string | null; bio: string | null; visibility: string | null;
   showcased_badges: string[] | null; avatar_url: string | null; identity_verified: boolean;
-  post_count: string; friend_count: string; points: number | null; level: number | null; badge_count: number | null;
+  post_count: string; friend_count: string; follower_count: string; following_count: string;
+  points: number | null; level: number | null; badge_count: number | null;
   streak_days: number | null; level_title: string | null; next_level_points: number | null;
 };
 
 const PROFILE_SELECT = `
   SELECT p.user_id,p.display_name,p.city,p.region_code,p.interests,
          p.born_in_us,p.arrived_month,p.arrived_year,p.origin_country,p.origin_city,p.primary_intent,
-         mp.bio,mp.visibility,mp.showcased_badges,
+         mp.bio,mp.visibility,mp.showcased_badges,mp.username,
          (SELECT m.safe_url FROM media_assets m WHERE m.id=mp.avatar_media_id AND m.status='ready') avatar_url,
          COALESCE(mc.identity_verified,false) identity_verified,
          (SELECT count(*) FROM community_posts cp WHERE cp.author_id=p.user_id AND cp.deleted_at IS NULL AND cp.archived_at IS NULL AND cp.moderation_state='active') post_count,
          (SELECT count(*) FROM relationship_projection r WHERE r.viewer_id=p.user_id AND r.relationship='friend' AND r.active) friend_count,
+         -- Arkadaşlık iki yönlü yazılıyor, yani her arkadaş aynı zamanda hem
+         -- takipçi hem takip edilen. Sayaçlar bu yüzden ilişki tipine göre
+         -- ayrılmıyor: "beni takip edenler" listesinde arkadaşının çıkmaması
+         -- üyeye yanlış bir sayı gösterirdi.
+         -- count(DISTINCT ...): aynı kişinin hem 'following' hem 'friend'
+         -- satırı olabiliyor ve düz bir count onu iki kişi sayardı.
+         (SELECT count(DISTINCT r.viewer_id) FROM relationship_projection r WHERE r.subject_id=p.user_id AND r.active) follower_count,
+         (SELECT count(DISTINCT r.subject_id) FROM relationship_projection r WHERE r.viewer_id=p.user_id AND r.active) following_count,
          ms.points,ms.level,ms.badge_count,ms.streak_days,
          (SELECT l.title FROM journey_levels l WHERE l.level=COALESCE(ms.level,1)) level_title,
          (SELECT min(l.min_points) FROM journey_levels l WHERE l.min_points>COALESCE(ms.points,0)) next_level_points
@@ -2871,7 +3069,10 @@ const PROFILE_SELECT = `
     LEFT JOIN member_capabilities mc ON mc.user_id=p.user_id
     LEFT JOIN member_scores ms ON ms.user_id=p.user_id`;
 
-async function toProfileDto(row: ProfileRow, access: { self: boolean; full: boolean }) {
+async function toProfileDto(
+  row: ProfileRow,
+  access: { self: boolean; full: boolean; viewerFollows?: boolean; followsViewer?: boolean },
+) {
   const showcased = row.showcased_badges ?? [];
   const badges = showcased.length
     ? await db.query<{ code: string; title: string; icon: string; tier: string }>(
@@ -2882,6 +3083,9 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
   return {
     id: row.user_id,
     displayName: row.display_name,
+    // Handle, kilitli profilde de duruyor. Zaten bir adres: gizlemek profilin
+    // paylaşılabilir olmasını engeller, kimseyi korumaz.
+    username: row.username,
     city: row.city,
     regionCode: row.region_code,
     // Everything below the fold is withheld from a viewer the member has not
@@ -2894,7 +3098,12 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
     originCountry: access.full ? row.origin_country : null,
     originCity: access.full ? row.origin_city : null,
     primaryIntent: access.full ? row.primary_intent : null,
-    bio: access.full ? row.bio ?? '' : '',
+    // Kilitli profil bir duvar değil bir kapı: üyenin kendini anlattığı iki
+    // satır ve vitrine koyduğu rozetler herkese açık kalıyor, çünkü karşıdaki
+    // kişi arkadaşlık isteği göndermeden önce kime istek gönderdiğini
+    // bilebilmeli. Nereden geldiği, ne zaman geldiği ve neyle ilgilendiği
+    // kapalı kalmaya devam ediyor.
+    bio: row.bio ?? '',
     avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
     visibility: row.visibility ?? 'friends_only',
     identityVerified: row.identity_verified,
@@ -2902,8 +3111,12 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
     counts: {
       posts: Number(row.post_count),
       friends: Number(row.friend_count),
+      followers: Number(row.follower_count),
+      following: Number(row.following_count),
       badges: row.badge_count ?? 0,
     },
+    viewerFollows: access.viewerFollows ?? false,
+    followsViewer: access.followsViewer ?? false,
     journey: {
       points: row.points ?? 0,
       level: row.level ?? 1,
@@ -2971,13 +3184,14 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
     }
 
     await client.query(
-      `INSERT INTO member_profiles(user_id,bio,avatar_media_id,visibility,showcased_badges)
-       VALUES($1,$2,$3,COALESCE($4,'friends_only'),COALESCE($5::text[],'{}'))
+      `INSERT INTO member_profiles(user_id,bio,avatar_media_id,visibility,showcased_badges,username)
+       VALUES($1,$2,$3,COALESCE($4,'friends_only'),COALESCE($5::text[],'{}'),$8)
        ON CONFLICT(user_id) DO UPDATE SET
          bio=CASE WHEN $6::boolean THEN $2 ELSE member_profiles.bio END,
          avatar_media_id=CASE WHEN $7::boolean THEN $3 ELSE member_profiles.avatar_media_id END,
          visibility=COALESCE($4,member_profiles.visibility),
          showcased_badges=COALESCE($5::text[],member_profiles.showcased_badges),
+         username=CASE WHEN $9::boolean THEN $8 ELSE member_profiles.username END,
          updated_at=now()`,
       [
         userId,
@@ -2989,6 +3203,8 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
         // the stored value, an explicit null wipes it.
         Object.prototype.hasOwnProperty.call(request.body ?? {}, 'bio'),
         Object.prototype.hasOwnProperty.call(request.body ?? {}, 'avatarMediaId'),
+        input.username ?? null,
+        Object.prototype.hasOwnProperty.call(request.body ?? {}, 'username'),
       ],
     );
 
@@ -3007,9 +3223,43 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
     return { data: await toProfileDto(row.rows[0], { self: true, full: true }) };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
+    // Müsaitlik denetimi ile bu INSERT arasında saniyeler var; o aralıkta aynı
+    // adı başkası alabilir. Son sözü indeks söylüyor ve üye "bu ad az önce
+    // alındı" cevabını alıyor, "profil güncellenemedi" değil.
+    if ((error as { code?: string }).code === '23505') {
+      return reply.code(409).send({ error: { code: 'USERNAME_TAKEN', message: 'Bu kullanıcı adı alınmış. Başka bir tane dene.' } });
+    }
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROFILE_UPDATE_FAILED', message: 'Profil güncellenemedi.' } });
   } finally {
     client.release();
+  }
+});
+
+/// "Bu kullanıcı adı boşta mı?" - üye yazarken cevap veren uç.
+///
+/// Nihai karar değil, nezaket. Kaydetme anında indeks yeniden karar veriyor;
+/// burada verilen "müsait" cevabı yalnızca o andaki durumu anlatıyor. Kural
+/// ihlali ile doluluk ayrı ayrı dönüyor: "kısa" ile "alınmış" aynı ekranda aynı
+/// kırmızıyı gösterirse üye neyi düzelteceğini bilemez.
+app.get('/v1/community/profiles/username-available', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const raw = z.string().trim().max(40).parse((request.query as { username?: string }).username ?? '').toLowerCase();
+    if (raw.length < 3 || raw.length > 24) {
+      return { data: { available: false, reason: 'length', message: 'Kullanıcı adı 3-24 karakter olmalı.' } };
+    }
+    if (!USERNAME_PATTERN.test(raw) || raw.includes('..')) {
+      return { data: { available: false, reason: 'format', message: 'Yalnızca küçük harf, rakam, alt çizgi ve nokta kullanabilirsin.' } };
+    }
+    if (RESERVED_USERNAMES.has(raw)) {
+      return { data: { available: false, reason: 'reserved', message: 'Bu ad kullanıma kapalı.' } };
+    }
+    const taken = await db.query('SELECT 1 FROM member_profiles WHERE username=$1 AND user_id<>$2', [raw, userId]);
+    return taken.rowCount
+      ? { data: { available: false, reason: 'taken', message: 'Bu kullanıcı adı alınmış.' } }
+      : { data: { available: true, reason: null, message: 'Bu kullanıcı adı senin olabilir.' } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'USERNAME_CHECK_FAILED', message: 'Kullanıcı adı denetlenemedi.' } });
   }
 });
 

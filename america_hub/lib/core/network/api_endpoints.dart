@@ -67,6 +67,19 @@ abstract final class ApiEndpoints {
   static String communityProfile(String userId) => '/community/profiles/$userId';
   static String communityProfilePosts(String userId) =>
       '/community/profiles/$userId/posts';
+  static const communityUsernameAvailable =
+      '/community/profiles/username-available';
+  static String communityFollowers(String userId) =>
+      '/community/profiles/$userId/followers';
+  static String communityFollowing(String userId) =>
+      '/community/profiles/$userId/following';
+  // Takip et / takipten çık aynı adresin POST ve DELETE'i. Takipçiyi listeden
+  // çıkarmak ayrı bir adres: silinen satır karşı tarafın satırı, aynı işlemin
+  // tersi değil.
+  static String communityFollow(String userId) =>
+      '/community/members/$userId/follow';
+  static String communityFollower(String userId) =>
+      '/community/members/$userId/follower';
   static String communityPostArchive(String postId) =>
       '/community/posts/$postId/archive';
   // Akış yorumları. Silme ucu paylaşımı değil yorumu adresliyor; sunucu yorumu

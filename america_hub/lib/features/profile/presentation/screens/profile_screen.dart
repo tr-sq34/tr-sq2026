@@ -19,7 +19,10 @@ import '../../application/friendship_controller.dart';
 import '../../application/profile_controller.dart';
 import '../../domain/entities/friendship.dart';
 import '../../domain/entities/user_profile.dart';
+import '../widgets/follow_list_sheet.dart';
 import '../widgets/profile_badge_chip.dart';
+import '../widgets/username_sheet.dart';
+import 'member_profile_screen.dart';
 
 /// The member's identity in America.
 ///
@@ -109,14 +112,17 @@ class _ProfileScreenState extends State<ProfileScreen>
         backgroundColor: AppColors.background,
         body: NestedScrollView(
           headerSliverBuilder: (context, _) => [
-            SliverToBoxAdapter(child: _Header(
+            SliverToBoxAdapter(child: ProfileHeader(
               profile: profile,
               journeyController: widget.journeyController,
               uploadingAvatar: _uploadingAvatar,
               onTapAvatar: profile.isSelf ? _changeAvatar : null,
               onEditBio: profile.isSelf ? () => _editBio(profile) : null,
+              onEditUsername: profile.isSelf ? () => _editUsername(profile) : null,
               onOpenJourney: () => _openJourney(),
               onOpenBadges: () => _openJourney(tab: JourneyTab.badges),
+              onOpenFollowers: () => _openFollows(profile, FollowListTab.followers),
+              onOpenFollowing: () => _openFollows(profile, FollowListTab.following),
               onSignOut: profile.isSelf ? _confirmSignOut : null,
             )),
             SliverPersistentHeader(
@@ -205,6 +211,35 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     if (saved != null) await widget.controller.updateBio(saved);
   }
+
+  Future<void> _editUsername(UserProfile profile) => showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (_) => UsernameSheet(controller: widget.controller, profile: profile),
+  );
+
+  void _openFollows(UserProfile profile, FollowListTab tab) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: AppColors.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (_) => FollowListSheet(
+          controller: widget.controller,
+          profile: profile,
+          initialTab: tab,
+          onOpenMember: (userId) {
+            Navigator.of(context).pop();
+            openMemberProfile(context, userId: userId, controller: widget.controller);
+          },
+        ),
+      );
 
   /// Tap the avatar to change it. The image travels the same quarantine-and-scan
   /// path as every other upload; the profile only stores the id once the media
@@ -314,16 +349,21 @@ class _ProfileScreenState extends State<ProfileScreen>
 /// It is deliberately short. Everything that used to sit here in its own padded
 /// card now lives as a single row further down: the header's job is to say who
 /// this is, not to fill a screen.
-class _Header extends StatelessWidget {
-  const _Header({
+class ProfileHeader extends StatelessWidget {
+  const ProfileHeader({
+    super.key,
     required this.profile,
     required this.journeyController,
     required this.onOpenJourney,
     required this.onOpenBadges,
+    required this.onOpenFollowers,
+    required this.onOpenFollowing,
     this.uploadingAvatar = false,
     this.onTapAvatar,
     this.onEditBio,
+    this.onEditUsername,
     this.onSignOut,
+    this.trailing,
   });
 
   final UserProfile profile;
@@ -331,9 +371,16 @@ class _Header extends StatelessWidget {
   final bool uploadingAvatar;
   final VoidCallback onOpenJourney;
   final VoidCallback onOpenBadges;
+  final VoidCallback onOpenFollowers;
+  final VoidCallback onOpenFollowing;
   final VoidCallback? onTapAvatar;
   final VoidCallback? onEditBio;
+  final VoidCallback? onEditUsername;
   final VoidCallback? onSignOut;
+
+  /// Başkasının profilinde çıkış düğmesinin yerini takip ve mesaj düğmeleri
+  /// alıyor; ikisi aynı köşede olamayacağı için tek bir yuva.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -356,7 +403,24 @@ class _Header extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(child: _Stat(value: profile.postCount, label: 'Paylaşım')),
-                  Expanded(child: _Stat(value: profile.friendCount, label: 'Arkadaş')),
+                  // Arkadaş sayacının yerini takip aldı. Arkadaşlık hâlâ var ve
+                  // kendi sekmesinde duruyor; başlıkta ise bir profili anlatan
+                  // sayı, karşılıklı onay verilmiş kişi sayısı değil, kaç
+                  // kişinin onu izlediği.
+                  Expanded(
+                    child: _Stat(
+                      value: profile.followerCount,
+                      label: 'Takipçi',
+                      onTap: onOpenFollowers,
+                    ),
+                  ),
+                  Expanded(
+                    child: _Stat(
+                      value: profile.followingCount,
+                      label: 'Takip',
+                      onTap: onOpenFollowing,
+                    ),
+                  ),
                   // The badge cabinet lives on the journey screen, so the
                   // counter that names it is the way in.
                   Expanded(
@@ -369,7 +433,9 @@ class _Header extends StatelessWidget {
                 ],
               ),
             ),
-            if (onSignOut != null)
+            if (trailing != null)
+              trailing!
+            else if (onSignOut != null)
               IconButton(
                 tooltip: 'Güvenli çıkış',
                 icon: const Icon(Icons.logout_rounded, color: AppColors.profileAccent),
@@ -394,15 +460,11 @@ class _Header extends StatelessWidget {
             ],
           ],
         ),
-        if (profile.journeyLine != null) ...[
-          const SizedBox(height: 2),
-          Text(
-            profile.journeyLine!,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-        ],
+        // Adresin yerini kullanıcı adı aldı. "İzmir, TR ➜ Paterson, NJ" satırı
+        // adın hemen altında bir adres gibi duruyordu; nereden gelip nereye
+        // yerleştiği Profil sekmesinde zaten yazıyor ve orada bir cümle, burada
+        // bir etiket olması gerekiyordu.
+        _UsernameLine(profile: profile, onEdit: onEditUsername),
         const SizedBox(height: 6),
         _Bio(profile: profile, onEdit: onEditBio),
         const SizedBox(height: 12),
@@ -505,6 +567,50 @@ class _Avatar extends StatelessWidget {
     if (parts.isEmpty) return '?';
     if (parts.length == 1) return parts.first.characters.first.toUpperCase();
     return (parts.first.characters.first + parts.last.characters.first).toUpperCase();
+  }
+}
+
+/// `@kullaniciadi`, ya da henüz seçmemiş olan üye için onu seçmeye çağıran tek
+/// satır. Başkasının profilinde kullanıcı adı yoksa satır hiç çizilmiyor:
+/// olmayan bir şeyin boşluğunu göstermenin kimseye faydası yok.
+class _UsernameLine extends StatelessWidget {
+  const _UsernameLine({required this.profile, this.onEdit});
+
+  final UserProfile profile;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final username = profile.username;
+    if (username != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: GestureDetector(
+          onTap: onEdit,
+          child: Text(
+            '@$username',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.profileAccent,
+            ),
+          ),
+        ),
+      );
+    }
+    if (onEdit == null) return const SizedBox.shrink();
+    return TextButton.icon(
+      onPressed: onEdit,
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        alignment: Alignment.centerLeft,
+        visualDensity: VisualDensity.compact,
+      ),
+      icon: const Icon(Icons.alternate_email_rounded, size: 17),
+      label: const Text('Kullanıcı adı seç'),
+    );
   }
 }
 

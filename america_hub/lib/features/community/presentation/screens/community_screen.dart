@@ -46,6 +46,7 @@ class CommunityScreen extends StatefulWidget {
     this.viewer,
     this.viewerRegion,
     this.onOpenArticle,
+    this.onOpenMember,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -53,8 +54,8 @@ class CommunityScreen extends StatefulWidget {
   final MediaUploadController mediaUploadController;
   final CommunitySpecialRequestController specialRequestController;
 
-  /// Arkadaşlık isteği akıştan gönderiliyor: uygulamada başka bir üyenin
-  /// profilini açan hiçbir ekran yok, karşılaşma yeri burası.
+  /// Arkadaşlık isteği hem akıştan hem de üye profilinden gönderilebiliyor;
+  /// akıştaki menü, profili hiç açmadan karar vermek isteyen için duruyor.
   final FriendshipController friendshipController;
 
   /// Story oluşturma akışındaki "Tanıtım Yap" adımı buradan gönderilir:
@@ -75,6 +76,11 @@ class CommunityScreen extends StatefulWidget {
   /// haberin kimliğini söylüyor. Null ise kart dokunulmaz kalır - hiçbir yere
   /// gitmeyen bir kart açılmaz.
   final void Function(String articleId)? onOpenArticle;
+
+  /// Paylaşımdaki avatara ya da ada dokunulduğunda o üyenin profilini açar.
+  /// Profil ekranı kendi denetleyicisini istiyor ve o kabukta duruyor; akış
+  /// yalnızca kimin açılacağını söylüyor.
+  final void Function(String userId)? onOpenMember;
 
   /// Every post, comment and story below this point needs a way to be reported,
   /// so the repository is handed down rather than looked up: the widgets that
@@ -129,6 +135,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         viewer: widget.viewer,
         viewerRegion: widget.viewerRegion,
         onOpenArticle: widget.onOpenArticle,
+        onOpenMember: widget.onOpenMember,
       );
     },
   );
@@ -147,6 +154,7 @@ class _Feed extends StatefulWidget {
     this.viewer,
     this.viewerRegion,
     this.onOpenArticle,
+    this.onOpenMember,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -159,6 +167,7 @@ class _Feed extends StatefulWidget {
   final AppUser? viewer;
   final String? Function()? viewerRegion;
   final void Function(String articleId)? onOpenArticle;
+  final void Function(String userId)? onOpenMember;
 
   @override
   State<_Feed> createState() => _FeedState();
@@ -422,6 +431,16 @@ class _FeedState extends State<_Feed> {
                     : null,
                 onOpenComments: () => _openComments(post),
                 onOpenArticle: widget.onOpenArticle,
+                // Kendi adına dokunmak bir yere gitmiyor: kendi profili zaten
+                // alt bardaki sekmede duruyor.
+                onOpenMember:
+                    widget.onOpenMember == null ||
+                        post.isNewsBulletin ||
+                        post.ownerId.isEmpty ||
+                        post.ownerId == _viewerId ||
+                        post.ownerId == 'local-user'
+                    ? null
+                    : () => widget.onOpenMember!(post.ownerId),
                 onVote: _vote,
               ),
             ),
@@ -1062,6 +1081,7 @@ class _PostCard extends StatelessWidget {
     this.onDelete,
     this.onAddFriend,
     this.onOpenArticle,
+    this.onOpenMember,
   });
   final CommunityPost post;
   final ValueChanged<String> onToggleLike;
@@ -1081,6 +1101,11 @@ class _PostCard extends StatelessWidget {
 
   /// Haber kartında dolu. Null ise kart dokunulmaz kalır.
   final void Function(String articleId)? onOpenArticle;
+
+  /// Avatara ya da ada dokunmak yazarın profilini açar. Null olduğu iki yer
+  /// var: haber kartı (arkasında bir üye yok) ve üyenin kendi paylaşımı
+  /// (kendi profili zaten alt bardaki sekmede).
+  final VoidCallback? onOpenMember;
 
   @override
   Widget build(BuildContext context) {
@@ -1122,25 +1147,30 @@ class _PostCard extends StatelessWidget {
           children: [
             // Haber Bülteni'nin baş harfi yok: bu bir kişi değil. Gazete
             // simgesi imzanın kendisi, altındaki isim de tıklanmıyor -
-            // açılacak bir profil olmadığı için.
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: AppColors.primary.withValues(
-                alpha: article == null ? .16 : .22,
-              ),
-              child: article == null
-                  ? Text(
-                      post.authorName.substring(0, 1),
-                      style: const TextStyle(
+            // açılacak bir profil olmadığı için. Bir üyenin adı ise artık
+            // profiline gidiyor; uzun süre hiçbir yere gitmiyordu.
+            GestureDetector(
+              onTap: onOpenMember,
+              behavior: HitTestBehavior.opaque,
+              child: CircleAvatar(
+                radius: 20,
+                backgroundColor: AppColors.primary.withValues(
+                  alpha: article == null ? .16 : .22,
+                ),
+                child: article == null
+                    ? Text(
+                        post.authorName.substring(0, 1),
+                        style: const TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.newspaper_rounded,
+                        size: 20,
                         color: AppColors.primary,
-                        fontWeight: FontWeight.w800,
                       ),
-                    )
-                  : const Icon(
-                      Icons.newspaper_rounded,
-                      size: 20,
-                      color: AppColors.primary,
-                    ),
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -1150,12 +1180,16 @@ class _PostCard extends StatelessWidget {
                   Row(
                     children: [
                       Flexible(
-                        child: Text(
-                          post.authorName,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.textPrimary,
-                            fontWeight: FontWeight.w800,
+                        child: GestureDetector(
+                          onTap: onOpenMember,
+                          behavior: HitTestBehavior.opaque,
+                          child: Text(
+                            post.authorName,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       ),
