@@ -55,6 +55,11 @@ dependencies:
   passkeys: ^2.22.0
   crypto: ^3.0.6
   url_launcher: ^6.3.2
+  # Çökme raporunun cevaplaması gereken ilk iki soru: hangi sürümde ve hangi
+  # cihazda. İkisi olmadan panel "uygulama çöküyor" diyebilir ama "son sürümde
+  # sadece bir cihaz ailesinde çöküyor" diyemez.
+  device_info_plus: ^12.4.0
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:

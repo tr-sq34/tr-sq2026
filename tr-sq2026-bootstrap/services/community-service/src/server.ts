@@ -12,6 +12,7 @@ import { generateMediaUploadSasUrl, generateMediaReadSasUrl, headMediaBlob } fro
 import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js';
 import { advanceProgress, awardBadge, recomputeScore, reporterTrust, touchStreak } from './journey.js';
 import { LOCALITY_MIN_BUCKET, emptyLocalityBucket, suppressSmallBuckets, type LocalityBucket } from './locality.js';
+import { MIN_SESSIONS_FOR_RATE, crashFingerprint, crashFreeRate, redactCrashText } from './stability.js';
 
 const required = (key: string) => { const value = process.env[key]; if (!value) throw new Error(`Missing ${key}`); return value; };
 const db = createDatabasePool();
@@ -142,6 +143,189 @@ app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => 
   } catch (error) {
     app.log.warn({ err: error }, 'Community health check failed');
     return reply.code(503).send({ status: 'unavailable' });
+  }
+});
+
+/**
+ * App stability: the two ingest routes and the one the console reads.
+ *
+ * A member's session is the only place that knows the app died - by the time
+ * anyone notices in the console the process is gone, and the emulator walkthrough
+ * that produced this feature is not a reporting system. `/health` above proves a
+ * service is up; nothing proved the app on a member's phone was.
+ *
+ * Both ingest routes take an optional viewer. A crash on the login screen, or
+ * one that happens after the session was cleared, is exactly the crash worth
+ * counting - requiring a token would blind the endpoint to the failures that
+ * happen earliest.
+ */
+const launchBody = z.object({
+  sessionId: z.string().uuid(),
+  platform: z.enum(['android', 'ios', 'web', 'other']),
+  appVersion: z.string().trim().min(1).max(40),
+  osVersion: z.string().trim().max(80).optional(),
+  deviceModel: z.string().trim().max(120).optional(),
+});
+const crashReportBody = launchBody.extend({
+  sessionId: z.string().uuid().optional(),
+  fatal: z.boolean(),
+  errorType: z.string().trim().min(1).max(160),
+  message: z.string().trim().min(1).max(1000),
+  screen: z.string().trim().max(120).optional(),
+  stack: z.string().trim().max(8000).optional(),
+});
+const stabilityQuery = z.object({ hours: z.coerce.number().int().min(1).max(720).default(24) });
+
+/// `viewer()` throws when there is no token, which is the right answer for a
+/// feed and the wrong one for telemetry.
+const optionalViewer = async (headers: { authorization?: string }) => {
+  try { return await viewer(headers); } catch { return null; }
+};
+
+/// Thirty days, swept from the ingest path rather than a cron: this service has
+/// no scheduler, and a table nobody prunes is a table that eventually decides
+/// how much the database costs. Once an hour at most, and never in the way of
+/// the response - a failed sweep must not turn into a failed crash report.
+const STABILITY_RETENTION_DAYS = 30;
+let lastStabilitySweep = 0;
+function sweepStabilityRetention() {
+  const now = Date.now();
+  if (now - lastStabilitySweep < 3_600_000) return;
+  lastStabilitySweep = now;
+  void (async () => {
+    try {
+      await db.query(`DELETE FROM app_crash_reports WHERE occurred_at < now() - make_interval(days => $1::int)`, [STABILITY_RETENTION_DAYS]);
+      await db.query(`DELETE FROM app_launch_sessions WHERE started_at < now() - make_interval(days => $1::int)`, [STABILITY_RETENTION_DAYS]);
+    } catch (error) {
+      app.log.warn({ err: error }, 'stability retention sweep failed');
+    }
+  })();
+}
+
+app.post('/v1/app/launches', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const input = launchBody.parse(request.body);
+    const memberId = await optionalViewer(request.headers);
+    // The app retries this on a flaky network and reuses one id for the life of
+    // the process, so a repeat is the same launch, not a second one.
+    await db.query(
+      `INSERT INTO app_launch_sessions(id, member_id, platform, app_version, os_version, device_model)
+       VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
+      [input.sessionId, memberId, input.platform, input.appVersion, input.osVersion ?? null, input.deviceModel ?? null],
+    );
+    return reply.code(202).send({ data: { recorded: true } });
+  } catch (error) {
+    request.log.error({ err: error }, 'app launch ingest failed');
+    return reply.code(500).send({ error: { code: 'LAUNCH_NOT_RECORDED', message: 'Oturum kaydedilemedi.' } });
+  }
+});
+
+app.post('/v1/app/crashes', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const input = crashReportBody.parse(request.body);
+    const memberId = await optionalViewer(request.headers);
+    const message = redactCrashText(input.message);
+    const stack = input.stack ? redactCrashText(input.stack) : null;
+    const fingerprint = crashFingerprint({ errorType: input.errorType, message, stack });
+    await db.query(
+      `INSERT INTO app_crash_reports(session_id, member_id, platform, app_version, os_version, device_model, fatal, error_type, message, screen, stack, fingerprint)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [input.sessionId ?? null, memberId, input.platform, input.appVersion, input.osVersion ?? null, input.deviceModel ?? null,
+        input.fatal, input.errorType, message, input.screen ?? null, stack, fingerprint],
+    );
+    // Only a fatal one ruins the session. A handled error the app recovered from
+    // is worth reading and must not move the crash-free rate.
+    if (input.fatal && input.sessionId) {
+      await db.query('UPDATE app_launch_sessions SET crashed = TRUE WHERE id = $1', [input.sessionId]);
+    }
+    sweepStabilityRetention();
+    return reply.code(202).send({ data: { recorded: true } });
+  } catch (error) {
+    request.log.error({ err: error }, 'app crash ingest failed');
+    return reply.code(500).send({ error: { code: 'CRASH_NOT_RECORDED', message: 'Hata raporu kaydedilemedi.' } });
+  }
+});
+
+app.get('/v1/internal/gatework/system/stability', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'security_admin', 'operations_admin', 'auditor', 'analyst']);
+    const { hours } = stabilityQuery.parse(request.query);
+
+    const [current, previous, crashes, groups, platforms] = await Promise.all([
+      db.query<{ sessions: number; crashed_sessions: number }>(
+        `SELECT count(*)::int AS sessions, count(*) FILTER (WHERE crashed)::int AS crashed_sessions
+           FROM app_launch_sessions WHERE started_at > now() - make_interval(hours => $1::int)`, [hours]),
+      // The same length of time immediately before it. "%99.1" says nothing on
+      // its own; "%99.1, dün %99.8" is the sentence an operator acts on.
+      db.query<{ sessions: number; crashed_sessions: number }>(
+        `SELECT count(*)::int AS sessions, count(*) FILTER (WHERE crashed)::int AS crashed_sessions
+           FROM app_launch_sessions
+          WHERE started_at > now() - make_interval(hours => $1::int) * 2
+            AND started_at <= now() - make_interval(hours => $1::int)`, [hours]),
+      db.query<{ crashes: number; fatal_crashes: number }>(
+        `SELECT count(*)::int AS crashes, count(*) FILTER (WHERE fatal)::int AS fatal_crashes
+           FROM app_crash_reports WHERE occurred_at > now() - make_interval(hours => $1::int)`, [hours]),
+      db.query(
+        `SELECT fingerprint,
+                (array_agg(error_type ORDER BY occurred_at DESC))[1] AS error_type,
+                (array_agg(message ORDER BY occurred_at DESC))[1] AS message,
+                (array_agg(screen ORDER BY occurred_at DESC))[1] AS screen,
+                count(*)::int AS occurrences,
+                count(DISTINCT session_id)::int AS sessions,
+                bool_or(fatal) AS fatal,
+                max(occurred_at) AS last_seen,
+                array_agg(DISTINCT platform) AS platforms,
+                array_agg(DISTINCT app_version) AS app_versions,
+                array_remove(array_agg(DISTINCT device_model), NULL) AS device_models
+           FROM app_crash_reports WHERE occurred_at > now() - make_interval(hours => $1::int)
+          GROUP BY fingerprint ORDER BY count(*) DESC, max(occurred_at) DESC LIMIT 8`, [hours]),
+      db.query<{ platform: string; sessions: number; crashed_sessions: number }>(
+        `SELECT platform, count(*)::int AS sessions, count(*) FILTER (WHERE crashed)::int AS crashed_sessions
+           FROM app_launch_sessions WHERE started_at > now() - make_interval(hours => $1::int)
+          GROUP BY platform ORDER BY count(*) DESC`, [hours]),
+    ]);
+
+    const window = { sessions: current.rows[0].sessions, crashedSessions: current.rows[0].crashed_sessions };
+    const before = { sessions: previous.rows[0].sessions, crashedSessions: previous.rows[0].crashed_sessions };
+
+    return {
+      data: {
+        windowHours: hours,
+        minSessionsForRate: MIN_SESSIONS_FOR_RATE,
+        sessions: window.sessions,
+        crashedSessions: window.crashedSessions,
+        crashFreeRate: crashFreeRate(window),
+        previous: { sessions: before.sessions, crashFreeRate: crashFreeRate(before) },
+        crashes: crashes.rows[0].crashes,
+        fatalCrashes: crashes.rows[0].fatal_crashes,
+        platforms: platforms.rows.map((row) => ({
+          platform: row.platform,
+          sessions: row.sessions,
+          crashFreeRate: crashFreeRate({ sessions: row.sessions, crashedSessions: row.crashed_sessions }),
+        })),
+        groups: groups.rows.map((row) => ({
+          fingerprint: row.fingerprint,
+          errorType: row.error_type,
+          message: row.message,
+          screen: row.screen,
+          occurrences: row.occurrences,
+          sessions: row.sessions,
+          fatal: row.fatal,
+          lastSeen: row.last_seen,
+          platforms: row.platforms,
+          appVersions: row.app_versions,
+          deviceModels: row.device_models,
+        })),
+      },
+    };
+  } catch (error) {
+    // Same rule as the read routes below: 401 means the token was refused and
+    // nothing else. A broken query here must not read as an expired session.
+    const message = (error as Error)?.message;
+    const status = message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 500;
+    if (status >= 500) request.log.error({ err: error }, 'stability read failed');
+    return reply.code(status).send({ error: { code: 'STABILITY_UNAVAILABLE', message: 'Kararlılık verisi okunamadı.' } });
   }
 });
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
@@ -7,6 +8,10 @@ import 'core/storage/token_store.dart';
 import 'core/network/api_client.dart';
 import 'core/network/api_config.dart';
 import 'core/cache/cache_store.dart';
+import 'core/telemetry/crash_reporter.dart';
+import 'core/telemetry/screen_observer.dart';
+import 'core/telemetry/telemetry_client.dart';
+import 'core/widgets/app_crash_view.dart';
 import 'features/auth/application/auth_controller.dart';
 import 'features/auth/data/repositories/mock_auth_repository.dart';
 import 'features/auth/data/repositories/api_auth_repository.dart';
@@ -81,20 +86,62 @@ import 'features/safety/application/sos_controller.dart';
 import 'features/safety/data/sos_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
 
-Future<void> main() async {
+/// Hata yakalayan üç kanal var ve üçü de farklı şeyi yakalıyor; biri
+/// eksikse o hata hiçbir yere düşmüyor:
+///
+/// - `FlutterError.onError`: çizim, düzen ve widget yaşam döngüsü hataları.
+/// - `PlatformDispatcher.instance.onError`: hiçbir yerde yakalanmamış eşzamansız
+///   hatalar (bekleyeni olmayan bir Future patladığında).
+/// - `runZonedGuarded`: geri kalan her şey — özellikle uygulama daha ilk
+///   karesini çizmeden, kurulum sırasında oluşan hatalar.
+///
+/// Üçü de aynı yere, kendi Topluluk servisimize yazıyor; panelde "son 24 saatte
+/// çökmesiz kullanım oranı" bu kayıtlardan çıkıyor.
+void main() {
+  runZonedGuarded(_bootstrap, (error, stackTrace) {
+    CrashReporter.instance?.recordError(error, stackTrace);
+    debugPrint('Yakalanmamış hata: $error\n$stackTrace');
+  });
+}
+
+Future<void> _bootstrap() async {
+  // Bölge (zone) içinde çağrılmak zorunda: bağlama dışarıda kurulursa Flutter
+  // runApp ile farklı bölgede olduğumuzu söyleyip uyarı veriyor.
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Handle uncaught errors to prevent immediate connection drop without logs
+  final tokenStore = SecureTokenStore();
+
+  // Jeton deposu kurulur kurulmaz devreye giriyor: kurulumun geri kalanında
+  // (SharedPreferences, güvenli depo, ilk ağ isteği) çıkacak bir hata da
+  // sayılsın diye. Kendi Dio'su var, kimlik denetleyicisi yok — ayrıntı
+  // telemetry_client.dart'ta.
+  final crashReporter = CrashReporter(
+    send: crashTelemetrySender(tokenStore: tokenStore),
+  );
+  CrashReporter.instance = crashReporter;
+
   FlutterError.onError = (details) {
+    crashReporter.recordFlutterError(details);
     FlutterError.presentError(details);
   };
   PlatformDispatcher.instance.onError = (error, stackTrace) {
-    debugPrint('Uncaught error: $error\n$stackTrace');
+    crashReporter.recordError(error, stackTrace);
+    debugPrint('Yakalanmamış hata: $error\n$stackTrace');
     return true;
   };
+  // Kırmızı kutu yerine Türkçe bir açıklama. Rapor zaten FlutterError.onError
+  // üzerinden gitti; burada sadece çizim var.
+  ErrorWidget.builder = (details) => AppCrashView(detail: details.exceptionAsString());
+
+  // Açılışı bildirmek ekranı bekletmemeli: oran için gereken payda bu, ama
+  // uygulamanın açılması ondan önemli.
+  unawaited(
+    discoverBuildInfo()
+        .then(crashReporter.start)
+        .catchError((Object _) {}),
+  );
 
   final sessionStore = await SharedPreferencesSessionStore.create();
-  final tokenStore = SecureTokenStore();
   final cacheStore = await SharedPreferencesCacheStore.create();
 
   const useMockServices = bool.fromEnvironment(
@@ -382,6 +429,7 @@ Future<void> main() async {
       promotionsController: promotionsController,
       forumController: forumController,
       sosController: sosController,
+      navigatorObservers: [CrashScreenObserver(crashReporter)],
     ),
   );
 }

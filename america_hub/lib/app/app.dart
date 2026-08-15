@@ -54,6 +54,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.promotionsController,
     required this.forumController,
     required this.sosController,
+    this.navigatorObservers = const [],
   });
 
   final AuthController authController;
@@ -108,6 +109,10 @@ class AmericaHubApp extends StatelessWidget {
   /// üye başına tek — ekran nerede açılırsa açılsın aynı durumu göstermeli.
   final SosController sosController;
 
+  /// Çökme raporunun hangi ekranda olduğumuzu bilmesini sağlayan gözlemci
+  /// buradan geçiyor. Testlerde boş: gezinti gözlemek onların işi değil.
+  final List<NavigatorObserver> navigatorObservers;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -115,6 +120,7 @@ class AmericaHubApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       initialRoute: AppRoutes.startup,
+      navigatorObservers: navigatorObservers,
       onGenerateRoute: AppRouter(
         authController: authController,
         communityController: communityController,

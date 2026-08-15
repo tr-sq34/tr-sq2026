@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  BadgeCheck, CalendarDays, ChevronDown, GalleryVerticalEnd, Gavel, LayoutDashboard, LogOut, MapPinned,
+  Activity, BadgeCheck, CalendarDays, ChevronDown, GalleryVerticalEnd, Gavel, LayoutDashboard, LogOut, MapPinned,
   Megaphone, MessageSquare, MessagesSquare, Menu, Newspaper, ScrollText, ShieldAlert, Siren, Users, X,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -20,6 +20,7 @@ import { Badge } from './ui/badge';
  */
 const ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   'command-center': LayoutDashboard,
+  health: Activity,
   analytics: MapPinned,
   system: ScrollText,
   content: GalleryVerticalEnd,
