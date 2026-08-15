@@ -65,6 +65,18 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
   return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
 });
 
+/**
+ * A route that does not exist answered with Fastify's own body -
+ * `{"message":"Route PUT:/v1/marketplace/<id>/reactions/save not found","error":"Not Found"}`.
+ * That is a second envelope the app has to know about on top of
+ * `{error:{code,message}}`, and it prints the requested path back to whoever
+ * asked. One shape for every failure; the path stays in the log.
+ */
+app.setNotFoundHandler((request, reply) => {
+  request.log.info({ url: request.url, method: request.method }, 'route not found');
+  return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'İstenen adres bulunamadı.' } });
+});
+
 const directConversationBody = z.object({ targetUserId: z.string().uuid() });
 const auctionConversationBody = z.object({ sellerUserId: z.string().uuid(), winnerUserId: z.string().uuid(), auctionId: z.string().uuid() });
 const messageBody = z.object({ body: z.string().trim().min(1).max(4000), idempotencyKey: z.string().uuid() });
