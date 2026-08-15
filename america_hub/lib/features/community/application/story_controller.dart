@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../core/pagination/cursor_page.dart';
 import '../domain/entities/feed_extensions.dart';
 import '../domain/repositories/community_repository.dart';
@@ -42,8 +43,8 @@ class StoryController extends ChangeNotifier {
     try {
       final page = await _repository.fetchStories();
       _replace(page);
-    } catch (_) {
-      _errorMessage = 'Story’ler şu anda yüklenemedi.';
+    } catch (error) {
+      _errorMessage = storyLoadFailureMessage(error);
     } finally {
       _loading = false;
       notifyListeners();
@@ -163,4 +164,32 @@ class StoryController extends ChangeNotifier {
       ..addAll(page.items.where((item) => !item.isExpired));
     _nextCursor = page.nextCursor;
   }
+}
+
+/// Story rayı neden boş kaldıysa onu yazar.
+///
+/// Buradaki `catch` bir zamanlar her hatayı aynı cümleye çeviriyordu: "Story'ler
+/// şu anda yüklenemedi." Servis o sırada `syntax error at or near "ORDER"`
+/// döndürüyordu ve bu cümle onu da, süresi dolmuş oturumu da, kopmuş bağlantıyı
+/// da aynı şekilde gösteriyordu. Hata haftalarca ayakta kaldı, çünkü ekranda
+/// tarif eden hiçbir şey yoktu.
+String storyLoadFailureMessage(Object error) {
+  if (error is ApiException) {
+    // Sunucunun kendi cümlesi varsa o kullanılıyor; oturum hatası gibi bazıları
+    // üyenin doğrudan çözebileceği şeyler.
+    if (error.statusCode == 401) {
+      return 'Oturumun sona ermiş görünüyor, Story\'ler yüklenemedi. Tekrar giriş yap.';
+    }
+    final detail = error.message.trim();
+    if (detail.isEmpty) {
+      return 'Story servisi yanıt vermedi (HTTP ${error.statusCode ?? '?'}).';
+    }
+    return error.statusCode == null ? detail : '$detail (HTTP ${error.statusCode})';
+  }
+  if (error is TypeError) {
+    // Yanıt geldi ama beklenen alan yoktu: bu bir bağlantı sorunu değil,
+    // sürüm uyuşmazlığı - öyle de yazılıyor.
+    return 'Story yanıtı bu sürümün beklediği biçimde değil. Uygulamayı güncelle.';
+  }
+  return 'Story\'ler yüklenemedi: $error';
 }
