@@ -24,6 +24,18 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
   return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Beklenmeyen bir hata oluştu.' } });
 });
 
+/**
+ * A route that does not exist answered with Fastify's own body -
+ * `{"message":"Route PUT:/v1/marketplace/<id>/reactions/save not found","error":"Not Found"}`.
+ * That is a second envelope the app has to know about on top of
+ * `{error:{code,message}}`, and it prints the requested path back to whoever
+ * asked. One shape for every failure; the path stays in the log.
+ */
+app.setNotFoundHandler((request, reply) => {
+  request.log.info({ url: request.url, method: request.method }, 'route not found');
+  return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'İstenen adres bulunamadı.' } });
+});
+
 const capabilityQueueEnabled=Boolean(process.env.AZURE_SERVICE_BUS_CONNECTION_STRING&&process.env.AZURE_VERIFICATION_CAPABILITY_QUEUE_NAME);
 async function publishCapabilities(){if(!capabilityQueueEnabled)return;const events=await db.query<{id:string;event_type:string;payload:unknown}>('SELECT id,event_type,payload FROM verification_outbox_events WHERE published_at IS NULL ORDER BY created_at LIMIT 20');for(const e of events.rows){try{await sendVerificationCapabilityEvent({eventId:e.id,eventType:e.event_type,payload:e.payload});await db.query('UPDATE verification_outbox_events SET published_at=now() WHERE id=$1 AND published_at IS NULL',[e.id]);}catch(error){app.log.warn({err:error,eventId:e.id},'Verification capability outbox deferred');}}}
 async function user(headers:{authorization?:string}){const t=headers.authorization?.replace(/^Bearer\s+/i,'');if(!t)throw Error('UNAUTHORIZED');const p=await jwtVerify(t,verifyKey,{issuer:required('JWT_ISSUER'),audience:required('JWT_AUDIENCE'),algorithms:['RS256']});if(!p.payload.sub)throw Error('UNAUTHORIZED');return p.payload.sub;}
