@@ -11,10 +11,14 @@ credential reaches Terraform state or GitHub.
 
 ## Where this stands
 
-**Steps 0-4 are done (2026-08-14).** All four hostnames resolve to their
-container app, carry an Azure managed certificate, and answer `/health` with
-200. What is left is step 5 - putting the Cloudflare proxy back on - and step 6,
-decommissioning AWS.
+**Steps 0-5 are done (2026-08-14).** All four hostnames resolve to their
+container app, carry an Azure managed certificate, answer `/health` with 200,
+and sit behind the Cloudflare proxy on Full (strict).
+
+What is left is step 6, decommissioning AWS. It is approved but not run: there
+is no AWS credential on the machine Claude works from, so it needs a human with
+the account. The commands, the order and the list of what stays are written out
+in [aws-decommission.md](./aws-decommission.md).
 
 | Hostname | Serves | Resolves to |
 | --- | --- | --- |
