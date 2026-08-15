@@ -831,7 +831,9 @@ app.get('/v1/community/home/summary', async (request, reply) => {
     const [profile, connections, localPosts, stories] = await Promise.all([
       db.query<{ city: string; region_code: string; interests: string[] }>('SELECT city,region_code,interests FROM community_profile_projection WHERE user_id=$1', [userId]),
       db.query<{ count: string }>('SELECT count(*) FROM relationship_projection WHERE viewer_id=$1 AND active', [userId]),
-      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND p.region_code=v.region_code`, [userId]),
+      // Haber kartları bu sayının dışında: "çevrendeki 12 paylaşım" cümlesi
+      // insanları sayıyor, bültenin kendi haberlerini değil.
+      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND p.news_article_id IS NULL AND p.region_code=v.region_code`, [userId]),
       db.query<{ count: string }>(`SELECT count(*) FROM stories s JOIN relationship_projection r ON r.subject_id=s.author_id WHERE r.viewer_id=$1 AND r.active AND s.expires_at>now()`, [userId]),
     ]);
     const locality = profile.rows[0];
@@ -911,7 +913,8 @@ const feedPoll = (viewerParam: string) => `(SELECT json_build_object(
 type FeedMediaRow = { id: string; kind: 'image' | 'video'; safeUrl: string | null; thumbnailUrl: string | null };
 type FeedPollRow = { id: string; selectionMode: string; closesAt: string | null; options: Array<{ id: string; label: string; votes: string | number; selected: boolean }> | null };
 type FeedTravelerRow = { from: string; to: string; travelAt: string; packageDetails: string; note: string | null };
-type FeedRow = { id: string; created_at: Date; body: string; location_label: string | null; author_id: string; author_name: string; likes: string; comments: string; is_liked: boolean; media: FeedMediaRow[] | null; poll: FeedPollRow | null; purpose: string; is_author: boolean; traveler: FeedTravelerRow | null };
+type FeedNewsRow = { id: string; title: string; category: string };
+type FeedRow = { id: string; created_at: Date; body: string; location_label: string | null; author_id: string; author_name: string; likes: string; comments: string; is_liked: boolean; media: FeedMediaRow[] | null; poll: FeedPollRow | null; purpose: string; is_author: boolean; traveler: FeedTravelerRow | null; news: FeedNewsRow | null };
 
 // The trip travels as one object rather than five columns so that "no trip" is
 // a single null instead of five of them.
@@ -919,16 +922,35 @@ const FEED_TRAVELER = `(SELECT json_build_object('from',t.from_place,'to',t.to_p
 
 const FEED_PURPOSE: Record<string, string> = { imece_help: 'imeceHelp', traveler_match: 'travelerMatch' };
 
+/* --- Haber Bülteni ---------------------------------------------------------
+ *
+ * Yayınlanan bir haber, editör isterse akışta da bir kart oluyor (036). O kartın
+ * kendi beğeni ve yorum sayacı yok: ikisini de haberin kendi tablolarından
+ * okuyor, çünkü "akıştaki paylaşımla haber aynı şey" demek ancak tek bir sayı
+ * varsa doğru olur. Aynı sebeple kart, haberin görünürlüğüne bağlı - geri
+ * çekilen haber akıştan da düşer, ileri tarihli olan akışta erken çıkmaz.
+ */
+const NEWS_POST_LIVE = `EXISTS(SELECT 1 FROM news_articles na WHERE na.id=p.news_article_id AND na.deleted_at IS NULL AND na.published_at IS NOT NULL AND na.published_at<=now())`;
+const FEED_NEWS_VISIBLE = `(p.news_article_id IS NULL OR ${NEWS_POST_LIVE})`;
+
+const FEED_NEWS = `(SELECT json_build_object('id',na.id,'title',na.title,'category',na.category) FROM news_articles na WHERE na.id=p.news_article_id) news`;
+
 /// The feed's columns and the feed's JSON, named so that a single post can be
 /// read with exactly the shape the feed hands back. A card fetched from a
 /// notification that differed from the same card in the list - one with a poll,
 /// one without - would be a second definition of what a post is.
-const feedColumns = (viewerParam: string) => `p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=${viewerParam} AND x.kind='like') is_liked,p.purpose,(p.author_id=${viewerParam}) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll(viewerParam)}`;
+const feedColumns = (viewerParam: string) => `p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,CASE WHEN p.news_article_id IS NULL THEN (SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') ELSE (SELECT count(*) FROM news_reactions r WHERE r.article_id=p.news_article_id AND r.value='like') END likes,CASE WHEN p.news_article_id IS NULL THEN (SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') ELSE (SELECT count(*) FROM news_comments c WHERE c.article_id=p.news_article_id AND c.deleted_at IS NULL AND c.moderation_state='active') END comments,CASE WHEN p.news_article_id IS NULL THEN EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=${viewerParam} AND x.kind='like') ELSE EXISTS(SELECT 1 FROM news_reactions r WHERE r.article_id=p.news_article_id AND r.user_id=${viewerParam} AND r.value='like') END is_liked,p.purpose,(p.author_id=${viewerParam} AND p.news_article_id IS NULL) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll(viewerParam)},${FEED_NEWS}`;
+
+/// Haberin akıştaki imzası. Yayınlayan resmî hesabın adı değil, tek bir isim:
+/// haberi yazan kişi değil bülten paylaşıyor. Profil de açılmıyor - kart bir
+/// üyeye değil habere götürüyor, uygulama bunu `news` alanının doluluğundan
+/// anlıyor.
+const NEWS_BYLINE = 'Haber Bülteni';
 
 const feedPostJson = async (p: FeedRow) => ({
   id: p.id,
   authorId: p.author_id,
-  authorName: p.author_name,
+  authorName: p.news ? NEWS_BYLINE : p.author_name,
   location: p.location_label ?? '',
   createdAtLabel: p.created_at.toISOString(),
   message: p.body,
@@ -940,6 +962,7 @@ const feedPostJson = async (p: FeedRow) => ({
   travelerMatch: p.traveler ? { ...p.traveler, travelAt: new Date(p.traveler.travelAt).toISOString() } : null,
   media: await feedMediaJson(p.media),
   poll: feedPollJson(p.poll),
+  news: p.news,
 });
 
 const feedMediaJson = async (media: FeedMediaRow[] | null) => Promise.all(
@@ -963,7 +986,7 @@ const feedPollJson = (poll: FeedPollRow | null) => poll && poll.options?.length
 app.get('/v1/community/feed', async (request, reply) => {
   try {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
-    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
     if (input.mode === 'following') where += ` AND EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.active)`;
     // "Nearby" is the chosen state, not a radius. The original predicate asked
     // for posts within 50km of viewer_location_projection.approximate_cell, and
@@ -989,6 +1012,26 @@ app.get('/v1/community/feed', async (request, reply) => {
 
 app.put('/v1/community/posts/:id/reactions/:kind', async (request, reply) => {
   try { const userId = await viewer(request.headers); const postId = z.string().uuid().parse((request.params as { id: string }).id); const kind = z.enum(['like','save']).parse((request.params as { kind: string }).kind); const input = interactionBody.parse(request.body);
+    // Akıştaki haber kartının kalbi haberin kendi tablosuna yazılıyor (036).
+    // İki tabloya birden yazmak, iki farklı doğru üretirdi: haber ekranında 12,
+    // akışta 3. "Kaydet" bunun dışında - o kişisel bir yer imi, haberin sayacı
+    // değil, dolayısıyla eskisi gibi `post_reactions` içinde kalıyor.
+    const linked = await db.query<{ news_article_id: string | null }>('SELECT news_article_id FROM community_posts WHERE id=$1 AND deleted_at IS NULL', [postId]);
+    const articleId = linked.rows[0]?.news_article_id ?? null;
+    if (articleId && kind === 'like') {
+      if (input.enabled) {
+        await db.query(
+          `INSERT INTO news_reactions(article_id,user_id,value) SELECT a.id,$2,'like' FROM news_articles a WHERE a.id=$1 AND a.deleted_at IS NULL
+           ON CONFLICT(article_id,user_id) DO UPDATE SET value='like',created_at=now()`,
+          [articleId, userId],
+        );
+      } else {
+        // Yalnızca beğeni siliniyor: aynı satır haber ekranında "beğenmedim"
+        // olarak işaretlenmiş olabilir ve akıştaki kalbin sönmesi onu silmemeli.
+        await db.query("DELETE FROM news_reactions WHERE article_id=$1 AND user_id=$2 AND value='like'", [articleId, userId]);
+      }
+      return reply.code(204).send();
+    }
     if (input.enabled) await db.query('INSERT INTO post_reactions(post_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL) ON CONFLICT DO NOTHING', [postId,userId,kind]);
     else await db.query('DELETE FROM post_reactions WHERE post_id=$1 AND actor_id=$2 AND kind=$3', [postId,userId,kind]);
     // A save is private - the member is filing the post away for themselves, not
@@ -1182,7 +1225,7 @@ const postCommentJson = (row: PostCommentRow) => ({
  * the author, who can always read under their own post.
  */
 const postReadableWhere = (postParam: string, viewerParam: string) =>
-  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
 
 /**
  * One post, by id.
@@ -1217,8 +1260,18 @@ app.get('/v1/community/posts/:id/comments', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const postId = z.string().uuid().parse((request.params as { id: string }).id);
-    const post = await db.query(`SELECT 1 FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    const post = await db.query<{ news_article_id: string | null }>(`SELECT p.news_article_id FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
     if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Haber kartının altındaki başlık, haberin kendi yorum listesi (036). Aynı
+    // iş parçacığı iki ekranda da okunuyor; ayrı bir liste tutulsaydı akışta
+    // yazılan yorum haber ekranında görünmezdi.
+    if (post.rows[0].news_article_id) {
+      const newsRows = await db.query<NewsCommentRow>(
+        `${newsCommentSelect('$2')} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+        [post.rows[0].news_article_id, userId],
+      );
+      return { data: newsRows.rows.map(newsCommentJson) };
+    }
     // Oldest first: a thread reads top to bottom, and the app appends a comment
     // it has just written to the end of the list it is already holding.
     const rows = await db.query<PostCommentRow>(
@@ -1238,9 +1291,26 @@ app.post('/v1/community/posts/:id/comments', { config: { rateLimit: { max: 20, t
     if (restricted) return reply.code(403).send(restrictionError(restricted));
     const postId = z.string().uuid().parse((request.params as { id: string }).id);
     const input = commentBody.parse(request.body);
-    const post = await db.query(`SELECT p.comments_enabled FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    const post = await db.query<{ comments_enabled: boolean; news_article_id: string | null }>(`SELECT p.comments_enabled,p.news_article_id FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
     if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
-    if (!(post.rows[0] as { comments_enabled: boolean }).comments_enabled) {
+    // Haber kartına yazılan yorum haberin altına yazılıyor. Yorumlara kapalı
+    // olup olmadığına da haber karar veriyor: editör haberi kapattığında akıştan
+    // yazılabilmesi, kapatma düğmesini işlevsiz bırakırdı.
+    if (post.rows[0].news_article_id) {
+      const articleId = post.rows[0].news_article_id;
+      const article = await db.query(`SELECT 1 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE} AND a.comments_enabled`, [articleId]);
+      if (!article.rows[0]) return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Bu haber yorumlara kapalı.' } });
+      const written = await db.query<{ id: string }>(
+        'INSERT INTO news_comments(article_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
+        [articleId, userId, input.parentId ?? null, input.body],
+      );
+      const newsRow = await db.query<NewsCommentRow>(`${newsCommentSelect('$2')} WHERE c.id=$1`, [written.rows[0]!.id, userId]);
+      // Haber ekranındaki yorumla aynı ödül: seri devam eder, `vocalist` akışta
+      // yazılan yorumları sayar ve haber yorumu onu ilerletmez.
+      void grantInBackground('news_comment', async (journey) => { await touchStreak(journey, userId); });
+      return reply.code(201).send({ data: newsCommentJson(newsRow.rows[0]!) });
+    }
+    if (!post.rows[0].comments_enabled) {
       return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Yorumlar kapalı.' } });
     }
     const inserted = await db.query<{ id: string }>(
@@ -1272,7 +1342,16 @@ app.delete('/v1/community/comments/:id', async (request, reply) => {
         RETURNING c.id`,
       [id, userId],
     );
-    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (!removed.rows[0]) {
+      // Akıştaki haber kartının yorumları başka bir tabloda duruyor (036), ama
+      // uygulamaya aynı listeden geliyor. Kimliği burada bulunamayan bir yorumu
+      // "yok" saymak, üyenin akıştan yazdığı yorumu silememesi demekti.
+      const newsRemoved = await db.query(
+        "UPDATE news_comments SET deleted_at=now(),moderation_state='removed' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL RETURNING id",
+        [id, userId],
+      );
+      if (!newsRemoved.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    }
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
@@ -1303,7 +1382,21 @@ app.put('/v1/community/comments/:id/likes', { config: { rateLimit: { max: 60, ti
         WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active'`,
       [id, userId],
     );
-    if (!readable.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (!readable.rows[0]) {
+      // Aynı liste, başka tablo: haber kartının altındaki yorumlar (036). Kalp
+      // haberin tarafına yazılmazsa akıştan beğenilen yorum haber ekranında
+      // beğenilmemiş görünür.
+      const newsComment = await db.query(
+        `SELECT 1 FROM news_comments c JOIN news_articles a ON a.id=c.article_id
+          WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' AND ${NEWS_VISIBLE}`,
+        [id],
+      );
+      if (!newsComment.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+      if (input.enabled) await db.query('INSERT INTO news_comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
+      else await db.query('DELETE FROM news_comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
+      const newsTally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM news_comment_reactions WHERE comment_id=$1', [id]);
+      return { data: { likes: Number(newsTally.rows[0]!.like_count), isLiked: input.enabled } };
+    }
     if (input.enabled) await db.query('INSERT INTO comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
     else await db.query('DELETE FROM comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
     const tally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM comment_reactions WHERE comment_id=$1', [id]);
@@ -3197,9 +3290,50 @@ const gateworkNewsBody = z.object({
   headlineRank: z.coerce.number().int().min(1).max(20).optional(),
   publishedAt: z.string().datetime().optional(),
   commentsEnabled: z.boolean().default(true),
+  // Haber akışta da paylaşılsın mı. Kararı editör veriyor: her haberin akışa
+  // düşmesi akışı bültene çevirirdi, hiçbirinin düşmemesi ise haberi yalnızca
+  // Haber Merkezi'ni açanın gördüğü bir yere hapsediyordu.
+  shareToFeed: z.boolean().default(false),
   reason: z.string().trim().min(5).max(500),
   idempotencyKey: z.string().uuid(),
 });
+
+/* --- Haber akışta -----------------------------------------------------------
+ *
+ * Akıştaki kart haberin bir izdüşümü (036): metni özet, görseli kapak, beğenisi
+ * ve yorumu haberin kendisi. Buradaki iki işlev de o izdüşümü kuruyor ya da
+ * kaldırıyor; hiçbiri haberin kendisine dokunmuyor.
+ */
+async function shareArticleToFeed(client: pg.PoolClient, articleId: string) {
+  // Tarih: geçmişte yayınlanmış bir haber bugün akışa çıkarıldığında akışın
+  // dibine değil başına düşmeli. İleri tarihli bir haber ise kendi tarihini
+  // koruyor - o güne kadar akışta zaten görünmüyor.
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO community_posts(author_id,body,visibility,comments_enabled,region_code,news_article_id,created_at)
+     SELECT a.author_id,a.summary,'public',a.comments_enabled,a.region_code,a.id,GREATEST(a.published_at,now())
+       FROM news_articles a WHERE a.id=$1 AND a.deleted_at IS NULL
+     ON CONFLICT (news_article_id) WHERE news_article_id IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [articleId],
+  );
+  const postId = inserted.rows[0]?.id;
+  if (!postId) return false;
+  await client.query(
+    `INSERT INTO post_media_refs(post_id,media_id,ordinal)
+     SELECT $1,a.hero_media_id,0 FROM news_articles a WHERE a.id=$2 AND a.hero_media_id IS NOT NULL
+     ON CONFLICT DO NOTHING`,
+    [postId, articleId],
+  );
+  return true;
+}
+
+/// Yumuşak silme değil, satırın kaldırılması. Kaldırılan şey bir üyenin yazdığı
+/// içerik değil, bir gösterim kararı; beğeniler ve yorumlar haberin kendi
+/// tablolarında duruyor ve haber ekranında olduğu gibi kalıyor.
+async function removeArticleFromFeed(client: pg.PoolClient, articleId: string) {
+  const removed = await client.query('DELETE FROM community_posts WHERE news_article_id=$1', [articleId]);
+  return (removed.rowCount ?? 0) > 0;
+}
 
 type NewsRow = {
   id: string; title: string; summary: string; body?: string; category: string; author_name: string;
@@ -3470,6 +3604,9 @@ app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWin
         [input.title, input.summary, input.body, input.heroMediaId ?? null, input.category, input.authorId, author.rows[0].display_name,
           input.regionCode?.toUpperCase() ?? null, input.publishedAt ?? null, input.headlineRank ?? null, input.commentsEnabled, actor.actorId],
       );
+      // Aynı işlemin içinde: akışa çıkması istenen bir haberin yayınlanıp
+      // akışta görünmemesi diye bir ara durum olmamalı.
+      if (input.shareToFeed) await shareArticleToFeed(client, article.rows[0]!.id);
       await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'news_article.create',$3)", [actor.actorId, input.idempotencyKey, article.rows[0]!.id]);
       await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.publish', targetType: 'news_article', targetId: article.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
       await client.query('COMMIT');
@@ -3505,10 +3642,11 @@ app.get('/v1/internal/gatework/news', async (request, reply) => {
     const rows = await db.query<{
       id: string; title: string; summary: string; category: string; author_id: string; author_name: string;
       region_code: string | null; published_at: Date; headline_rank: number | null; comments_enabled: boolean;
-      hero_url: string | null; comment_count: string; reaction_count: string;
+      hero_url: string | null; comment_count: string; reaction_count: string; in_feed: boolean;
     }>(
       `SELECT a.id,a.title,a.summary,a.category,a.author_id,a.author_name,a.region_code,a.published_at,
               a.headline_rank,a.comments_enabled,m.safe_url hero_url,
+              EXISTS(SELECT 1 FROM community_posts p WHERE p.news_article_id=a.id) in_feed,
               (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
               (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id) reaction_count
          FROM news_articles a
@@ -3535,10 +3673,59 @@ app.get('/v1/internal/gatework/news', async (request, reply) => {
         imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
         commentCount: Number(row.comment_count),
         reactionCount: Number(row.reaction_count),
+        // Akışta da duruyor mu. Panelin bunu okuyamadığı bir dünyada düğme
+        // "aç/kapat" değil "bir şey yap" olurdu; editör hangi haberin akışta
+        // olduğunu ancak uygulamayı açarak görebilirdi.
+        inFeed: row.in_feed,
       }))),
     };
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
+  }
+});
+
+/// Hangi haberin akışta paylaşılacağı kararı.
+///
+/// Yayın anında da verilebiliyor (`shareToFeed`), ama karar sonradan da
+/// değişebilmeli: bir haber gün içinde önem kazanır, bir başkası akışta yer
+/// kaplamayı hak etmez. Kapatmak haberi geri çekmiyor - Haber Merkezi'nde
+/// okunmaya, beğenilmeye ve yorumlanmaya devam ediyor.
+const gateworkNewsFeedBody = z.object({
+  enabled: z.boolean(),
+  reason: z.string().trim().min(5).max(500),
+});
+
+app.put('/v1/internal/gatework/news/:id/feed', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkNewsFeedBody.parse(request.body);
+    await client.query('BEGIN');
+    const article = await client.query('SELECT 1 FROM news_articles WHERE id=$1 AND deleted_at IS NULL', [id]);
+    if (!article.rows[0]) {
+      await client.query('ROLLBACK');
+      return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    }
+    const changed = input.enabled ? await shareArticleToFeed(client, id) : await removeArticleFromFeed(client, id);
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles,
+      action: input.enabled ? 'news_article.feed_share' : 'news_article.feed_remove',
+      targetType: 'news_article', targetId: id, reason: input.reason, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    // `changed` false ise haber zaten istenen durumdaydı; panel iki sekmede
+    // açıksa ikinci tık hata değil, teyit.
+    return { data: { inFeed: input.enabled, changed } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'GATEWORK_NEWS_FEED_REJECTED', message: 'Akış kararı kaydedilemedi.' } });
+  } finally {
+    client.release();
   }
 });
 

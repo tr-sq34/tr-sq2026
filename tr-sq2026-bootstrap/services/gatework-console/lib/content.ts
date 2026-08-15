@@ -59,6 +59,24 @@ export async function listNewsArticles(params: { category?: string; limit?: numb
 
 export const retractNewsSchema = z.object({ reason: z.string().trim().min(5).max(500) });
 
+/// Hangi haberin akışta paylaşılacağı kararı. Yayın anında da veriliyor, ama
+/// sonradan da değişebilmeli: kapatmak haberi geri çekmez, yalnızca akıştaki
+/// kartı kaldırır - haber Haber Merkezi'nde okunmaya devam eder ve beğenileri
+/// ile yorumları olduğu gibi kalır.
+export const newsFeedShareSchema = z.object({
+  enabled: z.boolean(),
+  reason: z.string().trim().min(5).max(500),
+});
+
+export async function setNewsFeedShare(id: string, raw: unknown) {
+  const input = newsFeedShareSchema.parse(raw);
+  z.string().uuid().parse(id);
+  return (await communityFetch(`/v1/internal/gatework/news/${id}/feed`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })).data as { inFeed: boolean; changed: boolean };
+}
+
 /* --- Story ----------------------------------------------------------------
  *
  * Ana sayfanın en üstündeki Story şeridi, yeni bir üyenin ağı boş olduğu için

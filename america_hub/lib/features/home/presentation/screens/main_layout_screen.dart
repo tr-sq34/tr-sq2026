@@ -163,6 +163,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         promotionsController: widget.promotionsController,
         viewer: widget.authController.user,
         viewerRegion: () => widget.homeController.summary?.regionCode,
+        // Akıştaki Haber Bülteni kartı, ana sayfadaki haber şeridiyle aynı
+        // ekrana gidiyor: haber tek yerde okunuyor, ikinci bir kopyası yok.
+        onOpenArticle: _openArticle,
       ),
     ),
     MarketplaceScreen(

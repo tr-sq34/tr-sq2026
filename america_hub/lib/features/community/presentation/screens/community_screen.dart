@@ -15,6 +15,9 @@ import '../../application/story_controller.dart';
 import '../../application/community_comments_controller.dart';
 import '../../application/media_upload_controller.dart';
 import '../../application/community_special_request_controller.dart';
+// Haber kartının üstündeki kategori etiketi haberin kendi sözlüğünden okunuyor;
+// akış, "gundem" kodunu kendi başına "Gündem" diye çevirmeye kalkmıyor.
+import '../../../news/domain/entities/news_article.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/domain/entities/friendship.dart';
 import '../../../promotions/application/promotions_controller.dart';
@@ -43,6 +46,7 @@ class CommunityScreen extends StatefulWidget {
     required this.promotionsController,
     this.viewer,
     this.viewerRegion,
+    this.onOpenArticle,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -66,6 +70,12 @@ class CommunityScreen extends StatefulWidget {
   /// boş "Yakınındakiler" sekmesinin doğru cümleyi kurabilmesi için: kimse
   /// paylaşmadığı için mi boş, yoksa üye şehrini hiç eklemediği için mi?
   final String? Function()? viewerRegion;
+
+  /// Akıştaki haber kartına dokunulduğunda haberi açar. Haber ekranı kendi
+  /// denetleyicilerini istiyor ve onlar kabukta duruyor; akış ekranı yalnızca
+  /// haberin kimliğini söylüyor. Null ise kart dokunulmaz kalır - hiçbir yere
+  /// gitmeyen bir kart açılmaz.
+  final void Function(String articleId)? onOpenArticle;
 
   /// Every post, comment and story below this point needs a way to be reported,
   /// so the repository is handed down rather than looked up: the widgets that
@@ -132,6 +142,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         promotionsController: widget.promotionsController,
         viewer: widget.viewer,
         viewerRegion: widget.viewerRegion,
+        onOpenArticle: widget.onOpenArticle,
       );
     },
   );
@@ -149,6 +160,7 @@ class _Feed extends StatefulWidget {
     required this.promotionsController,
     this.viewer,
     this.viewerRegion,
+    this.onOpenArticle,
   });
   final CommunityFeedController controller;
   final StoryController storyController;
@@ -160,6 +172,7 @@ class _Feed extends StatefulWidget {
   final PromotionsController promotionsController;
   final AppUser? viewer;
   final String? Function()? viewerRegion;
+  final void Function(String articleId)? onOpenArticle;
 
   @override
   State<_Feed> createState() => _FeedState();
@@ -198,13 +211,24 @@ class _FeedState extends State<_Feed> {
 
   /// Yorum tabakası artık paylaşılan bir bileşen; akışa özgü olan yalnızca
   /// erişim politikası, o da buradan geçiriliyor.
-  void _openComments(CommunityPost post) => openPostComments(
-    context: context,
-    post: post,
-    controller: widget.commentsController,
-    moderationRepository: widget.moderationRepository,
-    viewerId: _viewerId,
-  );
+  ///
+  /// Haber kartı bunun dışında: onun yorumları haberin altındaki yorumlar ve
+  /// haber ekranında zaten okunuyor. Akışta ikinci bir tabaka açmak, aynı iş
+  /// parçacığını iki ayrı yerden okumak olurdu.
+  void _openComments(CommunityPost post) {
+    final article = post.newsReference;
+    if (article != null && widget.onOpenArticle != null) {
+      widget.onOpenArticle!(article.articleId);
+      return;
+    }
+    openPostComments(
+      context: context,
+      post: post,
+      controller: widget.commentsController,
+      moderationRepository: widget.moderationRepository,
+      viewerId: _viewerId,
+    );
+  }
 
   Future<void> _vote(
     String postId,
@@ -382,9 +406,11 @@ class _FeedState extends State<_Feed> {
                 specialRequestController: widget.specialRequestController,
                 friendshipController: widget.friendshipController,
                 // Kendi paylaşımına arkadaşlık isteği gönderilemez ve kimliği
-                // bilinmeyen bir yazara da: sunucu ikisini de reddeder.
+                // bilinmeyen bir yazara da: sunucu ikisini de reddeder. Haber
+                // Bülteni de eklenemez; arkasında bir üye yok.
                 onAddFriend:
-                    post.isAuthor ||
+                    post.isNewsBulletin ||
+                        post.isAuthor ||
                         post.ownerId == _viewerId ||
                         post.ownerId.isEmpty ||
                         post.ownerId == 'local-user'
@@ -399,6 +425,7 @@ class _FeedState extends State<_Feed> {
                     ? () => _deletePost(post)
                     : null,
                 onOpenComments: () => _openComments(post),
+                onOpenArticle: widget.onOpenArticle,
                 onVote: _vote,
               ),
             ),
@@ -918,6 +945,7 @@ class _PostCard extends StatelessWidget {
     required this.onVote,
     this.onDelete,
     this.onAddFriend,
+    this.onOpenArticle,
   });
   final CommunityPost post;
   final ValueChanged<String> onToggleLike;
@@ -935,13 +963,34 @@ class _PostCard extends StatelessWidget {
   /// Null: kendi paylaşımı ya da yazarı belli olmayan bir paylaşım.
   final VoidCallback? onAddFriend;
 
+  /// Haber kartında dolu. Null ise kart dokunulmaz kalır.
+  final void Function(String articleId)? onOpenArticle;
+
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) {
+    final article = post.newsReference;
+    // Karta dokunmak haberi açar. Gidilecek bir yer yoksa dokunma da yok:
+    // hiçbir şey yapmayan bir dokunuş, kırık bir bağlantıdan farksız.
+    final openArticle = article != null && onOpenArticle != null
+        ? () => onOpenArticle!(article.articleId)
+        : null;
+    return GestureDetector(
+      onTap: openArticle,
+      behavior: HitTestBehavior.opaque,
+      child: _card(context, article),
+    );
+  }
+
+  Widget _card(BuildContext context, NewsPostReference? article) => Container(
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: const Color(0xFFE5E7EB)),
+      border: Border.all(
+        color: article == null
+            ? const Color(0xFFE5E7EB)
+            : AppColors.primary.withValues(alpha: .28),
+      ),
       boxShadow: const [
         BoxShadow(
           color: Color(0x090F172A),
@@ -955,31 +1004,59 @@ class _PostCard extends StatelessWidget {
       children: [
         Row(
           children: [
+            // Haber Bülteni'nin baş harfi yok: bu bir kişi değil. Gazete
+            // simgesi imzanın kendisi, altındaki isim de tıklanmıyor -
+            // açılacak bir profil olmadığı için.
             CircleAvatar(
               radius: 20,
-              backgroundColor: AppColors.primary.withValues(alpha: .16),
-              child: Text(
-                post.authorName.substring(0, 1),
-                style: const TextStyle(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w800,
-                ),
+              backgroundColor: AppColors.primary.withValues(
+                alpha: article == null ? .16 : .22,
               ),
+              child: article == null
+                  ? Text(
+                      post.authorName.substring(0, 1),
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.newspaper_rounded,
+                      size: 20,
+                      color: AppColors.primary,
+                    ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    post.authorName,
-                    style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          post.authorName,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      if (article != null) ...[
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.verified_rounded,
+                          size: 15,
+                          color: AppColors.primary,
+                        ),
+                      ],
+                    ],
                   ),
                   Text(
-                    '${post.location} · ${post.timeLabel}',
+                    article == null
+                        ? '${post.location} · ${post.timeLabel}'
+                        : '${NewsCategory.fromCode(article.category).label} · ${post.timeLabel}',
                     style: const TextStyle(
                       color: AppColors.textMuted,
                       fontSize: 11,
@@ -1120,6 +1197,20 @@ class _PostCard extends StatelessWidget {
               ),
             ),
           ),
+        // Haberin başlığı akışta da başlık gibi duruyor. Altındaki metin
+        // haberin özeti; kartın tamamı zaten habere götürüyor.
+        if (article != null && article.title.isNotEmpty) ...[
+          Text(
+            article.title,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
         _ExpandablePostText(message: post.message),
         if (post.media.isNotEmpty) ...[
           const SizedBox(height: 12),
@@ -1157,6 +1248,29 @@ class _PostCard extends StatelessWidget {
                 const Icon(Icons.map_outlined, color: AppColors.textMuted),
               ],
             ),
+          ),
+        ],
+        // Kartın tamamı habere götürüyor ama dokunulabildiği görünmüyor;
+        // bu satır onu söylüyor.
+        if (article != null) ...[
+          const SizedBox(height: 10),
+          const Row(
+            children: [
+              Text(
+                'Haberin tamamını oku',
+                style: TextStyle(
+                  color: AppColors.primary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(width: 4),
+              Icon(
+                Icons.arrow_forward_rounded,
+                size: 14,
+                color: AppColors.primary,
+              ),
+            ],
           ),
         ],
         const SizedBox(height: 12),

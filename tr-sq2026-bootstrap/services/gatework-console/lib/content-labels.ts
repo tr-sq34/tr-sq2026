@@ -36,6 +36,9 @@ export type NewsSummary = {
   imageUrl: string | null;
   commentCount: number;
   reactionCount: number;
+  /** Haber akışta da bir paylaşım olarak duruyor mu. Beğeni ve yorum iki
+      ekranda da aynı haberin sayacı; akıştaki kart haberin bir izdüşümü. */
+  inFeed: boolean;
 };
 
 // Yayında olan bir panel Story'si. Story 24 saatte kendiliğinden düştüğü için

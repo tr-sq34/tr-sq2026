@@ -38,6 +38,24 @@ class CommunityBadge {
   final String icon;
 }
 
+/// Akıştaki kartın arkasındaki haber.
+///
+/// Dolu olduğunda paylaşım bir üyenin değil, Haber Bülteni'nin: imza sabit,
+/// profil açılmıyor ve karta dokunmak habere götürüyor. Kartın altındaki beğeni
+/// ve yorum sayıları da haberin kendi sayıları — sunucu ikisini tek yerde
+/// tutuyor, iki ekranda farklı sayı görünmesi diye bir durum yok.
+class NewsPostReference {
+  const NewsPostReference({
+    required this.articleId,
+    required this.title,
+    this.category,
+  });
+
+  final String articleId;
+  final String title;
+  final String? category;
+}
+
 class PostMedia {
   const PostMedia({
     required this.id,
@@ -154,6 +172,7 @@ class CommunityPost {
     this.approximateLocation,
     this.poll,
     this.marketplaceReference,
+    this.newsReference,
   });
 
   static const maxMessageLength = 2200;
@@ -181,7 +200,14 @@ class CommunityPost {
   final CommunityPoll? poll;
   final MarketplacePostReference? marketplaceReference;
 
+  /// Dolu ise bu kart bir haberin akıştaki yüzü. Bkz. [NewsPostReference].
+  final NewsPostReference? newsReference;
+
   bool get isDeleted => status == PostStatus.deleted || deletedAt != null;
+
+  /// Haber kartı mı. Yazar profiline gidilmemesi ve karta dokununca haberin
+  /// açılması bu tek soruya bağlı.
+  bool get isNewsBulletin => newsReference != null;
 
   CommunityPost copyWith({
     int? likes,
@@ -218,5 +244,6 @@ class CommunityPost {
     approximateLocation: approximateLocation,
     poll: poll ?? this.poll,
     marketplaceReference: marketplaceReference,
+    newsReference: newsReference,
   );
 }

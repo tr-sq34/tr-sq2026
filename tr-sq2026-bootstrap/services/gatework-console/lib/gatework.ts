@@ -77,6 +77,9 @@ export const publishNewsArticleSchema = z.object({
   // rank is a decision an editor takes rather than a default every piece gets.
   headlineRank: z.coerce.number().int().min(1).max(20).optional(),
   commentsEnabled: z.boolean().default(true),
+  // Haber akışta da bir paylaşım olarak çıksın mı. Kapalıysa haber yalnızca
+  // Haber Merkezi'nde durur; karar sonradan da değiştirilebiliyor.
+  shareToFeed: z.boolean().default(false),
   reason: z.string().trim().min(5).max(500),
 });
 
