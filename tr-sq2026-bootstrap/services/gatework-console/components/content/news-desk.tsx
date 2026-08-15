@@ -11,6 +11,7 @@ import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { PhonePreview, previewParagraphs } from '@/components/ui/phone-preview';
 import { ReasonDialog } from '@/components/ui/reason-dialog';
 import { Switch } from '@/components/ui/switch';
+import { ImageUpload, type UploadedImage } from './image-upload';
 
 /**
  * Haber Merkezi: write on the left, see the article on the right, and below it
@@ -52,8 +53,12 @@ export function NewsDesk({
   const [summary, setSummary] = useState('');
   const [body, setBody] = useState('');
   const [category, setCategory] = useState('gundem');
-  const [headlineRank, setHeadlineRank] = useState('');
-  const [heroMediaId, setHeroMediaId] = useState('');
+  // Manşet sırası artık boş başlamıyor. Boş bırakıldığında haber ana sayfadaki
+  // şeride hiç girmiyordu; editör alanı görmeden yayınlıyor, sonra "haberi
+  // ekledim ama ana sayfada yok" diye geri geliyordu. Varsayılan 1: yeni haber
+  // şeridin başına geçer, istemeyen alanı boşaltır.
+  const [headlineRank, setHeadlineRank] = useState('1');
+  const [hero, setHero] = useState<UploadedImage | null>(null);
   const [regionCode, setRegionCode] = useState('');
   const [commentsEnabled, setCommentsEnabled] = useState(true);
   const [reason, setReason] = useState('');
@@ -79,7 +84,7 @@ export function NewsDesk({
           summary: summary.trim(),
           body: body.trim(),
           category,
-          heroMediaId: heroMediaId.trim() || undefined,
+          heroMediaId: hero?.mediaId,
           regionCode: regionCode.trim() || undefined,
           // Empty means "not on the home screen". The strip is short on
           // purpose, so a rank is a decision rather than a default.
@@ -88,7 +93,7 @@ export function NewsDesk({
           reason: reason.trim(),
         }),
       });
-      setTitle(''); setSummary(''); setBody(''); setHeadlineRank(''); setHeroMediaId(''); setReason('');
+      setTitle(''); setSummary(''); setBody(''); setHeadlineRank('1'); setHero(null); setReason('');
       setNotice('Haber yayınlandı ve aşağıdaki listeye düştü.');
       await reload();
     } catch (caught) {
@@ -207,25 +212,24 @@ export function NewsDesk({
                   <Textarea required rows={14} maxLength={BODY_LIMIT} value={body} onChange={(event) => setBody(event.target.value)} />
                 </Field>
 
+                <Field
+                  label="Kapak görseli"
+                  hint="Listede ve haberin başında görünür. Yükledikten sonra güvenlik taraması bitene kadar yayınlama düğmesi beklemede kalır."
+                >
+                  <ImageUpload ownerId={authorId} value={hero} onChange={setHero} disabled={busy} />
+                </Field>
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Kategori">
                     <Select value={category} onChange={(event) => setCategory(event.target.value)}>
                       {NEWS_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </Select>
                   </Field>
-                  <Field label="Manşet sırası" hint="Boşsa ana sayfada çıkmaz.">
+                  <Field label="Manşet sırası" hint="1 en üstte. Boşaltırsan haber yalnızca Haber Merkezi listesinde kalır, ana sayfa şeridine girmez.">
                     <Input type="number" min={1} max={20} placeholder="1" value={headlineRank} onChange={(event) => setHeadlineRank(event.target.value)} />
                   </Field>
                   <Field label="Eyalet kodu" hint="Boş bırakırsan ülke geneli.">
                     <Input maxLength={2} placeholder="NJ" value={regionCode} onChange={(event) => setRegionCode(event.target.value.toUpperCase())} />
-                  </Field>
-                  <Field
-                    label="Görsel medya kimliği"
-                    // Honest about the gap: the console has no upload path, so
-                    // this is still an id that comes from somewhere else.
-                    hint="Panelde görsel yükleme yok; medya kimliği medya hattından gelir."
-                  >
-                    <Input placeholder="Taranmış medya kimliği" value={heroMediaId} onChange={(event) => setHeroMediaId(event.target.value)} />
                   </Field>
                 </div>
 
@@ -258,7 +262,7 @@ export function NewsDesk({
               body={body}
               category={category}
               authorName={active.find((row) => row.id === authorId)?.displayName ?? 'Resmî hesap'}
-              hasHero={heroMediaId.trim().length > 0}
+              heroUrl={hero?.url ?? null}
             />
           </PhonePreview>
         </div>
@@ -295,23 +299,24 @@ export function NewsDesk({
 }
 
 function ArticlePreview({
-  title, summary, body, category, authorName, hasHero,
+  title, summary, body, category, authorName, heroUrl,
 }: {
   title: string;
   summary: string;
   body: string;
   category: string;
   authorName: string;
-  hasHero: boolean;
+  heroUrl: string | null;
 }) {
   const paragraphs = previewParagraphs(body);
   return (
     <div className="px-4">
-      <div className="flex h-36 items-center justify-center rounded-2xl bg-[#1a1828]">
-        {hasHero ? (
-          // The console cannot resolve a media id to a picture, so it shows the
-          // slot rather than inventing an image that may not exist.
-          <p className="px-4 text-center text-[11px] text-ink-faint">Görsel medya kimliğinden gelecek</p>
+      <div className="flex h-36 items-center justify-center overflow-hidden rounded-2xl bg-[#1a1828]">
+        {heroUrl ? (
+          // Taranmış görselin kendisi: panel artık uygulamanın göstereceği
+          // dosyayı gösteriyor, "buraya bir görsel gelecek" yazısını değil.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={heroUrl} alt="" className="h-full w-full object-cover" />
         ) : (
           <div className="text-center">
             <ImageOff size={20} className="mx-auto text-ink-faint" />

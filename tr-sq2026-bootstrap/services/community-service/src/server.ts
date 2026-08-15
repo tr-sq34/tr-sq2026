@@ -431,59 +431,142 @@ app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWi
   }
 });
 
-// A client can upload only a declared image to a private quarantine prefix.
-// The final safe object is created by a separate media processor after scan
-// and EXIF stripping; it is never the object addressed by this presigned URL.
+/* --- Medya yükleme akışı ---------------------------------------------------
+ *
+ * İstemci yalnızca beyan ettiği görseli, özel bir karantina ön ekine
+ * yükleyebilir. Okunabilir nesneyi bu bağlantı değil, taramadan ve EXIF
+ * temizliğinden sonra medya işleyici üretir.
+ *
+ * Üç adım da iki ayrı yerden kullanılıyor: üyenin kendi yüklemesi ve panelin
+ * resmî hesap adına yüklediği haber görseli. Aradaki tek fark dosyanın kimin
+ * adına yazıldığı - onu söyleyen taraf rotalar, ne yapıldığını söyleyen taraf
+ * bu üç işlev. İkinci bir kopya çıkarmak, güvenlik kontrolü olan bir akışı iki
+ * yerde ayrı ayrı doğru tutmayı gerektirirdi.
+ */
+async function openMediaUpload(ownerId: string, input: z.infer<typeof mediaPresignBody>) {
+  const mediaId = randomUUID();
+  const uploadId = randomUUID();
+  const quarantineKey = `uploads/quarantine/${ownerId}/${mediaId}`;
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      "INSERT INTO media_assets(id,owner_id,status,kind) VALUES($1,$2,'quarantined',$3)",
+      [mediaId, ownerId, input.kind],
+    );
+    await client.query(
+      "INSERT INTO media_upload_sessions(id,media_id,owner_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')",
+      [uploadId, mediaId, ownerId, quarantineKey, Buffer.from(input.sha256, 'hex'), input.sizeBytes, input.contentType],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return {
+    uploadId,
+    mediaId,
+    uploadUrl: await generateMediaUploadSasUrl(quarantineKey, 300),
+    expiresInSeconds: 300,
+    // İstemci bu başlıkları olduğu gibi gönderiyor, içeriklerini yorumlamıyor.
+    // Burada eskiden `x-amz-checksum-sha256` yazıyordu: S3 döneminden kalan,
+    // Azure'un tanımadığı bir başlık. Asıl sorun eksik olandı - Azure'a
+    // doğrudan PUT ile blob yazarken `x-ms-blob-type` zorunlu, yoksa depolama
+    // isteği daha gövdeye bakmadan MissingRequiredHeader ile reddediyor.
+    // Yükleme adımı bu yüzden hiç tutmadı ve hiçbir medya taramaya bile
+    // ulaşamadı.
+    //
+    // İçerik türü hem istek başlığı hem de `x-ms-blob-content-type` olarak
+    // gidiyor: ikincisi blobun kalıcı türünü açıkça yazar, tamamlama adımı o
+    // türü beyan edilenle karşılaştırır.
+    requiredHeaders: {
+      'x-ms-blob-type': 'BlockBlob',
+      'content-type': input.contentType,
+      'x-ms-blob-content-type': input.contentType,
+    },
+  };
+}
+
+type MediaCompletion =
+  | { ok: true; mediaId: string }
+  | { ok: false; httpStatus: number; code: string; message: string };
+
+async function completeMediaUpload(ownerId: string, uploadId: string): Promise<MediaCompletion> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const session = await client.query<{
+      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+    }>(
+      'SELECT media_id,quarantine_key,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+      [uploadId, ownerId],
+    );
+    const row = session.rows[0];
+    if (!row || row.expires_at <= new Date()) {
+      await client.query('ROLLBACK');
+      return { ok: false, httpStatus: 410, code: 'UPLOAD_EXPIRED', message: 'Yükleme süresi doldu.' };
+    }
+    if (row.completed_at) {
+      await client.query('COMMIT');
+      return { ok: true, mediaId: row.media_id };
+    }
+    // Blobun kendi özellikleri, beyan edilen boyut ve türle karşılaştırılıyor.
+    // Buraya üçüncü bir koşul olarak SHA-256 karşılaştırması da yazılmıştı ama
+    // karşıya konan değer Azure'un MD5'iydi; hiçbir koşulda tutmayan bir koşul
+    // olduğu için sağlam gelen dosyalar da reddediliyordu. Özet doğrulaması
+    // artık medya işleyicide, indirilen baytların üzerinde yapılıyor - taramayı
+    // yapan taraf, güvenli nesneyi üretmeden önce baytların beyan edilenle aynı
+    // olduğunu görmüş oluyor.
+    const head = await headMediaBlob(row.quarantine_key);
+    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type) {
+      await client.query('ROLLBACK');
+      return { ok: false, httpStatus: 400, code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' };
+    }
+    await client.query('UPDATE media_upload_sessions SET completed_at=now() WHERE id=$1 AND completed_at IS NULL', [uploadId]);
+    await client.query("UPDATE media_assets SET status='scanning' WHERE id=$1 AND owner_id=$2 AND status='quarantined'", [row.media_id, ownerId]);
+    await client.query("INSERT INTO media_processing_jobs(media_id,job_type,status) VALUES($1,'scan','queued') ON CONFLICT DO NOTHING", [row.media_id]);
+    await client.query('COMMIT');
+    return { ok: true, mediaId: row.media_id };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Medya kimliği bir paylaşım aracı değil. Sahibi tarama sürerken durumu
+// sorabilir; başka herkes medyayı, zaten yetkisi olan bir Topluluk nesnesi
+// üzerinden alır - görünür bir Story gibi.
+async function readMediaAsset(ownerId: string, mediaId: string) {
+  const media = await db.query<{
+    id: string;
+    status: 'quarantined' | 'scanning' | 'ready' | 'rejected';
+    kind: 'image' | 'video';
+    safe_url: string | null;
+    thumbnail_url: string | null;
+  }>(
+    'SELECT id,status,kind,safe_url,thumbnail_url FROM media_assets WHERE id=$1 AND owner_id=$2',
+    [mediaId, ownerId],
+  );
+  const row = media.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    kind: row.kind,
+    url: row.status === 'ready' && row.safe_url ? await mediaObjectUrl(row.safe_url) : null,
+    thumbnailUrl: row.status === 'ready' && row.thumbnail_url ? await mediaObjectUrl(row.thumbnail_url) : null,
+  };
+}
+
 app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const input = mediaPresignBody.parse(request.body);
-    const mediaId = randomUUID();
-    const uploadId = randomUUID();
-    const quarantineKey = `uploads/quarantine/${userId}/${mediaId}`;
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        "INSERT INTO media_assets(id,owner_id,status,kind) VALUES($1,$2,'quarantined',$3)",
-        [mediaId, userId, input.kind],
-      );
-      await client.query(
-        "INSERT INTO media_upload_sessions(id,media_id,owner_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')",
-        [uploadId, mediaId, userId, quarantineKey, Buffer.from(input.sha256, 'hex'), input.sizeBytes, input.contentType],
-      );
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-    const uploadUrl = await generateMediaUploadSasUrl(quarantineKey, 300);
-    return reply.code(201).send({
-      data: {
-        uploadId,
-        mediaId,
-        uploadUrl,
-        expiresInSeconds: 300,
-        // İstemci bu başlıkları olduğu gibi gönderiyor, içeriklerini
-        // yorumlamıyor. Burada eskiden `x-amz-checksum-sha256` yazıyordu: S3
-        // döneminden kalan, Azure'un tanımadığı bir başlık. Asıl sorun eksik
-        // olandı - Azure'a doğrudan PUT ile blob yazarken `x-ms-blob-type`
-        // zorunlu, yoksa depolama isteği daha gövdeye bakmadan
-        // MissingRequiredHeader ile reddediyor. Yükleme adımı bu yüzden hiç
-        // tutmadı ve hiçbir medya taramaya bile ulaşamadı.
-        //
-        // İçerik türü hem istek başlığı hem de `x-ms-blob-content-type` olarak
-        // gidiyor: ikincisi blobun kalıcı türünü açıkça yazar, /complete o türü
-        // beyan edilenle karşılaştırır.
-        requiredHeaders: {
-          'x-ms-blob-type': 'BlockBlob',
-          'content-type': input.contentType,
-          'x-ms-blob-content-type': input.contentType,
-        },
-      },
-    });
+    return reply.code(201).send({ data: await openMediaUpload(userId, input) });
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_UPLOAD_NOT_ACCEPTED', message: 'Medya yükleme isteği kabul edilemedi.' },
@@ -495,50 +578,9 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
   try {
     const userId = await viewer(request.headers);
     const { uploadId } = mediaCompleteBody.parse(request.body);
-    const client = await db.connect();
-    let row: {
-      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
-    } | undefined;
-    try {
-    await client.query('BEGIN');
-    const session = await client.query<{
-      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
-    }>(
-      'SELECT media_id,quarantine_key,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
-      [uploadId, userId],
-    );
-    row = session.rows[0];
-    if (!row || row.expires_at <= new Date()) {
-      await client.query('ROLLBACK');
-      return reply.code(410).send({ error: { code: 'UPLOAD_EXPIRED', message: 'Yükleme süresi doldu.' } });
-    }
-    if (row.completed_at) {
-      await client.query('COMMIT');
-      return { data: { mediaId: row.media_id, status: 'scanning' } };
-    }
-    // Blobun kendi özellikleri, beyan edilen boyut ve türle karşılaştırılıyor.
-    // Buraya üçüncü bir koşul olarak SHA-256 karşılaştırması da yazılmıştı ama
-    // karşıya konan değer Azure'un MD5'iydi; hiçbir zaman tutmayan bir koşul
-    // olduğu için sağlam gelen dosyalar da reddediliyordu. Özet doğrulaması
-    // artık medya işleyicide, indirilen baytların üzerinde yapılıyor - taramayı
-    // yapan taraf, güvenli nesneyi üretmeden önce baytların beyan edilenle aynı
-    // olduğunu görmüş oluyor.
-    const head = await headMediaBlob(row.quarantine_key);
-    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type) {
-      await client.query('ROLLBACK');
-      return reply.code(400).send({ error: { code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' } });
-    }
-    await client.query("UPDATE media_upload_sessions SET completed_at=now() WHERE id=$1 AND completed_at IS NULL", [uploadId]);
-    await client.query("UPDATE media_assets SET status='scanning' WHERE id=$1 AND owner_id=$2 AND status='quarantined'", [row.media_id, userId]);
-    await client.query("INSERT INTO media_processing_jobs(media_id,job_type,status) VALUES($1,'scan','queued') ON CONFLICT DO NOTHING", [row.media_id]);
-    await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-    return reply.code(202).send({ data: { mediaId: row!.media_id, status: 'scanning' } });
+    const result = await completeMediaUpload(userId, uploadId);
+    if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
+    return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_COMPLETE_FAILED', message: 'Medya doğrulama kuyruğa alınamadı.' },
@@ -546,45 +588,85 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
   }
 });
 
-// Media IDs are not a sharing mechanism. The owner can poll this endpoint
-// while an upload is processed; everyone else receives media through an
-// already-authorized Community object such as a visible Story.
 app.get('/v1/media/:id', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const mediaId = z.string().uuid().parse((request.params as { id: string }).id);
-    const media = await db.query<{
-      id: string;
-      status: 'quarantined' | 'scanning' | 'ready' | 'rejected';
-      kind: 'image' | 'video';
-      safe_url: string | null;
-      thumbnail_url: string | null;
-    }>(
-      'SELECT id,status,kind,safe_url,thumbnail_url FROM media_assets WHERE id=$1 AND owner_id=$2',
-      [mediaId, userId],
-    );
-    const row = media.rows[0];
-    if (!row) {
-      return reply.code(404).send({
-        error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' },
-      });
-    }
-    return {
-      data: {
-        id: row.id,
-        status: row.status,
-        kind: row.kind,
-        url: row.status === 'ready' && row.safe_url
-            ? await mediaObjectUrl(row.safe_url)
-            : null,
-        thumbnailUrl: row.status === 'ready' && row.thumbnail_url
-            ? await mediaObjectUrl(row.thumbnail_url)
-            : null,
-      },
-    };
+    const data = await readMediaAsset(userId, mediaId);
+    if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' } });
+    return { data };
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_STATUS_FAILED', message: 'Medya durumu okunamadı.' },
+    });
+  }
+});
+
+/* --- Panelin resmî hesap adına yüklediği görsel -----------------------------
+ *
+ * Haber görseli için panelde yükleme yoktu; alanın adı "görsel medya kimliği"
+ * idi ve ipucu "medya kimliği medya hattından gelir" diyordu. Böyle bir hat
+ * yoktu: kimliği elle üretebilecek tek yol uygulamadan bir görsel yükleyip
+ * kimliğini kopyalamaktı, o da resmî hesabın değil o üyenin medyası olurdu -
+ * haber yayınlarken `MEDIA_NOT_READY` ile geri dönerdi.
+ *
+ * Aynı üç adım, aynı tarama, aynı işleyici; değişen tek şey dosyanın kimin
+ * adına yazıldığı. Sahip, haberi yayınlayacak resmî hesabın kendisi: haber
+ * yayınlanırken medyanın hazır olup olmadığına bakan sorgu da, medyayı
+ * sonradan okuyan sorgu da o hesabı görüyor.
+ */
+const gateworkMediaPresignBody = mediaPresignBody.extend({ ownerId: z.string().uuid() });
+const gateworkMediaCompleteBody = mediaCompleteBody.extend({ ownerId: z.string().uuid() });
+
+async function requireOfficialOwner(ownerId: string) {
+  const account = await db.query(
+    "SELECT 1 FROM community_system_accounts WHERE user_id=$1 AND role='official' AND active",
+    [ownerId],
+  );
+  if (!account.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+}
+
+app.post('/v1/internal/gatework/media/uploads/presign', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const { ownerId, ...input } = gateworkMediaPresignBody.parse(request.body);
+    await requireOfficialOwner(ownerId);
+    return reply.code(201).send({ data: await openMediaUpload(ownerId, input) });
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_NOT_ACCEPTED', message: 'Görsel yükleme isteği kabul edilemedi.' },
+    });
+  }
+});
+
+app.post('/v1/internal/gatework/media/uploads/complete', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const { ownerId, uploadId } = gateworkMediaCompleteBody.parse(request.body);
+    const result = await completeMediaUpload(ownerId, uploadId);
+    if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
+    return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_COMPLETE_FAILED', message: 'Görsel doğrulama kuyruğa alınamadı.' },
+    });
+  }
+});
+
+app.get('/v1/internal/gatework/media/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const mediaId = z.string().uuid().parse((request.params as { id: string }).id);
+    const ownerId = z.string().uuid().parse((request.query as { ownerId?: string }).ownerId);
+    const data = await readMediaAsset(ownerId, mediaId);
+    if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Görsel bulunamadı.' } });
+    return { data };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_STATUS_FAILED', message: 'Görselin durumu okunamadı.' },
     });
   }
 });
@@ -3031,14 +3113,21 @@ app.get('/v1/community/news', async (request, reply) => {
   }
 });
 
-/// What the home screen's headline strip is: the same articles, ordered by the
-/// rank an editor gave them rather than by when they went out.
+/// Ana sayfadaki manşet şeridi: aynı haberler, çıktıkları saate göre değil
+/// editörün verdiği sıraya göre.
+///
+/// Sorgu eskiden `headline_rank IS NOT NULL` ile filtreliyordu. Sıra vermek
+/// isteğe bağlı olduğu için pratikte şu oluyordu: panelden haber yayınlanıyor,
+/// Haber Merkezi listesine düşüyor, ana sayfada hiçbir şey çıkmıyor ve aradaki
+/// farkın tek açıklaması formdaki küçük bir ipucu oluyordu. Filtre yerine
+/// sıralama: sıra verilmiş haberler önde, arkalarında en yeniler. Editörün
+/// seçimi hâlâ üstte duruyor ama yayında haber varken şerit boş kalmıyor.
 app.get('/v1/community/news/headlines', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const input = newsHeadlineQuery.parse(request.query);
     const rows = await db.query<NewsRow>(
-      `${newsSelect()} WHERE ${NEWS_VISIBLE} AND a.headline_rank IS NOT NULL ORDER BY a.headline_rank ASC,a.published_at DESC LIMIT $2`,
+      `${newsSelect()} WHERE ${NEWS_VISIBLE} ORDER BY (a.headline_rank IS NULL),a.headline_rank ASC,a.published_at DESC LIMIT $2`,
       [userId, input.limit],
     );
     return { data: await Promise.all(rows.rows.map(newsArticleJson)) };

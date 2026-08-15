@@ -80,6 +80,98 @@ export const publishNewsArticleSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 });
 
+/* --- Haber görseli ---------------------------------------------------------
+ *
+ * Görsel, tarayıcıdan depoya değil, panelin sunucu tarafından depoya gidiyor.
+ * İki nedeni var. Kısa ömürlü yazma bağlantısı tarayıcıya hiç inmiyor; ve
+ * depolama hesabına tarayıcıdan yazabilmek için ayrıca CORS kuralı gerekirdi -
+ * yükleme yolunun çalışması bir altyapı ayarına bağlı kalırdı.
+ *
+ * Buradan sonrası uygulamadakiyle aynı hat: karantinaya yazılıyor, medya
+ * işleyici tarıyor, EXIF'i temizliyor, webp'ye çeviriyor ve ancak ondan sonra
+ * "ready" oluyor. Panelden gelen görsel ayrıcalıklı değil.
+ */
+export const MEDIA_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+
+const mediaTicketSchema = z.object({
+  data: z.object({
+    uploadId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+    uploadUrl: z.string().url(),
+    requiredHeaders: z.record(z.string(), z.string()),
+  }),
+});
+
+export const mediaStatusSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(['quarantined', 'scanning', 'ready', 'rejected']),
+  url: z.string().url().nullable(),
+  thumbnailUrl: z.string().url().nullable(),
+});
+
+async function communityFetch(path: string, init: RequestInit) {
+  const session = await requiredSession();
+  const token = await delegation(session.accessToken);
+  return fetch(`${communityBase()}${path}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
+    cache: 'no-store',
+  });
+}
+
+export async function uploadNewsImage(input: {
+  ownerId: string;
+  fileName: string;
+  contentType: string;
+  bytes: Buffer;
+}) {
+  const ticketResponse = await communityFetch('/v1/internal/gatework/media/uploads/presign', {
+    method: 'POST',
+    body: JSON.stringify({
+      ownerId: input.ownerId,
+      kind: 'image',
+      contentType: input.contentType,
+      fileName: input.fileName,
+      sizeBytes: input.bytes.byteLength,
+      sha256: createHash('sha256').update(input.bytes).digest('hex'),
+    }),
+  });
+  if (!ticketResponse.ok) throw new Error(`PRESIGN_${ticketResponse.status}`);
+  const ticket = mediaTicketSchema.parse(await ticketResponse.json()).data;
+
+  const stored = await fetch(ticket.uploadUrl, {
+    method: 'PUT',
+    headers: ticket.requiredHeaders,
+    body: new Uint8Array(input.bytes),
+  });
+  // Depolama servisinin gövdesi XML; hata kodunu oradan alıp öne çıkarmak,
+  // "yükleme başarısız" demekten çok daha kullanışlı bir kayıt bırakıyor.
+  if (!stored.ok) {
+    const code = /<Code>(.*?)<\/Code>/.exec(await stored.text().catch(() => ''))?.[1];
+    throw new Error(`STORAGE_${stored.status}${code ? `_${code}` : ''}`);
+  }
+
+  const completed = await communityFetch('/v1/internal/gatework/media/uploads/complete', {
+    method: 'POST',
+    body: JSON.stringify({ ownerId: input.ownerId, uploadId: ticket.uploadId }),
+  });
+  if (!completed.ok) throw new Error(`COMPLETE_${completed.status}`);
+  return { mediaId: ticket.mediaId };
+}
+
+/// Tarama birkaç saniye sürüyor; panel bu ucu yoklayarak bekliyor. Yayınlama
+/// düğmesi görsel hazır olmadan açılmıyor - hazır olmayan bir kimlikle haber
+/// yayınlamak servisten MEDIA_NOT_READY ile geri dönerdi.
+export async function newsImageStatus(mediaId: string, ownerId: string) {
+  const response = await communityFetch(
+    `/v1/internal/gatework/media/${mediaId}?ownerId=${encodeURIComponent(ownerId)}`,
+    { method: 'GET' },
+  );
+  if (!response.ok) throw new Error(`STATUS_${response.status}`);
+  return z.object({ data: mediaStatusSchema }).parse(await response.json()).data;
+}
+
 export async function createSystemAccount(raw: unknown) {
   const input = createSystemAccountSchema.parse(raw); const session = await requiredSession(); const idempotencyKey = randomUUID();
   const principalResponse = await identityFetch('/v1/auth/gatework/system-principals', { method: 'POST', body: JSON.stringify({ ...input, idempotencyKey }) }, session.accessToken);
