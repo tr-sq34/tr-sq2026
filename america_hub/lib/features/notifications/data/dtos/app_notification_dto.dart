@@ -11,12 +11,16 @@ import '../../domain/entities/app_notification.dart';
 /// görüyor, kimlerin kaydettiğini değil. İstek bunun tersi: karşı taraf mesaj
 /// yazıp tanışmak istediğini kendisi söylüyor. Sunucu göndermediği yerde burada
 /// da uydurulmuyor.
+///
+/// [body] tek istisna: global duyuruyu bir üye tetiklemiyor, panelden bir
+/// yetkili yazıyor. Cümleyi burada kurmak, yazdığı metni yeniden yazmak olurdu.
 class AppNotificationDto {
   const AppNotificationDto({
     required this.id,
     required this.kind,
     required this.subjectId,
     required this.subjectTitle,
+    required this.body,
     required this.actorCount,
     required this.actorName,
     required this.createdAt,
@@ -29,6 +33,7 @@ class AppNotificationDto {
         kind: json['kind'] as String? ?? '',
         subjectId: json['subjectId'] as String? ?? '',
         subjectTitle: json['subjectTitle'] as String? ?? '',
+        body: json['body'] as String?,
         actorCount: (json['actorCount'] as num?)?.toInt() ?? 0,
         actorName: json['actorName'] as String?,
         createdAt:
@@ -41,6 +46,9 @@ class AppNotificationDto {
   final String kind;
   final String subjectId;
   final String subjectTitle;
+
+  /// Yalnızca duyuruda dolu geliyor; kalan türlerde sunucu cümle göndermiyor.
+  final String? body;
   final int actorCount;
   final String? actorName;
   final DateTime createdAt;
@@ -51,14 +59,25 @@ class AppNotificationDto {
     return AppNotification(
       id: id,
       type: type,
-      title: _titleOf(type),
-      body: _bodyOf(type),
+      // Duyurunun başlığı da metni de yetkilinin yazdığı gibi kalıyor. Sunucu
+      // gövdeyi göndermediyse - eski bir satır ya da silinmiş bir duyuru -
+      // başlık tek başına da bir cümle, uydurma bir metinden iyi.
+      title: type == AppNotificationType.announcement
+          ? (subjectTitle.isEmpty ? 'TurkSquare duyurusu' : subjectTitle)
+          : _titleOf(type),
+      body: type == AppNotificationType.announcement
+          ? (body ?? '')
+          : _bodyOf(type),
       createdAt: createdAt,
       deepLink: Uri.parse(switch (type) {
         AppNotificationType.listingSaved ||
         AppNotificationType.listingLiked => 'turksquare://listing/$subjectId',
         // Arkadaşlık isteğinde konu bir paylaşım değil, isteği gönderen üye.
         AppNotificationType.friendRequest => 'turksquare://friend/$subjectId',
+        // Duyurunun gideceği bir ekran yok: metnin tamamı bildirim satırının
+        // içinde. Bildirimler ekranı bu türü kendisi açıyor, kabuğa göndermiyor.
+        AppNotificationType.announcement =>
+          'turksquare://announcement/$subjectId',
         _ => 'turksquare://post/$subjectId',
       }),
       isRead: isRead,
@@ -72,6 +91,7 @@ class AppNotificationDto {
     'listing_like' => AppNotificationType.listingLiked,
     'special_request' => AppNotificationType.specialRequest,
     'friend_request' => AppNotificationType.friendRequest,
+    'announcement' => AppNotificationType.announcement,
     _ => AppNotificationType.system,
   };
 
