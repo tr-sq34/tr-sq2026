@@ -183,6 +183,7 @@ class AppRouter {
             moderationRepository: messageModerationRepository,
             friendshipController: friendshipController,
             directMessageRepository: directMessageRepository,
+            mediaUploadController: mediaUploadController,
           ),
         );
       case AppRoutes.register:

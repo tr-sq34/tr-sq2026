@@ -1,4 +1,6 @@
 import 'package:america_hub/core/pagination/cursor_page.dart';
+import 'package:america_hub/features/community/application/media_upload_controller.dart';
+import 'package:america_hub/features/community/data/repositories/mock_media_upload_repository.dart';
 import 'package:america_hub/features/messaging/application/direct_conversation_controller.dart';
 import 'package:america_hub/features/messaging/application/messaging_controller.dart';
 import 'package:america_hub/features/messaging/data/repositories/mock_message_moderation_repository.dart';
@@ -140,6 +142,9 @@ void main() {
           moderationRepository: MockMessageModerationRepository(),
           friendshipController: friendships,
           directMessageRepository: directMessages,
+          mediaUploadController: MediaUploadController(
+            repository: MockMediaUploadRepository(),
+          ),
         ),
       ),
     );

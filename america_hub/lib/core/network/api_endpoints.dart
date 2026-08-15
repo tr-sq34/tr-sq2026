@@ -35,6 +35,11 @@ abstract final class ApiEndpoints {
   static String messagingConversationMessages(String conversationId) =>
       '/messages/conversations/$conversationId/messages';
   static const messagingGroups = '/messages/groups';
+  static String messagingGroup(String groupId) => '/messages/groups/$groupId';
+  static String messagingGroupMembers(String groupId) =>
+      '/messages/groups/$groupId/members';
+  static String messagingGroupMember(String groupId, String userId) =>
+      '/messages/groups/$groupId/members/$userId';
   static String messagingGroupJoin(String groupId) =>
       '/messages/groups/$groupId/join';
   static String messagingGroupLeave(String groupId) =>

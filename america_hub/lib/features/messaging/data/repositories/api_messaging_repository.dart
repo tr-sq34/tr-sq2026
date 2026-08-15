@@ -113,6 +113,7 @@ class ApiMessagingRepository
     members: (json['memberCount'] as num?)?.toInt() ?? 0,
     privacy: _privacy(json['privacy'] as String?),
     imageUrl: json['imageUrl'] as String?,
+    description: json['description'] as String?,
     isOwner: json['role'] == 'owner',
     membershipStatus: _membership(json['membershipStatus'] as String?),
   );
@@ -125,6 +126,7 @@ class ApiMessagingRepository
   static GroupMembershipStatus _membership(String? value) => switch (value) {
     'joined' => GroupMembershipStatus.joined,
     'requested' => GroupMembershipStatus.requested,
+    'invited' => GroupMembershipStatus.invited,
     _ => GroupMembershipStatus.none,
   };
 
@@ -153,6 +155,7 @@ class ApiMessagingRepository
     required String city,
     required GroupPrivacy privacy,
     String? imageUrl,
+    String? description,
   }) async {
     final response = await _client.post<Map<String, dynamic>>(
       ApiEndpoints.messagingGroups,
@@ -161,10 +164,73 @@ class ApiMessagingRepository
         'city': city,
         'privacy': privacy.name,
         'imageUrl': ?imageUrl,
+        'description': ?description,
       },
     );
     return _toGroup(response.data!['data'] as Map<String, dynamic>);
   }
+
+  @override
+  Future<CommunityGroup> updateGroup(
+    String groupId, {
+    String? name,
+    String? city,
+    Object? description = _unset,
+    Object? imageUrl = _unset,
+  }) async {
+    final response = await _client.patch<Map<String, dynamic>>(
+      ApiEndpoints.messagingGroup(groupId),
+      // Gönderilmeyen alan olduğu gibi kalıyor, açıkça `null` gönderilen alan
+      // siliniyor. Dokunulmamış bir alanı da null göndermek, kurucu yalnızca
+      // adı değiştirdiğinde açıklamayı sessizce silerdi.
+      data: {
+        'name': ?name,
+        'city': ?city,
+        if (!identical(description, _unset)) 'description': description,
+        if (!identical(imageUrl, _unset)) 'imageUrl': imageUrl,
+      },
+    );
+    return _toGroup(response.data!['data'] as Map<String, dynamic>);
+  }
+
+  static const Object _unset = Object();
+
+  @override
+  Future<List<GroupMember>> getGroupMembers(String groupId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.messagingGroupMembers(groupId),
+    );
+    final rows = (response.data?['data'] as List<dynamic>? ?? const []);
+    return rows.map((row) {
+      final json = row as Map<String, dynamic>;
+      return GroupMember(
+        userId: json['userId'] as String,
+        displayName: json['displayName'] as String?,
+        isOwner: json['role'] == 'owner',
+        status: _membership(json['status'] as String?),
+        joinedAt: DateTime.parse(json['joinedAt'] as String).toLocal(),
+      );
+    }).toList(growable: false);
+  }
+
+  @override
+  Future<GroupMembershipStatus> inviteGroupMember(
+    String groupId,
+    String userId,
+  ) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.messagingGroupMembers(groupId),
+      data: {'userId': userId},
+    );
+    final data = response.data?['data'] as Map<String, dynamic>?;
+    return _membership(data?['membershipStatus'] as String?);
+  }
+
+  @override
+  Future<void> removeGroupMember(String groupId, String userId) =>
+      _client.delete<Map<String, dynamic>>(
+        ApiEndpoints.messagingGroupMember(groupId, userId),
+      );
 
   @override
   Future<List<GroupJoinRequest>> getJoinRequests(String groupId) async {
