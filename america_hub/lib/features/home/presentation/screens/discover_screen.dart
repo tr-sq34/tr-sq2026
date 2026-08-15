@@ -1,7 +1,9 @@
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
+import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_remote_image.dart';
+import '../../../../core/widgets/section_unavailable.dart';
 import '../../application/community_home_controller.dart';
 import '../../data/community_home_repository.dart';
 import '../../../community/application/story_controller.dart';
@@ -251,6 +253,19 @@ class _StoriesSection extends StatelessWidget {
     builder: (context, _) {
       final sponsored = promotionsController.storySlots;
       final stories = storyController.railItems;
+      // Story servisine ulaşılamadığında şerit sessizce kaybolmuyor: ağındaki
+      // kimsenin bir şey paylaşmamış olmasıyla isteğin düşmesi ayrı şeyler.
+      // Sponsorlu yuvalar bu cümleyi tetiklemiyor; reklam gelmemesi üyenin
+      // yeniden deneyeceği bir şey değil.
+      if (sponsored.isEmpty &&
+          stories.isEmpty &&
+          storyController.errorMessage != null) {
+        return SectionUnavailable(
+          title: 'Story’ler',
+          message: storyController.errorMessage!,
+          onRetry: storyController.load,
+        );
+      }
       if (sponsored.isEmpty && stories.isEmpty) return const SizedBox.shrink();
       _countImpressions(promotionsController, sponsored);
       return Container(
@@ -946,6 +961,16 @@ class _LocalContextSection extends StatelessWidget {
                 ..sort((a, b) => a.startsAt.compareTo(b.startsAt)))
               .take(6)
               .toList(growable: false);
+      // Boş liste ile ulaşılamayan servis aynı şey değil: birincisinde
+      // gerçekten etkinlik yok, ikincisinde olup olmadığını bilmiyoruz.
+      if (events.isEmpty && controller.state == PagedLoadState.failure) {
+        return SectionUnavailable(
+          title: 'Yaklaşan etkinlikler',
+          message:
+              controller.errorMessage ?? 'Etkinlikler şu anda yüklenemedi.',
+          onRetry: controller.loadInitial,
+        );
+      }
       if (events.isEmpty) return const SizedBox.shrink();
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
@@ -1205,6 +1230,13 @@ class _RecentListingsSection extends StatelessWidget {
     animation: controller,
     builder: (context, _) {
       final listings = controller.items.take(6).toList(growable: false);
+      if (listings.isEmpty && controller.state == PagedLoadState.failure) {
+        return SectionUnavailable(
+          title: 'Son eklenen ilanlar',
+          message: controller.errorMessage ?? 'Çarşı şu anda yüklenemedi.',
+          onRetry: controller.loadInitial,
+        );
+      }
       if (listings.isEmpty) return const SizedBox.shrink();
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
