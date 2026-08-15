@@ -38,6 +38,20 @@ export type NewsSummary = {
   reactionCount: number;
 };
 
+// Yayında olan bir panel Story'si. Story 24 saatte kendiliğinden düştüğü için
+// bu liste "yayınlananlar" değil "hâlâ yayında olanlar"; kalan süreyi gösteren
+// başka bir ekran yok.
+export type OfficialStory = {
+  id: string;
+  authorId: string;
+  authorName: string;
+  createdAt: string;
+  expiresAt: string;
+  imageUrl: string | null;
+  viewCount: number;
+  likeCount: number;
+};
+
 export const NEWS_CATEGORIES = [
   ['gundem', 'Gündem'],
   ['gocmenlik', 'Göçmenlik'],

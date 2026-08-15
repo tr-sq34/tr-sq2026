@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { delegation } from './gatework';
 import { getSession } from './session';
-import type { NewsSummary, SystemAccount } from './content-labels';
+import type { NewsSummary, OfficialStory, SystemAccount } from './content-labels';
 import type { GateworkRole } from './types';
 
 /**
@@ -21,7 +21,7 @@ import type { GateworkRole } from './types';
 const communityBase = () => (process.env.COMMUNITY_API_BASE_URL ?? 'http://localhost:8081').replace(/\/$/, '');
 
 export { NEWS_CATEGORIES, NEWS_CATEGORY_LABELS, VISIBILITY_LABELS } from './content-labels';
-export type { NewsSummary, SystemAccount } from './content-labels';
+export type { NewsSummary, OfficialStory, SystemAccount } from './content-labels';
 
 // Mirrors the roles the community service enforces on the publish endpoints.
 // Moderators and auditors can read the news list but never write to it.
@@ -58,6 +58,48 @@ export async function listNewsArticles(params: { category?: string; limit?: numb
 }
 
 export const retractNewsSchema = z.object({ reason: z.string().trim().min(5).max(500) });
+
+/* --- Story ----------------------------------------------------------------
+ *
+ * Ana sayfanın en üstündeki Story şeridi, yeni bir üyenin ağı boş olduğu için
+ * ilk gün tamamen boş kalıyordu. Sponsorlu yuvalar panelden yerleştirilebiliyor
+ * ama platformun kendi Story'si için hiçbir yol yoktu; uygulamadaki oluşturucu
+ * ise resmî hesap adına değil, o an giriş yapmış kişinin adına yayınlıyor.
+ *
+ * Story 24 saatte kendiliğinden düşer. Bu yüzden liste "yayınlananlar" değil,
+ * "hâlâ yayında olanlar": kalan süreyi gösteren başka bir ekran yok.
+ */
+export const publishStorySchema = z.object({
+  authorId: z.string().uuid(),
+  mediaId: z.string().uuid(),
+  ttlHours: z.coerce.number().int().min(1).max(24).default(24),
+  reason: z.string().trim().min(5).max(500),
+});
+
+export async function listOfficialStories(): Promise<OfficialStory[]> {
+  return (await communityFetch('/v1/internal/gatework/stories')).data as OfficialStory[];
+}
+
+export async function publishOfficialStory(raw: unknown) {
+  const input = publishStorySchema.parse(raw);
+  return (await communityFetch('/v1/internal/gatework/stories', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, idempotencyKey: randomUUID() }),
+  })).data as { id: string };
+}
+
+/// Satır silinmiyor, süresi şimdiye çekiliyor: görüntülenmeler ve beğeniler o
+/// Story'ye bağlı duruyor ve açılmış bir şikâyet varsa hedefi hâlâ çözülebilir
+/// olmalı.
+export async function retractOfficialStory(id: string, raw: unknown) {
+  const input = retractNewsSchema.parse(raw);
+  z.string().uuid().parse(id);
+  await communityFetch(`/v1/internal/gatework/stories/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify(input),
+  });
+  return { id };
+}
 
 // A soft delete on the service side: the comments and any report filed against
 // the article still resolve to something after it comes down.

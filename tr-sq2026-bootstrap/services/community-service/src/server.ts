@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
 import { importJWK, jwtVerify } from 'jose';
 import { z } from 'zod';
 import type pg from 'pg';
@@ -93,12 +94,46 @@ const auctionBody=z.object({startingPrice:z.coerce.number().nonnegative(),minimu
 const bidBody=z.object({amount:z.coerce.number().positive()});
 const gateworkSystemAccountBody=z.object({principalId:z.string().uuid(),displayName:z.string().trim().min(2).max(100),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
 const gateworkPostBody=z.object({authorId:z.string().uuid(),body:z.string().trim().min(1).max(2200),visibility:z.enum(['public','friends_only']).default('public'),regionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
+// Panelden Story. Gorunurluk sorulmuyor: resmi hesabin Story'si herkese acik
+// olmak icin var, `network` secilseydi hicbir uyenin arkadasi olmadigi icin
+// kimseye gorunmezdi. Sure 24 saatle sinirli, cunku stories tablosunun kendi
+// kisiti bu - "surekli duran Story" diye bir sey yok.
+const gateworkStoryBody=z.object({authorId:z.string().uuid(),mediaId:z.string().uuid(),ttlHours:z.coerce.number().int().min(1).max(24).default(24),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
 const decodeCursor = (cursor?: string) => { if (!cursor) return null; try { const [createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|'); if (!createdAt || !id) throw Error(); return { createdAt, id }; } catch { throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 }); } };
 const encodeCursor = (row: { created_at: Date; id: string }) => Buffer.from(`${row.created_at.toISOString()}|${row.id}`).toString('base64url');
+/**
+ * Acilis kartlarinin gorselleri.
+ *
+ * Bunlar bir uyenin yukledigi medya degil, depoya islenmis dort JPEG: Story
+ * seridi hic kart olmadiginda cizilmedigi icin uygulama ilk gun bos aciliyordu.
+ * Blob'a konulmadilar, cunku onlari yerlestiren `035` gecisi yalnizca SQL
+ * calistirabiliyor - gecis isinde depolama kimlik bilgisi yok. Dosyalar
+ * acilista bellege okunuyor; boylece istekte disk yok ve isim listesi kapali,
+ * yani yol asimi diye bir sey kalmiyor.
+ */
+const LAUNCH_ASSET_DIR = new URL('../assets/launch/', import.meta.url);
+const launchAssets = new Map<string, Buffer>();
+try {
+  for (const name of await readdir(LAUNCH_ASSET_DIR)) {
+    if (!/^[a-z0-9-]+\.jpg$/.test(name)) continue;
+    launchAssets.set(name, await readFile(new URL(name, LAUNCH_ASSET_DIR)));
+  }
+} catch (error) {
+  // Sessizce gecmiyor: kartlar yerinde durur ama gorselleri 404 doner, ve bunun
+  // sebebi imajda assets/ klasorunun olmamasidir.
+  app.log.error({ err: error }, 'acilis kartlarinin gorselleri okunamadi');
+}
+
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? 'https://community-api.turksquare.com').replace(/\/$/, '');
 const mediaObjectUrl = async (safeUrlOrKey: string) => {
   if (/^https:\/\//.test(safeUrlOrKey)) return safeUrlOrKey;
+  // `launch/...` bir blob anahtari degil, servisin kendi sunduğu dosya. Imzali
+  // bir SAS uretilmeye calisilsaydi var olmayan bir blob icin gecerli gorunen
+  // ama 404 donen bir baglanti cikardi.
+  if (safeUrlOrKey.startsWith('launch/')) return `${PUBLIC_BASE_URL}/v1/public/${safeUrlOrKey}`;
   return generateMediaReadSasUrl(safeUrlOrKey, 300);
 };
+
 
 async function viewer(headers: { authorization?: string }) { const token = headers.authorization?.replace(/^Bearer\s+/i, ''); if (!token) throw Error('UNAUTHORIZED'); const verified = await jwtVerify(token, identityVerificationKey, { issuer: required('JWT_ISSUER'), audience: required('JWT_AUDIENCE'), algorithms: ['RS256'] }); if (!verified.payload.sub) throw Error('UNAUTHORIZED'); return verified.payload.sub; }
 /// Six read routes used to answer `statusCode ?? 401`, which meant a SQL error,
@@ -133,6 +168,19 @@ await app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
   maxAge: 600,
+});
+
+/// Kimlik istemeyen tek okuma yolu. Icerigi depodan gelen sabit dort dosya;
+/// uye verisi degil, bu yuzden imzali baglantiya gerek yok. Uygulama bu
+/// baglantiyi zaten kimlikli bir yanitin icinde aliyor ve gorseli baslıksiz
+/// cekiyor - blob SAS baglantilarinin calistigi bicimin aynisi.
+app.get('/v1/public/launch/:name', async (request, reply) => {
+  const body = launchAssets.get((request.params as { name: string }).name);
+  if (!body) return reply.code(404).send({ error: { code: 'ASSET_NOT_FOUND', message: 'Gorsel bulunamadi.' } });
+  return reply
+    .header('content-type', 'image/jpeg')
+    .header('cache-control', 'public, max-age=86400, immutable')
+    .send(body);
 });
 
 app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => {
@@ -428,6 +476,109 @@ app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWi
     } finally { client.release(); }
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_POST_REJECTED' } });
+  }
+});
+
+/* --- Panelden Story --------------------------------------------------------
+ *
+ * Story serisi ana sayfanin en ustunde duruyor ve yeni bir uyenin agi bos
+ * oldugu icin ilk gun tamamen bos kaliyor. Sponsorlu yuvalar (`promotions`,
+ * placement='story_slot') zaten panelden yerlestirilebiliyordu; platformun
+ * kendi Story'si icin bir yol yoktu.
+ *
+ * Resmi hesabin Story'si herkese gorunur: `storyAccessWhere` aktif resmi
+ * hesaplari bolgeye ve arkadaslik iliskisine bakmadan geciriyor. Bu yuzden
+ * burada bolge secilmiyor - yazilsaydi sadece o eyalettekilere gorunurdu.
+ */
+app.post('/v1/internal/gatework/stories', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkStoryBody.parse(request.body);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const prior = await client.query<{ result_id: string | null }>("SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='official_story.create' FOR UPDATE", [actor.actorId, input.idempotencyKey]);
+      if (prior.rows[0]?.result_id) {
+        await client.query('COMMIT');
+        return reply.code(200).send({ data: { id: prior.rows[0].result_id } });
+      }
+      const official = await client.query("SELECT 1 FROM community_system_accounts WHERE user_id=$1 AND role='official' AND active", [input.authorId]);
+      if (!official.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+      // Medya, saklanmadan once dogrulaniyor: taranmamis bir kimlikle acilan
+      // Story okuma tarafinda `m.status='ready'` suzgecine takilir ve panelde
+      // "yayinlandi" yazarken uygulamada hic gorunmezdi.
+      const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status='ready'", [input.mediaId, input.authorId]);
+      if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+      const story = await client.query<{ id: string }>(
+        "INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) VALUES($1,$2,'public',NULL,now()+($3::text||' hours')::interval) RETURNING id",
+        [input.authorId, input.mediaId, input.ttlHours],
+      );
+      await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'official_story.create',$3)", [actor.actorId, input.idempotencyKey, story.rows[0]!.id]);
+      await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'official_story.publish', targetType: 'story', targetId: story.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+      await client.query('COMMIT');
+      return reply.code(201).send({ data: story.rows[0] });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  } catch (error) {
+    const known = error instanceof Error ? error.message : '';
+    return reply.code(known === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_REJECTED', message: known === 'MEDIA_NOT_READY' ? 'Gorsel taramasi bitmeden Story yayinlanamaz.' : known === 'OFFICIAL_NOT_ACTIVE' ? 'Secilen resmi hesap aktif degil.' : 'Story yayinlanamadi.' } });
+  }
+});
+
+/// Panelden acilan Story'ler ve sureleri. Story 24 saatte kendiliginden
+/// dusuyor, bu yuzden liste "yayinda olanlar" degil "hala yayinda olanlar":
+/// bir editorun ekledigi Story'nin ne kadar omru kaldigini baska yerden
+/// gorebilecegi bir ekran yok.
+app.get('/v1/internal/gatework/stories', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'auditor']);
+    const rows = await db.query<{ id: string; author_id: string; author_name: string; created_at: Date; expires_at: Date; safe_url: string | null; thumbnail_url: string | null; view_count: string; like_count: string }>(
+      `SELECT s.id,s.author_id,COALESCE(p.display_name,'TurkSquare') author_name,s.created_at,s.expires_at,m.safe_url,m.thumbnail_url,
+              (SELECT count(*) FROM story_views v WHERE v.story_id=s.id) view_count,
+              (SELECT count(*) FROM story_likes l WHERE l.story_id=s.id) like_count
+         FROM stories s
+         JOIN media_assets m ON m.id=s.media_id
+         JOIN community_system_accounts o ON o.user_id=s.author_id AND o.role='official'
+         LEFT JOIN community_profile_projection p ON p.user_id=s.author_id
+        WHERE s.expires_at>now()
+        ORDER BY s.created_at DESC LIMIT 50`,
+    );
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        id: row.id,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+        imageUrl: row.thumbnail_url ? await mediaObjectUrl(row.thumbnail_url) : row.safe_url ? await mediaObjectUrl(row.safe_url) : null,
+        viewCount: Number(row.view_count),
+        likeCount: Number(row.like_count),
+      }))),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORIES_UNAVAILABLE', message: 'Panelden acilan Storyler okunamadi.' } });
+  }
+});
+
+/// Geri cekme. Satir silinmiyor, suresi simdiye cekiliyor: goruntulenmeler ve
+/// begeniler o Story'ye bagli duruyor ve bir sikayet acilmissa hedefi hala
+/// cozulebilir olmali.
+app.delete('/v1/internal/gatework/stories/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = z.object({ reason: z.string().trim().min(5).max(500) }).parse(request.body);
+    const removed = await db.query("UPDATE stories SET expires_at=now() WHERE id=$1 AND expires_at>now() AND EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=stories.author_id AND o.role='official') RETURNING id", [id]);
+    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'STORY_NOT_FOUND', message: 'Yayinda olan bir panel Storysi bulunamadi.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'official_story.retract', targetType: 'story', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_RETRACT_FAILED', message: 'Story geri cekilemedi.' } });
   }
 });
 
@@ -3492,13 +3643,18 @@ type PromotionRow = {
   media_url: string | null; target_kind: string | null; target_value: string | null;
   region_code: string | null; city: string | null; starts_at: Date; ends_at: Date;
   status: string; decision_reason: string | null; request_note?: string | null;
-  created_at: Date; display_order: number | null; owner_name?: string; impressions?: string; clicks?: string;
+  created_at: Date; display_order: number | null; official: boolean;
+  owner_name?: string; impressions?: string; clicks?: string;
 };
 
 const PROMOTION_SELECT = `
   SELECT p.id,p.owner_id,p.placement,p.title,p.subtitle,m.safe_url media_url,p.target_kind,p.target_value,
          p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at,
-         p.display_order
+         p.display_order,
+         -- Platformun kendi karti mi, birinin yerlestirdigi tanitim mi. Uygulama
+         -- ikisini ayni "Sponsorlu" etiketiyle gosteriyordu; kimsenin para
+         -- odemedigi bir karta reklam demek uyeye yanlis bilgi vermek.
+         EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=p.owner_id AND o.role='official') official
     FROM promotions p
     LEFT JOIN media_assets m ON m.id=p.media_id AND m.status='ready'`;
 
@@ -3521,6 +3677,9 @@ const promotionJson = async (row: PromotionRow) => ({
   createdAt: row.created_at.toISOString(),
   // NULL is "not hand-ordered", which is a different thing from "first".
   displayOrder: row.display_order,
+  // True when the card belongs to the platform itself. The app labels those as
+  // TurkSquare's own rather than "Sponsorlu".
+  official: row.official === true,
 });
 
 /// What the home screen reads. "Live" is computed here rather than stored: an

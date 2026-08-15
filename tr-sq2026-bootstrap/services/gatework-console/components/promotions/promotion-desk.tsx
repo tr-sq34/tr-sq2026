@@ -30,6 +30,7 @@ import {
   promotionWindowState,
   type PromotionSummary,
 } from '@/lib/promotion-labels';
+import { ImageUpload, type UploadedImage } from '@/components/content/image-upload';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -585,7 +586,7 @@ function PlaceForm({
   const [placement, setPlacement] = useState<Placement>('featured_card');
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
-  const [mediaId, setMediaId] = useState('');
+  const [image, setImage] = useState<UploadedImage | null>(null);
   const [targetKind, setTargetKind] = useState('');
   const [targetValue, setTargetValue] = useState('');
   const [regionCode, setRegionCode] = useState('');
@@ -610,7 +611,7 @@ function PlaceForm({
           ownerId,
           title: title.trim(),
           subtitle: subtitle.trim() || undefined,
-          mediaId: mediaId.trim() || undefined,
+          mediaId: image?.mediaId,
           targetKind: targetKind || undefined,
           targetValue: targetValue.trim() || undefined,
           regionCode: regionCode.trim() || undefined,
@@ -620,7 +621,7 @@ function PlaceForm({
           reason: reason.trim(),
         }),
       });
-      setTitle(''); setSubtitle(''); setMediaId(''); setTargetValue(''); setReason('');
+      setTitle(''); setSubtitle(''); setImage(null); setTargetValue(''); setReason('');
       await onPlaced();
     } catch (caught) {
       onError(errorText(caught, 'Tanıtım yerleştirilemedi.'));
@@ -669,10 +670,18 @@ function PlaceForm({
               <Input maxLength={200} value={subtitle} onChange={(event) => setSubtitle(event.target.value)} />
             </Field>
 
+            <Field
+              label="Kart görseli"
+              hint={
+                placement === 'story_slot'
+                  ? 'Story şeridinde tam ekran açılır; dikey (9:16) görsel kullan.'
+                  : 'Kartın üzerine %40 karartmayla serilir. Boş bırakırsan kart degradeyle çizilir.'
+              }
+            >
+              <ImageUpload ownerId={ownerId} value={image} onChange={setImage} disabled={busy} />
+            </Field>
+
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Görsel medya kimliği" hint="Panelde görsel yükleme yok; kimlik medya hattından gelir.">
-                <Input value={mediaId} onChange={(event) => setMediaId(event.target.value)} placeholder="Taranmış medya kimliği" />
-              </Field>
               <Field label="Bağlantı türü" hint="Karta dokununca ne açılacak?">
                 <Select value={targetKind} onChange={(event) => setTargetKind(event.target.value)}>
                   <option value="">Yok</option>
@@ -716,7 +725,7 @@ function PlaceForm({
           title={title}
           subtitle={subtitle}
           audience={[city, regionCode].filter(Boolean).join(', ') || 'Tüm ülke'}
-          hasImage={mediaId.trim().length > 0}
+          imageUrl={image?.url ?? null}
           placement={placement}
         />
       </PhonePreview>
@@ -730,40 +739,91 @@ function PlaceForm({
  * here so a title that would be cut off is cut off on this screen first.
  */
 function CardPreview({
-  title, subtitle, audience, hasImage, placement,
+  title, subtitle, audience, imageUrl, placement,
 }: {
   title: string;
   subtitle: string;
   audience: string;
-  hasImage: boolean;
+  imageUrl: string | null;
   placement: Placement;
 }) {
+  // Story yuvası akışta kart değil, şeritte yuvarlak bir kapak ve dokununca tam
+  // ekran açılan dikey bir görsel. Aynı önizlemeyi ikisine de çizmek, yatay bir
+  // görselin şeritte kırpıldığını yayına girene kadar gizliyordu.
+  if (placement === 'story_slot') {
+    return (
+      <div className="px-4">
+        <p className="text-[15px] font-black text-white">Story şeridi</p>
+        <p className="text-[10px] font-medium text-[#8b93a7]">Sponsorlu alan · şeridin başında</p>
+
+        <div className="mt-3 flex items-start gap-3">
+          <div className="w-[68px] shrink-0">
+            <div className="rounded-full bg-gradient-to-br from-[#f59e0b] to-[#ec4899] p-[2px]">
+              <div className="overflow-hidden rounded-full border-2 border-[#0b0a12] bg-[#1a1828]" style={{ aspectRatio: '1 / 1' }}>
+                {imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imageUrl} alt="" className="h-full w-full object-cover" />
+                ) : null}
+              </div>
+            </div>
+            <p className="mt-1 truncate text-center text-[9px] text-white/80">{title.trim() || 'Başlık'}</p>
+          </div>
+
+          <div className="relative w-[92px] overflow-hidden rounded-xl bg-[#131120]" style={{ aspectRatio: '9 / 16' }}>
+            {imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={imageUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <p className="flex h-full items-center justify-center px-2 text-center text-[9px] text-ink-faint">Tam ekran</p>
+            )}
+            <span className="absolute top-2 left-2 rounded-md border border-white/20 bg-black/40 px-1.5 py-0.5 text-[8px] font-bold text-white">
+              Sponsorlu
+            </span>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[11px] text-ink-faint">
+          {imageUrl
+            ? 'Şeritte kapak dairesel kırpılır, dokununca görsel tam ekran açılır.'
+            : 'Görsel yok: Story yuvası görselsiz yayına giremez, şeritte boş bir daire kalır.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="px-4">
       <p className="text-[15px] font-black text-white">
-        {placement === 'featured_card' ? 'Sana Özel Öne Çıkanlar' : placement === 'story_slot' ? 'Story şeridi' : 'Uygulama içi banner'}
+        {placement === 'featured_card' ? 'Sana Özel Öne Çıkanlar' : 'Uygulama içi banner'}
       </p>
       <p className="text-[10px] font-medium text-[#8b93a7]">
         {placement === 'featured_card' ? 'Bulunduğun yere göre seçilen kartlar' : 'Sponsorlu alan'}
       </p>
 
-      <div className="mt-3 flex h-[130px] w-[240px] flex-col justify-between rounded-3xl bg-gradient-to-br from-[#334155] to-[#0F172A] p-4 shadow-lg">
-        <span className="self-start rounded-lg border border-white/20 bg-white/15 px-2 py-1 text-[9px] font-bold text-white">
-          Sponsorlu
-        </span>
-        <div className="min-w-0">
-          <p className="line-clamp-2 text-[15px] leading-tight font-bold break-words text-white">
-            {title.trim() || 'Başlık buraya gelecek'}
-          </p>
-          <p className="mt-1 truncate text-[10px] text-white/70">{subtitle.trim() || audience}</p>
+      <div className="relative mt-3 h-[130px] w-[240px] overflow-hidden rounded-3xl bg-gradient-to-br from-[#334155] to-[#0F172A] shadow-lg">
+        {imageUrl && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute inset-0 bg-black/40" />
+          </>
+        )}
+        <div className="relative flex h-full flex-col justify-between p-4">
+          <span className="self-start rounded-lg border border-white/20 bg-white/15 px-2 py-1 text-[9px] font-bold text-white">
+            Sponsorlu
+          </span>
+          <div className="min-w-0">
+            <p className="line-clamp-2 text-[15px] leading-tight font-bold break-words text-white">
+              {title.trim() || 'Başlık buraya gelecek'}
+            </p>
+            <p className="mt-1 truncate text-[10px] text-white/70">{subtitle.trim() || audience}</p>
+          </div>
         </div>
       </div>
 
       <p className="mt-3 text-[11px] text-ink-faint">
-        {hasImage
-          // The console cannot resolve a media id to a picture, so it says what
-          // will happen instead of inventing an image that may not exist.
-          ? 'Görsel medya kimliğinden gelir ve kartın üzerine %40 karartmayla serilir.'
+        {imageUrl
+          ? 'Görsel kartın üzerine %40 karartmayla serilir; başlık her hâlükârda okunur kalır.'
           : 'Görsel yok: kart bu degradeyle çizilir.'}
       </p>
     </div>

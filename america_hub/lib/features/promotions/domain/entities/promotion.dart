@@ -22,6 +22,7 @@ class Promotion {
     this.requestNote,
     this.impressions = 0,
     this.clicks = 0,
+    this.official = false,
   });
 
   final String id;
@@ -47,6 +48,11 @@ class Promotion {
   final String? requestNote;
   final int impressions;
   final int clicks;
+
+  /// Kart platformun kendisine mi ait. Kimsenin para ödemediği bir karta
+  /// "Sponsorlu" demek üyeye yanlış bilgi vermek; TurkSquare'in kendi kartları
+  /// bu yüzden kendi adıyla etiketleniyor.
+  final bool official;
 
   /// Yayında olmak saklanan bir durum değil, saatin aralık içinde olmasıdır.
   /// Sunucu da aynı şeyi söylüyor; burada tekrar hesaplanması, listenin
@@ -93,6 +99,7 @@ class Promotion {
     requestNote: json['requestNote'] as String?,
     impressions: json['impressions'] as int? ?? 0,
     clicks: json['clicks'] as int? ?? 0,
+    official: json['official'] as bool? ?? false,
   );
 }
 
