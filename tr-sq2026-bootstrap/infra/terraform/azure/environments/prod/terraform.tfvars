@@ -20,18 +20,11 @@ deployer_object_ids = [
   "5c8d6271-40f5-47fe-a3a8-c5adcafc8e29",
 ]
 
-# Mobil uygulamanin derlendigi dort genel hostname. Bunlar burada olmadan once
-# Cloudflare'de her biri icin CNAME + asuid TXT kaydi olusturuldu ve proxy
-# kapatildi: Azure, baglamayi kabul etmeden once hostname'i kendisi cozuyor.
-# Sertifikalar burada adlandirilmiyor; onlar `az containerapp hostname bind
-# --validation-method CNAME` ile bir kez isteniyor ve kendi kendini yeniliyor.
-# Sira infra/bootstrap/azure-public-dns-cutover.md dosyasinda.
-public_api_domains = {
-  identity     = ["api.turksquare.com"]
-  community    = ["community-api.turksquare.com"]
-  messaging    = ["messages-api.turksquare.com"]
-  verification = ["verify.turksquare.com"]
-}
+# Genel hostname'ler (api, community-api, messages-api, verify) burada degil.
+# Kisa omurlu bir denemeydi: yonetilen sertifika baglanir baglanmaz
+# azurerm 3.x custom domain kaynagini geri okuyamaz oldu ve her plan coktu.
+# Gerekcesi modules/container-app/main.tf sonunda, dordunun listesi ve
+# baglama komutu infra/bootstrap/azure-public-dns-cutover.md dosyasinda.
 
 postgres_sku            = "GP_Standard_D2s_v3"
 postgres_storage_mb     = 131072

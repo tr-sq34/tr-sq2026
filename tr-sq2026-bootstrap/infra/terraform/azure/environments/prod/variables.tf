@@ -108,14 +108,3 @@ variable "deployer_object_ids" {
   type        = list(string)
   default     = []
 }
-# The four public API hostnames, keyed by the app that answers them. Empty by
-# default, and empty is what is applied until the DNS actually points at Azure:
-# binding a hostname whose CNAME still resolves somewhere else fails, and this
-# apply runs on every push to main. The cutover order - Cloudflare records
-# first, then these, then the certificate - is in
-# infra/bootstrap/azure-public-dns-cutover.md.
-variable "public_api_domains" {
-  description = "Public hostnames per service, e.g. { identity = [\"api.turksquare.com\"] }. Keys: identity, community, messaging, verification."
-  type        = map(list(string))
-  default     = {}
-}

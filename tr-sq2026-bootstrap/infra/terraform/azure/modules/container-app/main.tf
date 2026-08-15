@@ -305,6 +305,14 @@ resource "azurerm_container_app" "main" {
   lifecycle {
     ignore_changes = [
       workload_profile_name,
+      # Public hostnames are bound outside Terraform (see the block below and
+      # infra/bootstrap/azure-public-dns-cutover.md). Nothing declares them
+      # here, so without this line every apply would send an empty customDomains
+      # list along with the image it was actually shipping and take four live
+      # hostnames down on the way past. The provider's read never fills this in
+      # from Azure either - state holds `[]` while four domains are bound - so
+      # the emptiness is not even visible in a plan.
+      ingress[0].custom_domain,
     ]
 
     # Azure rejects a longer name, and it does so at create time - after a plan
@@ -319,27 +327,27 @@ resource "azurerm_container_app" "main" {
 
 
 
-# Custom domains are a resource of their own rather than an ingress block: the
-# ingress block would make every hostname part of the app's own lifecycle, and a
-# certificate that has not finished issuing would then hold up an unrelated
-# image deploy.
+# Public hostnames are not declared here, and that is not an oversight.
 #
-# No certificate is named here. Azure's managed certificate is requested once,
-# out of band, with `az containerapp hostname bind --validation-method CNAME`,
-# and renews itself afterwards; naming it in Terraform would mean carrying a
-# certificate resource whose id changes on every renewal. ignore_changes below
-# is what keeps that out-of-band binding from being reverted on the next apply -
-# without it, a deploy would silently strip the certificate off a live hostname.
-resource "azurerm_container_app_custom_domain" "public" {
-  for_each = toset(var.custom_domains)
-
-  name             = each.value
-  container_app_id = azurerm_container_app.main.id
-
-  lifecycle {
-    ignore_changes = [
-      certificate_binding_type,
-      container_app_environment_certificate_id,
-    ]
-  }
-}
+# `azurerm_container_app_custom_domain` cannot survive an Azure managed
+# certificate. The moment one is bound, every plan fails while reading the
+# resource back:
+#
+#   parsing segment "staticCertificates": parsing the Certificate ID: the
+#   segment at position 8 didn't match ... provided:
+#   .../managedEnvironments/cae-turksquare-prod-cu/managedCertificates/mc-...
+#
+# The provider only parses `/certificates/<name>`; a managed certificate lives
+# under `/managedCertificates/<name>`. This is a read, not a diff, so
+# `ignore_changes` on the certificate fields does not help - it was already
+# there and the plan failed anyway. As of azurerm 3.117.1, the last 3.x
+# release, there is no version of the constraint that fixes it.
+#
+# A plan that cannot be read is worse than a hostname that is not in code: it
+# fails every push to main, including the ones shipping something unrelated. So
+# the four hostnames are bound with `az containerapp hostname bind` and
+# recorded in infra/bootstrap/azure-public-dns-cutover.md instead, and the
+# app's lifecycle above ignores `ingress[0].custom_domain` so that no apply
+# quietly removes them.
+#
+# The way back is the azurerm 4.x upgrade, which is its own piece of work.
