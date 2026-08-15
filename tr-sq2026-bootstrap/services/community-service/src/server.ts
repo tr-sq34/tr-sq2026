@@ -202,9 +202,14 @@ function sweepStabilityRetention() {
   })();
 }
 
+// The two ingest routes parse outside their try block on purpose. A malformed
+// body is the caller's mistake, and the global error handler already turns a
+// ZodError into a 400; catching it here would answer 500 and write an
+// error-level line, which is exactly the noise this feature exists to remove
+// from the log.
 app.post('/v1/app/launches', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const input = launchBody.parse(request.body);
   try {
-    const input = launchBody.parse(request.body);
     const memberId = await optionalViewer(request.headers);
     // The app retries this on a flaky network and reuses one id for the life of
     // the process, so a repeat is the same launch, not a second one.
@@ -221,8 +226,8 @@ app.post('/v1/app/launches', { config: { rateLimit: { max: 30, timeWindow: '1 mi
 });
 
 app.post('/v1/app/crashes', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const input = crashReportBody.parse(request.body);
   try {
-    const input = crashReportBody.parse(request.body);
     const memberId = await optionalViewer(request.headers);
     const message = redactCrashText(input.message);
     const stack = input.stack ? redactCrashText(input.stack) : null;
