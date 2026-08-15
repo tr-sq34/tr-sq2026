@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/state/async_state.dart';
 import '../../../../core/widgets/app_remote_image.dart';
+import '../../../../core/widgets/section_unavailable.dart';
 import '../../application/news_controller.dart';
 import '../../domain/entities/news_article.dart';
 
@@ -35,6 +36,16 @@ class _HeadlineStripState extends State<HeadlineStrip> {
     animation: widget.controller,
     builder: (context, _) {
       final state = widget.controller.headlines;
+      // İstek düştüğünde şerit sessizce kaybolmuyordu diye değil, kaybolduğu
+      // için eklendi: "bugün manşet yok" ile "haber servisine ulaşılamadı"
+      // ekranda aynı görünüyordu ve üye hangisi olduğunu bilemiyordu.
+      if (state is AsyncFailure<List<NewsArticle>>) {
+        return SectionUnavailable(
+          title: 'Manşetler',
+          message: state.message,
+          onRetry: () => widget.controller.loadHeadlines(),
+        );
+      }
       // Manşet yoksa bölüm de yok: boş bir kutu ya da eski demo haberleri
       // göstermek, olmayan bir yayını varmış gibi sunmak olurdu.
       if (state is! AsyncData<List<NewsArticle>>) return const SizedBox.shrink();

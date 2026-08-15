@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/state/async_state.dart';
+import '../../../../core/widgets/section_unavailable.dart';
 import '../../application/forum_controller.dart';
 import '../../domain/entities/forum.dart';
 
@@ -31,6 +32,17 @@ class ForumTrendingSection extends StatelessWidget {
         AsyncData<List<ForumTopic>>(:final value) => value,
         _ => const <ForumTopic>[],
       };
+      // Forumda konu olmaması ile foruma ulaşılamaması aynı ekran olamaz:
+      // birincisinde açılacak tartışma yok, ikincisinde var mı bilmiyoruz.
+      if (controller.trending
+          case AsyncFailure<List<ForumTopic>>(:final message)
+          when topics.isEmpty) {
+        return SectionUnavailable(
+          title: 'Forumda trend tartışmalar',
+          message: message,
+          onRetry: () => controller.loadTrending(),
+        );
+      }
       // Forum boşken başlığı tek başına göstermenin anlamı yok.
       if (topics.isEmpty) return const SizedBox.shrink();
       final categories = switch (controller.categories) {
