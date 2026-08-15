@@ -28,7 +28,12 @@ class _EventsScreenState extends State<EventsScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
+    // Ana sayfadaki "Yaklaşan etkinlikler" şeridi de aynı denetleyiciyi
+    // dinliyor; çizim sırasında haber vermek onu hataya düşürüyordu.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+    });
   }
 
   Future<void> _pickDate() async {

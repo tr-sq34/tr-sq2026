@@ -53,7 +53,11 @@ class _InboxScreenState extends State<InboxScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
+    // Okunmamış mesaj sayacı da bu denetleyiciyi dinliyor.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+    });
   }
 
   @override

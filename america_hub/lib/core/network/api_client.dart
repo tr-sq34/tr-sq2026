@@ -4,6 +4,7 @@ import '../storage/token_store.dart';
 import 'api_config.dart';
 import 'api_exception.dart';
 import 'auth_interceptor.dart';
+import 'network_log_interceptor.dart';
 import 'token_refresh_coordinator.dart';
 
 class ApiClient {
@@ -30,6 +31,11 @@ class ApiClient {
         onSessionExpired: onSessionExpired,
       ),
     );
+    // Kimlik denetleyicisinden sonra ekleniyor: yenilenen jetonla yapılan
+    // ikinci deneme de günlüğe düşsün, sadece ilk 401 değil.
+    if (NetworkLogInterceptor.enabled) {
+      _dio.interceptors.add(const NetworkLogInterceptor());
+    }
   }
 
   final Dio _dio;

@@ -81,8 +81,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
-    widget.storyController.load();
+    // Story şeridi ana sayfada da duruyor; ikisi tek denetleyiciyi paylaşıyor.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+      widget.storyController.load();
+    });
   }
 
   @override
