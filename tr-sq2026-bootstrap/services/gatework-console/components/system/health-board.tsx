@@ -41,6 +41,7 @@ export function HealthBoard({ initial, compact = false }: { initial: SystemHealt
   // A poll that is still in flight when the next tick arrives would stack
   // requests against a service that is, by hypothesis, already struggling.
   const inFlight = useRef(false);
+  const hydrated = useHydrated();
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
@@ -149,8 +150,8 @@ export function HealthBoard({ initial, compact = false }: { initial: SystemHealt
 
           <p className="text-xs text-ink-faint">
             {staleSince
-              ? `Son başarılı ölçüm ${formatTime(snapshot.checkedAt)}. Panel o zamandan beri yenileyemiyor.`
-              : `Son ölçüm ${formatTime(snapshot.checkedAt)} · ${REFRESH_MS / 1000} saniyede bir kendini yeniliyor.`}
+              ? `Son başarılı ölçüm${hydrated ? ` ${formatTime(snapshot.checkedAt)}` : ''}. Panel o zamandan beri yenileyemiyor.`
+              : `${hydrated ? `Son ölçüm ${formatTime(snapshot.checkedAt)} · ` : ''}${REFRESH_MS / 1000} saniyede bir kendini yeniliyor.`}
           </p>
         </CardContent>
       </Card>
@@ -305,6 +306,7 @@ function ServiceRow({ check, detailed = false }: { check: ServiceHealth; detaile
 
 function StabilityCard({ snapshot }: { snapshot: SystemHealthSnapshot }) {
   const { stability, stabilityFailure, windowHours } = snapshot;
+  const hydrated = useHydrated();
 
   return (
     <Card>
@@ -382,7 +384,7 @@ function StabilityCard({ snapshot }: { snapshot: SystemHealthSnapshot }) {
                         group.appVersions.length > 0 && `Sürüm: ${group.appVersions.join(', ')}`,
                         group.platforms.length > 0 && group.platforms.join(', '),
                         group.deviceModels.length > 0 && group.deviceModels.slice(0, 3).join(', '),
-                        `Son: ${formatTime(group.lastSeen)}`,
+                        hydrated && `Son: ${formatTime(group.lastSeen)}`,
                       ].filter(Boolean).join(' · ')}
                     </p>
                   </div>
@@ -410,3 +412,18 @@ const formatTime = (iso: string) => {
   const value = new Date(iso);
   return Number.isNaN(value.getTime()) ? '—' : value.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 };
+
+/**
+ * Saat, ilk çizimde yazılamaz.
+ *
+ * Sunucu tarafı bu bileşeni konteynerin saat diliminde (UTC) çiziyor, tarayıcı
+ * ise operatörün kendi diliminde. İkisi aynı HTML'i üretmediği için React
+ * uyumsuzluk uyarısı veriyor ve operatör bir an dört saat önceki bir saati
+ * görüyor — bir izleme panelinde en kötü yanlış türü. Saati taşıyan parçalar bu
+ * yüzden ilk çizimden sonra ekleniyor; öncesinde satır saatsiz ama doğru.
+ */
+function useHydrated() {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  return hydrated;
+}

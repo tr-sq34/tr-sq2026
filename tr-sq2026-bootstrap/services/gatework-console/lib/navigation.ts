@@ -51,7 +51,9 @@ export function navigationFor(roles: GateworkRole[]): NavGroup[] {
       label: 'Sistem ve Genel Bakış',
       items: [
         { key: 'command-center', label: 'Komuta Merkezi', href: '/command-center' },
-        canSeeServiceHealth(roles) ? { key: 'health', label: 'Sistem Sağlığı', href: '/health' } : null,
+        // Aynı ad sayfanın başlığında da yazıyor: menüde bir şey arayan kişi,
+        // bakımla ilgili her şeyin tek yerde olduğunu adından anlamalı.
+        canSeeServiceHealth(roles) ? { key: 'health', label: 'Sistem Sağlığı ve Bakım', href: '/health' } : null,
         canSeeAnalytics(roles) ? { key: 'analytics', label: 'Analitik ve Konum', href: '/analytics' } : null,
         canSeeAudit(roles) ? { key: 'system', label: 'Sistem ve Denetim', href: '/system' } : null,
       ].filter(Boolean) as NavItem[],
