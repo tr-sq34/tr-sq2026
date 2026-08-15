@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/navigation/app_deep_link.dart';
+import '../../../../core/widgets/app_state_views.dart';
 import '../../application/notifications_controller.dart';
 import '../../domain/entities/app_notification.dart';
 
@@ -75,6 +76,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         final controller = widget.controller;
         if (controller.isLoading && controller.items.isEmpty) {
           return const Center(child: CircularProgressIndicator());
+        }
+        if (controller.error case final failure? when controller.items.isEmpty) {
+          return AppErrorState(message: failure, onRetry: controller.load);
         }
         if (controller.items.isEmpty) return const _EmptyState();
         return RefreshIndicator(
