@@ -42,7 +42,14 @@ class _NewsCenterScreenState extends State<NewsCenterScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load(category: widget.controller.category);
+    // Denetleyici ana sayfadaki manşet şeridiyle ortak: şerit hâlâ ekranda
+    // dinlerken buradan yükleme başlatmak, çizim sürerken ona "yeniden çiz"
+    // demek oluyordu ve Flutter bunu hata olarak atıyordu. Çerçeve bitsin,
+    // sonra iste.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load(category: widget.controller.category);
+    });
   }
 
   void _openArticle(NewsArticle article) => Navigator.of(context).push(

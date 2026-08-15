@@ -37,9 +37,13 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
-    widget.controller.loadSellerDashboard();
-    widget.memberCapabilitiesController.load();
+    // Ana sayfadaki "Son eklenen ilanlar" şeridi de bu denetleyiciyi dinliyor.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+      widget.controller.loadSellerDashboard();
+      widget.memberCapabilitiesController.load();
+    });
   }
 
   @override

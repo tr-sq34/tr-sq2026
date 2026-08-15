@@ -75,11 +75,15 @@ class _ProfileScreenState extends State<ProfileScreen>
   void initState() {
     super.initState();
     widget.tabRequests?.addListener(_openRequestedTab);
-    widget.controller.load();
-    widget.journeyController.load();
-    widget.memberCapabilitiesController.load();
-    widget.storyController.loadHighlights();
-    widget.friendshipController.load();
+    // Story ve üyelik denetleyicileri başka sekmelerle ortak.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+      widget.journeyController.load();
+      widget.memberCapabilitiesController.load();
+      widget.storyController.loadHighlights();
+      widget.friendshipController.load();
+    });
   }
 
   @override

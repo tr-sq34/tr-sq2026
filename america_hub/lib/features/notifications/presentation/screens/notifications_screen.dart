@@ -35,7 +35,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
+    // Zil rozeti de aynı denetleyiciyi dinliyor.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+    });
   }
 
   Future<void> _open(AppNotification notification) async {

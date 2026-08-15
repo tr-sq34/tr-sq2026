@@ -32,7 +32,10 @@ class _SosScreenState extends State<SosScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+    });
   }
 
   @override

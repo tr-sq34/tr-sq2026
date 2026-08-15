@@ -91,17 +91,23 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   @override
   void initState() {
     super.initState();
-    widget.controller.load();
-    widget.newsController.loadHeadlines();
-    // Both are shared with other tabs and both guard against a second call in
-    // flight, so asking here costs nothing when the member opened the feed
-    // first.
-    widget.storyController.load();
-    widget.promotionsController.loadActive();
-    widget.marketplaceController.load();
-    widget.forumController.loadCategories();
-    widget.forumController.loadTrending();
-    widget.eventsController.load();
+    // Every one of these is shared with another tab, so any of them can already
+    // have a listener mounted when this screen is created. Notifying a mounted
+    // listener while the frame is still building is what Flutter refuses to do
+    // - so the whole batch waits for the frame to finish. Both guard against a
+    // second call in flight, so asking here costs nothing when the member
+    // opened the feed first.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.controller.load();
+      widget.newsController.loadHeadlines();
+      widget.storyController.load();
+      widget.promotionsController.loadActive();
+      widget.marketplaceController.load();
+      widget.forumController.loadCategories();
+      widget.forumController.loadTrending();
+      widget.eventsController.load();
+    });
   }
 
   @override

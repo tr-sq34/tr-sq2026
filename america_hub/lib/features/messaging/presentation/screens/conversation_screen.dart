@@ -43,7 +43,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _controller = widget.createController(widget.conversation.id);
     _controller.addListener(_onControllerChanged);
     _scroll.addListener(_onScroll);
-    _controller.load();
+    // Dinleyici yukarıda bağlandı ve setState çağırıyor; yüklemeyi burada
+    // başlatmak çizim sürerken setState demek olurdu.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _controller.load();
+    });
   }
 
   @override
