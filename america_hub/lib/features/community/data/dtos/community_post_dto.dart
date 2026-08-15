@@ -140,5 +140,11 @@ class CommunityPostDto {
     );
   }
 
-  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, ownerId: authorId.isEmpty ? 'local-user' : authorId, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll, newsReference: newsReference);
+  /// Sunucunun gönderdiği damga: `createdAtLabel` bir etiket değil, ISO 8601
+  /// bir an. Okunur hale getirmek uygulamanın işi - kart "3dk" yazacaksa o
+  /// hesabı okuyucunun saatiyle yapmak gerekiyor. Çözümlenemezse null kalıyor
+  /// ve kart elindeki metni gösteriyor; uydurma bir tarih üretmiyoruz.
+  DateTime? get createdAt => DateTime.tryParse(createdAtLabel)?.toLocal();
+
+  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, ownerId: authorId.isEmpty ? 'local-user' : authorId, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll, newsReference: newsReference, createdAt: createdAt);
 }

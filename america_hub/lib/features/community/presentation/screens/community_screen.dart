@@ -1055,8 +1055,11 @@ class _PostCard extends StatelessWidget {
                   ),
                   Text(
                     article == null
-                        ? '${post.location} · ${post.timeLabel}'
-                        : '${NewsCategory.fromCode(article.category).label} · ${post.timeLabel}',
+                        ? [
+                            if (post.location.isNotEmpty) post.location,
+                            post.relativeTime,
+                          ].join(' · ')
+                        : '${NewsCategory.fromCode(article.category).label} · ${post.relativeTime}',
                     style: const TextStyle(
                       color: AppColors.textMuted,
                       fontSize: 11,

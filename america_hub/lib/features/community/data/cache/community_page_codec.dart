@@ -63,6 +63,11 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                 ),
           poll: _pollFrom(item['poll']),
           newsReference: _newsFrom(item['newsReference']),
+          // Damga da saklanıyor: çevrimdışı açılan akışta "3dk" yazan bir kart,
+          // bir gün sonra hâlâ "3dk" demesin diye etiket değil an tutuluyor.
+          createdAt: item['createdAt'] == null
+              ? null
+              : DateTime.tryParse(item['createdAt'] as String),
         )).toList();
     return CursorPage(items: items, nextCursor: json['nextCursor'] as String?);
   }
@@ -123,6 +128,7 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                       'options': item.poll!.options.map((option) => {'id': option.id, 'label': option.label, 'votes': option.votes}).toList(),
                       'selectedOptionIds': item.poll!.selectedOptionIds.toList(),
                     },
+              'createdAt': item.createdAt?.toIso8601String(),
               'newsReference': item.newsReference == null
                   ? null
                   : {

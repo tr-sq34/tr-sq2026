@@ -999,7 +999,17 @@ app.get('/v1/community/feed', async (request, reply) => {
     if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const result = await db.query<FeedRow>(`SELECT ${feedColumns('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
+    // Sıra tam olarak yeniden eskiye. Burada bir zamanlar puan vardı: üyenin
+    // eyaletinden gelen paylaşım 1800, ortak ilgi alanı olan yazarınki 600
+    // saniye ileri alınıyordu. İki sonucu oldu. Akış kronolojik olmaktan
+    // çıkıyordu - üstteki kart alttakinden eski olabiliyordu ve okuyan kişi
+    // bunu sıralamanın bozukluğu olarak görüyordu. İkincisi daha kötüsü:
+    // imleç `(created_at,id)` karşılaştırmasıyla ilerliyor, sıralama ise
+    // puana bakıyordu. Sayfanın son kartı 30 dakika ileri taşınmış bir
+    // paylaşımsa, sonraki sayfa onun gerçek saatinden geriye soruyor ve
+    // aradaki paylaşımlar hiç görünmüyordu. Kime yakın olduğu artık sekmenin
+    // işi: "Yakınındakiler" eyalete, "Takip ettiklerin" ilişkiye bakıyor.
+    const result = await db.query<FeedRow>(`SELECT ${feedColumns('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY p.created_at DESC,p.id DESC LIMIT $${params.length}`, params);
     const page = result.rows.slice(0, input.limit); const next = result.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null;
     // authorId travels with the card. Without it the app had nothing to compare
     // the viewer against, so it fell back to a hardcoded 'local-user' and every

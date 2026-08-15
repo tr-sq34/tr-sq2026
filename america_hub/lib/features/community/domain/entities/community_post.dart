@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../../../../core/formatting/relative_time.dart';
 import 'feed_extensions.dart';
 
 enum PostVisibility { public, friendsOnly }
@@ -173,6 +174,7 @@ class CommunityPost {
     this.poll,
     this.marketplaceReference,
     this.newsReference,
+    this.createdAt,
   });
 
   static const maxMessageLength = 2200;
@@ -202,6 +204,16 @@ class CommunityPost {
 
   /// Dolu ise bu kart bir haberin akıştaki yüzü. Bkz. [NewsPostReference].
   final NewsPostReference? newsReference;
+
+  /// Paylaşımın anı. Sunucu damgayı gönderiyor, etiketi uygulama kuruyor:
+  /// okuyucunun saatini ve dilini yalnızca burası biliyor.
+  final DateTime? createdAt;
+
+  /// Kartın altında yazan zaman. Damga varsa her çizimde yeniden hesaplanıyor -
+  /// "3dk" ekranda dururken beş dakika geçtiğinde yalan olmasın diye. Damga
+  /// yoksa (demo veri, çevrimdışı eski kopya) elde ne varsa o gösteriliyor.
+  String get relativeTime =>
+      createdAt == null ? timeLabel : timeAgoCompact(createdAt!);
 
   bool get isDeleted => status == PostStatus.deleted || deletedAt != null;
 
@@ -245,5 +257,6 @@ class CommunityPost {
     poll: poll ?? this.poll,
     marketplaceReference: marketplaceReference,
     newsReference: newsReference,
+    createdAt: createdAt,
   );
 }

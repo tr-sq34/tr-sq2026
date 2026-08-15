@@ -3,6 +3,8 @@
 /// gündemi, forum ise bir yıl sonra da aranıp bulunacak bir soru-cevap arşivi.
 library;
 
+import '../../../../core/formatting/relative_time.dart';
+
 class ForumCategory {
   const ForumCategory({
     required this.id,
@@ -198,16 +200,11 @@ class ForumReply {
 }
 
 /// "8 dk önce" — konu listesinde, detayda ve ana sayfadaki şeritte aynı biçim.
-String forumTimeAgo(DateTime moment, {DateTime? now}) {
-  final elapsed = (now ?? DateTime.now()).difference(moment);
-  if (elapsed.inMinutes < 1) return 'az önce';
-  if (elapsed.inMinutes < 60) return '${elapsed.inMinutes} dk önce';
-  if (elapsed.inHours < 24) return '${elapsed.inHours} saat önce';
-  if (elapsed.inDays < 7) return '${elapsed.inDays} gün önce';
-  if (elapsed.inDays < 30) return '${elapsed.inDays ~/ 7} hafta önce';
-  return '${moment.day.toString().padLeft(2, '0')}.'
-      '${moment.month.toString().padLeft(2, '0')}.${moment.year}';
-}
+///
+/// Biçimin kendisi artık [timeAgoVerbose] içinde: akış da aynı soruyu soruyor,
+/// iki ayrı kopya zamanla iki ayrı cevap verirdi.
+String forumTimeAgo(DateTime moment, {DateTime? now}) =>
+    timeAgoVerbose(moment, now: now);
 
 /// Yeni konu açarken taşınan geçici veri. Doğrulama burada duruyor ki ekran da
 /// depo da aynı kuralı iki ayrı yerde yeniden yazmasın.
