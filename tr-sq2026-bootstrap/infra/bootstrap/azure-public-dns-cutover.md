@@ -1,41 +1,47 @@
 # Public API hostnames: moving turksquare.com to Azure
 
-The four public API hostnames the mobile app is built against do not point at
-the Azure container apps. Two of them point at an older AWS stack and two do
-not resolve at all, which is why Mesajlar and Doğrulama cannot work in a
-released build no matter what the services do.
+The four public API hostnames the mobile app is built against pointed anywhere
+but at the Azure container apps. Two of them answered from an older AWS stack
+and two did not resolve at all, which is why Mesajlar and Doğrulama could not
+work in a released build no matter what the services did.
 
-This runbook moves them. Cloudflare objects are created by hand, from the
+This runbook moved them. Cloudflare objects are created by hand, from the
 dashboard, for the same reason as in `gatework-cloudflare.md`: no Cloudflare
 credential reaches Terraform state or GitHub.
 
-## What is true today
+## Where this stands
+
+**Steps 0-4 are done (2026-08-14).** All four hostnames resolve to their
+container app, carry an Azure managed certificate, and answer `/health` with
+200. What is left is step 5 - putting the Cloudflare proxy back on - and step 6,
+decommissioning AWS.
+
+| Hostname | Serves | Resolves to |
+| --- | --- | --- |
+| `api.turksquare.com` | Identity | `ca-identity-prod.bravesea-9c47c081.centralus.azurecontainerapps.io` |
+| `community-api.turksquare.com` | Community | `ca-community-prod....` |
+| `messages-api.turksquare.com` | Messaging | `ca-messaging-gateway-prod....` |
+| `verify.turksquare.com` | Verification vault | `ca-verification-vault-prod....` |
 
 The zone is on Cloudflare (`dan.ns.cloudflare.com`, `elly.ns.cloudflare.com`).
 
-| Hostname | Mobile app uses it for | Resolves to today |
-| --- | --- | --- |
-| `api.turksquare.com` | Identity | `turksquare-identity-*.us-east-1.elb.amazonaws.com` |
-| `community-api.turksquare.com` | Community | `turksquare-community-*.us-east-1.elb.amazonaws.com` |
-| `messages-api.turksquare.com` | Messaging | nothing - NXDOMAIN |
-| `verify.turksquare.com` | Verification vault | nothing - NXDOMAIN |
+### Why this had to happen
 
-The AWS stack answers, but it is an old build: every `/v1/internal/gatework/*`
-route on it returns 404, and the same operator email has a different user id
-there than on Azure. It is a separate deployment with a separate database, not
-a copy.
-
-It keeps drifting further behind, and the gap is the whole point of this
-runbook. Checked again on 2026-08-13, after the Çarşı reaction work shipped to
-Azure in `06b25c7`:
+The AWS stack answered, but it was an old build: every `/v1/internal/gatework/*`
+route on it returned 404, and the same operator email had a different user id
+there than on Azure. It was a separate deployment with a separate database, not
+a copy. Checked on 2026-08-13, after the Çarşı reaction work shipped to Azure in
+`06b25c7`:
 
 ```
 PUT https://community-api.turksquare.com/v1/marketplace/.../reactions/save  -> 404 Route not found
 PUT https://ca-community-prod.bravesea-...azurecontainerapps.io/.../reactions/save -> 401 (route exists, wants a token)
 ```
 
-Same request, same minute. Everything merged to main is live on Azure and
-invisible to anything built against the public hostnames.
+Same request, same minute, two different services. Everything merged to main was
+live on Azure and invisible to anything built against the public hostnames. Run
+that pair today and the two responses are byte-identical, which is the proof the
+cutover landed - the public hostname and the container app are now one service.
 
 Gatework itself is not in this table and does not belong in it. The console has
 no ingress at all; it is reached only through the cloudflared sidecar in its own
@@ -112,6 +118,22 @@ Delete the old `api` and `community-api` records that point at the AWS load
 balancers in the same edit. Two records for one name is not a migration, it is
 a coin toss.
 
+Leave the two `_*.acm-validations.aws` CNAMEs alone until step 6. They are what
+lets the AWS certificate renew, and the AWS stack is the rollback path until
+step 6 says otherwise.
+
+Grey cloud is the part that gets missed, and it fails quietly: a proxied record
+resolves to Cloudflare's own addresses, Azure never sees its own fqdn and the
+binding is refused. Check before moving on - a CNAME answer means grey, an A
+answer in `104.21.*`/`172.67.*` means it is still orange:
+
+```sh
+for h in api community-api messages-api verify; do
+  echo "$h: $(dig +short CNAME $h.turksquare.com @1.1.1.1)"
+  echo "  asuid: $(dig +short TXT asuid.$h.turksquare.com @1.1.1.1)"
+done
+```
+
 ## 3. Declare the hostnames in Terraform
 
 Only after step 2 has propagated. Azure refuses a binding whose DNS does not
@@ -139,8 +161,15 @@ requested once, per hostname, and renews itself afterwards:
 
 ```sh
 az containerapp hostname bind -n ca-identity-prod -g rg-turksquare-prod-centralus \
-  --hostname api.turksquare.com --validation-method CNAME
+  --hostname api.turksquare.com --environment cae-turksquare-prod-cu \
+  --validation-method CNAME
 ```
+
+`--environment` is not optional even though every other argument already
+identifies the app; without it the command exits with "Please specify at least
+one of parameters: --certificate and --environment". The three remaining
+hostnames can be bound in parallel - each takes a few minutes, and they do not
+touch each other.
 
 Repeat for the other three. Terraform ignores `certificate_binding_type` and
 `container_app_environment_certificate_id` precisely so that the next `apply`
