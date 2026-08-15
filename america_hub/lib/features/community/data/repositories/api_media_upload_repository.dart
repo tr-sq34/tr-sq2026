@@ -10,9 +10,9 @@ import '../../domain/entities/post_media_upload.dart';
 import '../../domain/repositories/media_upload_repository.dart';
 import '../../domain/services/media_upload_policy.dart';
 
-/// Direct-to-private-S3 media upload. The user token is deliberately sent only
-/// to TurkSquare's API; the short-lived S3 URL receives only the signed upload
-/// headers returned by that API.
+/// Doğrudan özel depoya yükleme. Üyenin oturum jetonu yalnızca TurkSquare
+/// API'sine gidiyor; kısa ömürlü depo bağlantısı yalnızca o API'nin döndürdüğü
+/// başlıkları alıyor.
 class ApiMediaUploadRepository implements MediaUploadRepository {
   ApiMediaUploadRepository({required ApiClient client}) : _client = client;
 
@@ -126,14 +126,91 @@ class ApiMediaUploadRepository implements MediaUploadRepository {
           fraction: .8 + ((attempt + 1) / 25) * .18,
         );
       }
-      throw TimeoutException('Medya taraması zaman aşımına uğradı.');
-    } catch (_) {
+      throw TimeoutException(
+        'Görsel güvenlik taramasından 50 saniyede geçemedi. Biraz sonra tekrar dener misin?',
+      );
+    } catch (error) {
       yield MediaUploadProgress(
         localId: request.media.localId,
         status: MediaUploadStatus.failed,
         fraction: 0,
-        errorMessage: 'Medya güvenli olarak yüklenemedi. Lütfen tekrar deneyin.',
+        errorMessage: mediaUploadFailureMessage(error),
       );
     }
   }
+}
+
+/// Yükleme neden olmadıysa onu söyleyen metin.
+///
+/// Burada tek bir cümle vardı: "Medya güvenli olarak yüklenemedi. Lütfen tekrar
+/// deneyin." Depo isteği zorunlu bir başlık eksik diye reddedilse de, tarama
+/// süresi dolsa da, telefonun bağlantısı gitse de ekranda aynı cümle çıkıyordu.
+/// Üye tekrar deniyordu ve aynı şey oluyordu, çünkü tekrar denemek o hataların
+/// hiçbirini çözmüyordu; bize kalan kayıt da hangisinin yaşandığını
+/// söyleyemiyordu. Panelin ve akışın her yerinde geçerli olan kural burada da
+/// geçerli: cevaplamayan tarafı ve nedenini yazmak, "olmadı" demekten iyidir.
+String mediaUploadFailureMessage(Object error) {
+  if (error is TimeoutException) {
+    return error.message ?? 'Görsel taraması zaman aşımına uğradı.';
+  }
+  if (error is StateError) return error.message;
+  if (error is! DioException) return 'Görsel yüklenemedi: $error';
+
+  switch (error.type) {
+    case DioExceptionType.connectionTimeout:
+    case DioExceptionType.sendTimeout:
+    case DioExceptionType.receiveTimeout:
+    case DioExceptionType.transformTimeout:
+      return 'Görsel yüklenirken bağlantı zaman aşımına uğradı. '
+          'Bağlantın yavaşsa daha küçük bir görselle deneyebilirsin.';
+    case DioExceptionType.connectionError:
+      return 'İnternet bağlantısı kurulamadı, görsel gönderilemedi.';
+    case DioExceptionType.cancel:
+      return 'Görsel yükleme iptal edildi.';
+    case DioExceptionType.badCertificate:
+      return 'Depolama sunucusunun sertifikası doğrulanamadı, görsel gönderilmedi.';
+    case DioExceptionType.badResponse:
+    case DioExceptionType.unknown:
+      final status = error.response?.statusCode;
+      final detail = _serverDetail(error.response?.data) ??
+          (status == null ? error.message?.trim() : null);
+      return [
+        '${_stepLabel(error.requestOptions.path)} başarısız oldu',
+        if (status != null) ' (HTTP $status)',
+        '.',
+        if (detail != null && detail.isNotEmpty) ' $detail',
+      ].join();
+  }
+}
+
+/// API'nin `{error:{code,message}}` gövdesi ya da Azure'un XML hata gövdesi.
+/// İkisi de bir cümle üretemezse hiçbir şey uydurulmuyor.
+String? _serverDetail(Object? data) {
+  if (data is Map) {
+    final error = data['error'];
+    if (error is Map) {
+      final message = error['message'];
+      if (message is String && message.trim().isNotEmpty) return message.trim();
+      final code = error['code'];
+      if (code is String && code.trim().isNotEmpty) return code.trim();
+    }
+    return null;
+  }
+  if (data is String) {
+    final code = RegExp(r'<Code>(.*?)</Code>').firstMatch(data)?.group(1);
+    if (code != null && code.trim().isNotEmpty) {
+      return 'Depolama servisi: ${code.trim()}.';
+    }
+  }
+  return null;
+}
+
+/// Hatanın hangi adımda çıktığı. Dördü de "yükleme olmadı" ile biter ama
+/// dördünün nedeni ve çözümü ayrıdır; depoya yazma adımı, yolu bizim API
+/// yolumuz olmadığı için buradan ayrılıyor.
+String _stepLabel(String path) {
+  if (path.contains('/uploads/presign')) return 'Yükleme izni isteği';
+  if (path.contains('/uploads/complete')) return 'Yüklemeyi tamamlama isteği';
+  if (path.contains('/media/')) return 'Tarama durumu sorgusu';
+  return 'Görselin depoya yazılması';
 }

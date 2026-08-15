@@ -95,7 +95,6 @@ const gateworkSystemAccountBody=z.object({principalId:z.string().uuid(),displayN
 const gateworkPostBody=z.object({authorId:z.string().uuid(),body:z.string().trim().min(1).max(2200),visibility:z.enum(['public','friends_only']).default('public'),regionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
 const decodeCursor = (cursor?: string) => { if (!cursor) return null; try { const [createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|'); if (!createdAt || !id) throw Error(); return { createdAt, id }; } catch { throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 }); } };
 const encodeCursor = (row: { created_at: Date; id: string }) => Buffer.from(`${row.created_at.toISOString()}|${row.id}`).toString('base64url');
-const sha256Base64 = (hex: string) => Buffer.from(hex, 'hex').toString('base64');
 const mediaObjectUrl = async (safeUrlOrKey: string) => {
   if (/^https:\/\//.test(safeUrlOrKey)) return safeUrlOrKey;
   return generateMediaReadSasUrl(safeUrlOrKey, 300);
@@ -442,7 +441,6 @@ app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWind
     const mediaId = randomUUID();
     const uploadId = randomUUID();
     const quarantineKey = `uploads/quarantine/${userId}/${mediaId}`;
-    const checksum = sha256Base64(input.sha256.toLowerCase());
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -461,22 +459,28 @@ app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWind
     } finally {
       client.release();
     }
-        const uploadUrl = await generateMediaUploadSasUrl(
-      quarantineKey,
-      input.contentType,
-      input.sizeBytes,
-      checksum,
-      300
-    );
+    const uploadUrl = await generateMediaUploadSasUrl(quarantineKey, 300);
     return reply.code(201).send({
       data: {
         uploadId,
         mediaId,
         uploadUrl,
         expiresInSeconds: 300,
+        // İstemci bu başlıkları olduğu gibi gönderiyor, içeriklerini
+        // yorumlamıyor. Burada eskiden `x-amz-checksum-sha256` yazıyordu: S3
+        // döneminden kalan, Azure'un tanımadığı bir başlık. Asıl sorun eksik
+        // olandı - Azure'a doğrudan PUT ile blob yazarken `x-ms-blob-type`
+        // zorunlu, yoksa depolama isteği daha gövdeye bakmadan
+        // MissingRequiredHeader ile reddediyor. Yükleme adımı bu yüzden hiç
+        // tutmadı ve hiçbir medya taramaya bile ulaşamadı.
+        //
+        // İçerik türü hem istek başlığı hem de `x-ms-blob-content-type` olarak
+        // gidiyor: ikincisi blobun kalıcı türünü açıkça yazar, /complete o türü
+        // beyan edilenle karşılaştırır.
         requiredHeaders: {
+          'x-ms-blob-type': 'BlockBlob',
           'content-type': input.contentType,
-          'x-amz-checksum-sha256': checksum,
+          'x-ms-blob-content-type': input.contentType,
         },
       },
     });
@@ -493,14 +497,14 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
     const { uploadId } = mediaCompleteBody.parse(request.body);
     const client = await db.connect();
     let row: {
-      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
     } | undefined;
     try {
     await client.query('BEGIN');
     const session = await client.query<{
-      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
     }>(
-      'SELECT media_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+      'SELECT media_id,quarantine_key,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
       [uploadId, userId],
     );
     row = session.rows[0];
@@ -512,8 +516,15 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
       await client.query('COMMIT');
       return { data: { mediaId: row.media_id, status: 'scanning' } };
     }
-        const head = await headMediaBlob(row.quarantine_key);
-    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type || head.checksumSha256 !== row.expected_sha256.toString('base64')) {
+    // Blobun kendi özellikleri, beyan edilen boyut ve türle karşılaştırılıyor.
+    // Buraya üçüncü bir koşul olarak SHA-256 karşılaştırması da yazılmıştı ama
+    // karşıya konan değer Azure'un MD5'iydi; hiçbir zaman tutmayan bir koşul
+    // olduğu için sağlam gelen dosyalar da reddediliyordu. Özet doğrulaması
+    // artık medya işleyicide, indirilen baytların üzerinde yapılıyor - taramayı
+    // yapan taraf, güvenli nesneyi üretmeden önce baytların beyan edilenle aynı
+    // olduğunu görmüş oluyor.
+    const head = await headMediaBlob(row.quarantine_key);
+    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type) {
       await client.query('ROLLBACK');
       return reply.code(400).send({ error: { code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' } });
     }

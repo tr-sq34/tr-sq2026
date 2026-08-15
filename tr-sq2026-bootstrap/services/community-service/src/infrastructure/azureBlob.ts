@@ -24,11 +24,24 @@ export function getContainerClient() {
   return getClient().getContainerClient(containerName);
 }
 
+/**
+ * Karantinaya yazma bağlantısı.
+ *
+ * Bu imza eskiden bir uzunluk ve bir SHA-256 daha alıyordu, ikisini de
+ * kullanmadan. Bir Blob SAS'ı yalnızca konteyneri, blob adını, izinleri ve
+ * süreyi imzalayabilir; gövdenin boyutunu ya da özetini imzaya bağlamanın bir
+ * yolu yok. Parametreleri alıp yok saymak, çağıran tarafa var olmayan bir
+ * güvence veriyordu. İkisi de artık gerçekten uygulanabildikleri yerde
+ * uygulanıyor: boyut ve içerik türü /media/uploads/complete içinde blobun kendi
+ * özelliklerinden, SHA-256 ise baytları eline alan tek yerde - medya
+ * işleyicide.
+ *
+ * İçerik türü de imzaya girmiyordu: SAS'taki `contentType` alanı okuma
+ * yanıtının başlığını değiştiren `rsct` değerine karşılık geliyor, yazma
+ * isteğiyle ilgisi yok. Bu bağlantının okuma izni de zaten yok.
+ */
 export async function generateMediaUploadSasUrl(
   blobName: string,
-  contentType: string,
-  _contentLength: number,
-  _checksumSha256Base64: string,
   expiresInSeconds = 300
 ): Promise<string> {
   if (!accountName || !accountKey) {
@@ -45,7 +58,6 @@ export async function generateMediaUploadSasUrl(
       startsOn,
       expiresOn,
       protocol: SASProtocol.Https,
-      contentType,
     },
     credential
   );
@@ -73,15 +85,24 @@ export async function generateMediaReadSasUrl(blobName: string, expiresInSeconds
   return `https://${accountName}.blob.core.windows.net/${containerName}/${blobName}?${sas}`;
 }
 
+/**
+ * Karantinadaki nesnenin beyan edilenle aynı olup olmadığına bakılan iki alan.
+ *
+ * Burada eskiden bir `checksumSha256` alanı vardı ve içine Azure'un
+ * `contentHash` değeri konuyordu. O değer bir MD5, üstelik yalnızca istemci
+ * Content-MD5 gönderdiyse dolu. Çağıran taraf onu beklenen SHA-256 ile
+ * karşılaştırdığı için karşılaştırma hiçbir koşulda tutmuyordu: her yükleme,
+ * dosya sapasağlam yerine ulaşmış olsa bile "doğrulanamadı" diye geri
+ * dönüyordu. Yanlış adlandırılmış bir alanı taşımaktansa kaldırmak doğru;
+ * SHA-256 baytların indirildiği tek yerde, medya işleyicide doğrulanıyor.
+ */
 export async function headMediaBlob(blobName: string) {
   const container = getContainerClient();
   const blob = container.getBlobClient(blobName);
   const props = await blob.getProperties();
-  const properties = props as unknown as { contentHash?: Buffer };
   return {
     contentLength: props.contentLength,
     contentType: props.contentType,
-    checksumSha256: properties.contentHash ? properties.contentHash.toString("base64") : undefined,
   };
 }
 

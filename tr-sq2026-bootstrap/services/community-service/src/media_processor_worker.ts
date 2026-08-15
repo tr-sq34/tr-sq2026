@@ -1,4 +1,5 @@
-﻿import sharp from 'sharp';
+﻿import { createHash, timingSafeEqual } from 'node:crypto';
+import sharp from 'sharp';
 import { createDatabasePool } from './database.js';
 import { downloadMediaBlob, uploadMediaBlob, deleteMediaBlob } from './infrastructure/azureBlob.js';
 
@@ -22,6 +23,7 @@ type Job = {
   quarantineKey: string;
   contentType: string;
   expectedSizeBytes: string;
+  expectedSha256: Buffer;
 };
 
 async function claimJob(): Promise<Job | null> {
@@ -55,7 +57,7 @@ async function claimJob(): Promise<Job | null> {
       JOIN media_upload_sessions s ON s.media_id=n.media_id
       JOIN media_assets m ON m.id=n.media_id
       WHERE j.id=n.id
-      RETURNING j.id AS "jobId",m.id AS "mediaId",s.quarantine_key AS "quarantineKey",s.content_type AS "contentType",s.expected_size_bytes AS "expectedSizeBytes"
+      RETURNING j.id AS "jobId",m.id AS "mediaId",s.quarantine_key AS "quarantineKey",s.content_type AS "contentType",s.expected_size_bytes AS "expectedSizeBytes",s.expected_sha256 AS "expectedSha256"
     `);
     await client.query('COMMIT');
     return result.rows[0] ?? null;
@@ -83,11 +85,28 @@ function isAllowedImage(buffer: Buffer, contentType: string) {
     (contentType === 'image/webp' && webp);
 }
 
+/**
+ * Depodaki baytlar, istemcinin yükleme izni isterken bildirdiği özetle aynı mı.
+ *
+ * Bu kontrol daha önce API tarafında, /media/uploads/complete içinde yapılmaya
+ * çalışılıyordu; orada baytlar yok, yalnızca blobun özellikleri var ve Azure
+ * oradan SHA-256 vermiyor. Kontrolün doğru yeri burası: dosyayı zaten indiren,
+ * güvenli nesneyi üretmeden hemen önceki adım. Böylece taranan baytlarla beyan
+ * edilen baytlar arasında boşluk kalmıyor.
+ */
+function matchesDeclaredDigest(source: Buffer, expected: Buffer) {
+  const actual = createHash('sha256').update(source).digest();
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
 async function processJob(job: Job) {
   try {
     const source = await downloadMediaBlob(job.quarantineKey);
     if (source.length !== Number(job.expectedSizeBytes)) {
       throw new Error('Stored object has an unexpected size');
+    }
+    if (!matchesDeclaredDigest(source, job.expectedSha256)) {
+      throw new Error('Stored object does not match the declared SHA-256');
     }
     if (!isAllowedImage(source, job.contentType)) throw new Error('Magic bytes do not match declared image type');
 
