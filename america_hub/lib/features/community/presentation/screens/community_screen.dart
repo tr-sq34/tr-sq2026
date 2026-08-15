@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../../auth/domain/entities/app_user.dart';
 import '../../../../core/constants/app_colors.dart';
-import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_image_source.dart';
 import '../../../../core/widgets/app_remote_image.dart';
 import '../../../../core/widgets/app_screen_header.dart';
@@ -114,23 +113,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
           ],
         );
       }
-      if (widget.controller.state == PagedLoadState.failure &&
-          widget.controller.items.isEmpty) {
-        return Column(
-          children: [
-            const AppScreenHeader(
-              title: 'Akış',
-              subtitle: 'Arkadaşların ve topluluğun burada.',
-            ),
-            Expanded(
-              child: AppErrorState(
-                message: widget.controller.errorMessage ?? 'Akış yüklenemedi.',
-                onRetry: widget.controller.load,
-              ),
-            ),
-          ],
-        );
-      }
+      // Yükleyemeyen bir sekme artık bütün ekranı kaplamıyor. Eskiden
+      // "Takip ettiklerin" cevapsız kalınca akışın tamamı hata ekranına
+      // dönüşüyordu: Story rayı da sekme şeridi de kayboluyor, üye çalışan
+      // sekmeye dönemiyordu. Hata artık kendi sekmesinin içinde duruyor.
       return _Feed(
         controller: widget.controller,
         storyController: widget.storyController,
@@ -385,6 +371,8 @@ class _FeedState extends State<_Feed> {
 
   Widget _feedPage(_FeedFilter filter) {
     final posts = _postsFor(filter);
+    final loading = widget.controller.isLoadingMode(filter.mode);
+    final failed = widget.controller.hasFailedMode(filter.mode);
     return RefreshIndicator(
       onRefresh: widget.controller.refresh,
       child: ListView(
@@ -392,7 +380,15 @@ class _FeedState extends State<_Feed> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.only(top: 12, bottom: 28),
         children: [
-          if (posts.isEmpty && !widget.controller.isInitialLoading)
+          // Boş liste üç ayrı şey olabiliyor ve üçü aynı ekranı hak etmiyor:
+          // henüz gelmedi, gelemedi, ya da gerçekten boş.
+          if (posts.isEmpty && loading) const _FeedSkeleton(),
+          if (posts.isEmpty && failed)
+            _FeedFailureState(
+              message: widget.controller.errorMessage ?? 'Akış yüklenemedi.',
+              onRetry: widget.controller.load,
+            ),
+          if (posts.isEmpty && !loading && !failed)
             _FeedEmptyState(
               filter: filter,
               hasLocality: widget.viewerRegion?.call() != null,
@@ -439,7 +435,7 @@ class _FeedState extends State<_Feed> {
   /// gelen liste. Sekme değişince denetleyici listeyi boşaltıp yeniden yüklüyor,
   /// o yüzden kaydırma sırasında öteki sayfa boş duruyor.
   List<CommunityPost> _postsFor(_FeedFilter filter) =>
-      filter == _filter ? widget.controller.items : const [];
+      widget.controller.itemsFor(filter.mode);
 }
 
 /// Sekme şeridini akışın tepesine çiviler.
@@ -449,10 +445,10 @@ class _FeedFiltersHeader extends SliverPersistentHeaderDelegate {
   final ValueChanged<_FeedFilter> onSelected;
 
   @override
-  double get minExtent => 48;
+  double get minExtent => _feedFilterStripHeight;
 
   @override
-  double get maxExtent => 48;
+  double get maxExtent => _feedFilterStripHeight;
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
@@ -507,13 +503,113 @@ class _FeedEmptyState extends StatelessWidget {
   );
 }
 
-enum _FeedFilter {
-  forYou(FeedMode.forYou),
-  nearby(FeedMode.nearby),
-  following(FeedMode.following);
+/// Sekmenin ilk sayfası yoldayken görünen iskelet.
+///
+/// Dönen bir çark ekranın ortasında hiçbir şey anlatmıyordu; kart hatları
+/// gelecek olanın biçimini gösteriyor, liste dolduğunda da ekran yerinden
+/// oynamıyor. Kıpırdayan bir parıltı yok: akış sınanırken sonsuz bir animasyon
+/// testleri kilitler ve boş bir sekmede göz yorar.
+class _FeedSkeleton extends StatelessWidget {
+  const _FeedSkeleton();
 
-  const _FeedFilter(this.mode);
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      for (var index = 0; index < 3; index++)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFE9EAF0)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const _SkeletonBox(width: 38, height: 38, radius: 19),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        _SkeletonBox(width: 120, height: 11),
+                        SizedBox(height: 7),
+                        _SkeletonBox(width: 76, height: 9),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                const _SkeletonBox(width: double.infinity, height: 10),
+                const SizedBox(height: 8),
+                const _SkeletonBox(width: double.infinity, height: 10),
+                const SizedBox(height: 8),
+                const _SkeletonBox(width: 180, height: 10),
+                if (index == 0) ...[
+                  const SizedBox(height: 14),
+                  const _SkeletonBox(width: double.infinity, height: 150, radius: 14),
+                ],
+              ],
+            ),
+          ),
+        ),
+    ],
+  );
+}
+
+class _SkeletonBox extends StatelessWidget {
+  const _SkeletonBox({
+    required this.width,
+    required this.height,
+    this.radius = 6,
+  });
+  final double width;
+  final double height;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: width,
+    height: height,
+    decoration: BoxDecoration(
+      color: const Color(0xFFEDEDF2),
+      borderRadius: BorderRadius.circular(radius),
+    ),
+  );
+}
+
+/// Cevapsız kalan sekme.
+///
+/// Eskiden başarısız istek bütün ekranı kaplıyordu: sekme şeridi de kaybolduğu
+/// için üye çalışan öteki sekmelere geçemiyordu. Hata artık ait olduğu sekmenin
+/// içinde duruyor.
+class _FeedFailureState extends StatelessWidget {
+  const _FeedFailureState({required this.message, required this.onRetry});
+  final String message;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 32),
+    child: AppErrorState(
+      message: message,
+      onRetry: () => unawaited(onRetry()),
+    ),
+  );
+}
+
+enum _FeedFilter {
+  forYou(FeedMode.forYou, 'Senin İçin', Icons.auto_awesome_rounded),
+  nearby(FeedMode.nearby, 'Yakınındakiler', Icons.near_me_rounded),
+  following(FeedMode.following, 'Takip ettiklerin', Icons.group_rounded);
+
+  const _FeedFilter(this.mode, this.label, this.icon);
   final FeedMode mode;
+  final String label;
+  final IconData icon;
 }
 
 /// Direct Flutter translation of the reference HTML's feed header.
@@ -589,66 +685,86 @@ class _ReferenceFeedFilters extends StatelessWidget {
   final _FeedFilter selected;
   final ValueChanged<_FeedFilter> onSelected;
 
+  /// Şerit yatay kayıyor: üç etiket, büyük yazı tipi seçen bir cihazda ekrana
+  /// sığmıyor ve sabit bir satırda taşma çizgisine dönüşüyordu.
   @override
   Widget build(BuildContext context) => Container(
-    height: 48,
-    color: Colors.white,
-    padding: const EdgeInsets.fromLTRB(0, 8, 8, 7),
-    child: Row(
-      children: [
-        _ReferenceFilter(
-          label: 'Senin İçin',
-          active: selected == _FeedFilter.forYou,
-          onTap: () => onSelected(_FeedFilter.forYou),
-        ),
-        const SizedBox(width: 7),
-        _ReferenceFilter(
-          label: 'Yakınındakiler',
-          active: selected == _FeedFilter.nearby,
-          onTap: () => onSelected(_FeedFilter.nearby),
-        ),
-        const SizedBox(width: 7),
-        _ReferenceFilter(
-          label: 'Takip ettiklerin',
-          active: selected == _FeedFilter.following,
-          onTap: () => onSelected(_FeedFilter.following),
-        ),
-        // Sağda bir filtre düğmesi vardı, hiçbir şey yapmıyordu; sekmeler
-        // zaten filtrenin kendisi. Boş bir düğme, çalıştığını sanıp basan
-        // üyeye yalan söylüyor.
-      ],
+    height: _feedFilterStripHeight,
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      border: Border(bottom: BorderSide(color: Color(0xFFEFEFF3))),
+    ),
+    // ListView değil: tembel liste görünmeyen sekmeyi hiç kurmuyor, dar bir
+    // ekranda üçüncü sekme ağaçta bile olmuyordu. Üç öğe için hepsini kurmanın
+    // maliyeti yok.
+    child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      // Sol boşluk kartlarınkiyle aynı: şerit kartların hizasında başlıyor.
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+      child: Row(
+        children: [
+          for (final filter in _FeedFilter.values) ...[
+            _ReferenceFilter(
+              label: filter.label,
+              icon: filter.icon,
+              active: selected == filter,
+              onTap: () => onSelected(filter),
+            ),
+            if (filter != _FeedFilter.values.last) const SizedBox(width: 8),
+          ],
+          // Sağda bir filtre düğmesi vardı, hiçbir şey yapmıyordu; sekmeler
+          // zaten filtrenin kendisi. Boş bir düğme, çalıştığını sanıp basan
+          // üyeye yalan söylüyor.
+        ],
+      ),
     ),
   );
 }
 
+const double _feedFilterStripHeight = 52;
+
 class _ReferenceFilter extends StatelessWidget {
   const _ReferenceFilter({
     required this.label,
+    required this.icon,
     this.active = false,
     required this.onTap,
   });
   final String label;
+  final IconData icon;
   final bool active;
   final VoidCallback onTap;
+
   @override
   Widget build(BuildContext context) => InkWell(
     onTap: onTap,
-    borderRadius: BorderRadius.circular(18),
+    borderRadius: BorderRadius.circular(17),
     child: Container(
-      height: 29,
-      padding: const EdgeInsets.symmetric(horizontal: 13),
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: active ? const Color(0xFF6B54E8) : const Color(0xFFF1F1F4),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(17),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 10,
-          color: active ? Colors.white : const Color(0xFF706C78),
-          fontWeight: FontWeight.w700,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14,
+            color: active ? Colors.white : const Color(0xFF706C78),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: active ? Colors.white : const Color(0xFF706C78),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     ),
   );
