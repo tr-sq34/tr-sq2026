@@ -29,9 +29,10 @@ Map<String, dynamic> row({
 };
 
 ({ApiNotificationRepository repository, RecordingAdapter adapter}) build(
-  List<Object?> bodies,
-) {
-  final adapter = RecordingAdapter.sequence(bodies);
+  List<Object?> bodies, {
+  int statusCode = 200,
+}) {
+  final adapter = RecordingAdapter.sequence(bodies, statusCode: statusCode);
   final dio = Dio(BaseOptions(baseUrl: 'https://community.test/v1/'))
     ..httpClientAdapter = adapter;
   return (
@@ -189,5 +190,25 @@ void main() {
     final target = await controller.open(controller.items.single);
     expect(target, isA<PostDeepLink>());
     expect(controller.unreadCount, 1);
+  });
+
+  // `load()` yalnızca `finally` ile sarılıydı: istek 401 dönünce hata dışarı
+  // sızıyor, ekran da "Yeni bildirim yok" diyordu. Hiç bildirim gelmemiş olmak
+  // ile sunucuya ulaşamamak aynı cümleyle anlatılamaz.
+  test('istek başarısız olunca hata fırlatmıyor, nedenini tutuyor', () async {
+    final harness = build([
+      {
+        'error': {
+          'code': 'NOTIFICATIONS_UNAVAILABLE',
+          'message': 'Bildirimler yüklenemedi.',
+        },
+      },
+    ], statusCode: 401);
+    final controller = NotificationsController(repository: harness.repository);
+
+    await controller.load();
+
+    expect(controller.items, isEmpty);
+    expect(controller.error, contains('yeniden giriş'));
   });
 }

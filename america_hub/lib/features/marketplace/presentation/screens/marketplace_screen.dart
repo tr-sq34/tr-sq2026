@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/pagination/paged_controller.dart';
 import '../../../../core/widgets/app_remote_image.dart';
 import '../../../../core/widgets/app_state_views.dart';
 import '../../application/marketplace_controller.dart';
@@ -227,7 +228,17 @@ class MarketplaceFeedView extends StatelessWidget {
           if (listings.isEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 80),
-              child: controller.savedOnly
+              // İstek başarısız olduğunda da "İlan bulunamadı" yazıyordu:
+              // sunucu cevap vermediği hâlde üyeye Çarşı'nın boş olduğu
+              // söyleniyordu. Süzgeç yüzünden boş kalmakla cevap alamamak aynı
+              // ekran olamaz - biri beklenen bir sonuç, diğeri bir arıza.
+              child: controller.state == PagedLoadState.failure
+                  ? AppErrorState(
+                      message:
+                          controller.errorMessage ?? 'İlanlar yüklenemedi.',
+                      onRetry: controller.loadInitial,
+                    )
+                  : controller.savedOnly
                   ? const AppEmptyState(
                       icon: Icons.bookmark_border_rounded,
                       title: 'Kaydedilen ilan yok',

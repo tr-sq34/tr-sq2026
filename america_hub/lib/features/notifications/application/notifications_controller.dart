@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../core/navigation/app_deep_link.dart';
+import '../../../core/network/api_exception.dart';
 import '../domain/entities/app_notification.dart';
 import '../domain/repositories/notification_repository.dart';
 
@@ -10,17 +11,35 @@ class NotificationsController extends ChangeNotifier {
   List<AppNotification> items = const [];
   bool isLoading = false;
 
+  /// İstek başarısız olduğunda hata dışarı sızıyordu: `load()` yalnızca
+  /// `finally` ile sarılıydı, çağıran da `initState`ti. Sonuç, yakalanmayan bir
+  /// asenkron hata ve ekranda "Yeni bildirim yok" - hiç bildirim gelmemiş gibi.
+  /// Sunucuya ulaşamamakla bildirim olmaması aynı cümleyle anlatılamaz.
+  String? error;
+
   int get unreadCount => items.where((item) => !item.isRead).length;
 
   Future<void> load() async {
     isLoading = true;
+    error = null;
     // The shell's bell and the notifications screen both start this from
     // `initState`, so a listener can be mid-build when it runs; notifying then
     // is a framework error. Only the notification waits — the flag above is set
     // straight away.
     await Future<void>.microtask(() {});
     notifyListeners();
-    try { items = await _repository.getNotifications(); } finally { isLoading = false; notifyListeners(); }
+    try {
+      items = await _repository.getNotifications();
+    } on ApiException catch (failure) {
+      error = failure.statusCode == 401
+          ? 'Oturumun sona ermiş. Bildirimleri görmek için yeniden giriş yap.'
+          : 'Bildirimler yüklenemedi: ${failure.message}';
+    } catch (_) {
+      error = 'Bildirimler yüklenemedi.';
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
   }
 
   /// Hepsini okundu işaretle. Depoda bu yöntem başından beri vardı ama hiçbir

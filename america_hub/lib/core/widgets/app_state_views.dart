@@ -4,7 +4,7 @@ import '../constants/app_colors.dart';
 import 'app_button.dart';
 
 class AppLoadingView extends StatelessWidget {
-  const AppLoadingView({super.key, this.label = 'Loading…'});
+  const AppLoadingView({super.key, this.label = 'Yükleniyor…'});
   final String label;
 
   @override
@@ -44,17 +44,27 @@ class AppEmptyState extends StatelessWidget {
       );
 }
 
+/// Akış, forum, haber ve etkinlik ekranlarının hepsi bir istek başarısız olunca
+/// bunu gösteriyor — ve hepsi İngilizce "Something went wrong / Try Again"
+/// yazıyordu. Uygulamanın geri kalanı Türkçe; hata anı, üyenin dili bırakıp
+/// başka bir dille karşılaştığı an olmamalı.
 class AppErrorState extends StatelessWidget {
-  const AppErrorState({super.key, required this.message, required this.onRetry});
+  const AppErrorState({
+    super.key,
+    required this.message,
+    required this.onRetry,
+    this.title = 'Yüklenemedi',
+  });
   final String message;
   final VoidCallback onRetry;
+  final String title;
 
   @override
   Widget build(BuildContext context) => AppEmptyState(
         icon: Icons.cloud_off_rounded,
-        title: 'Something went wrong',
+        title: title,
         message: message,
-        actionLabel: 'Try Again',
+        actionLabel: 'Yeniden dene',
         onAction: onRetry,
       );
 }
