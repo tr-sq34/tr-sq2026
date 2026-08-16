@@ -10,6 +10,12 @@ import type { GateworkRole } from './types';
  * no business being there.
  */
 
+// Hesabin yasam dongusu. Uye kendi karariyla donduruyor ya da siliyor; panel
+// bunu yalnizca goruyor, degistirmiyor. Silinmis bir hesap listede yine de
+// duruyor cunku satiri duruyor - ama artik bir kisiyi gostermiyor ve ekranin
+// bunu soylemesi gerekiyor.
+export type AccountStatus = 'active' | 'frozen' | 'deletion_pending' | 'purged';
+
 // Identity's view of the account: who they are and what they may do in Gatework.
 export type IdentityMember = {
   id: string;
@@ -18,6 +24,11 @@ export type IdentityMember = {
   emailVerified: boolean;
   createdAt: string;
   roles: GateworkRole[];
+  accountStatus: AccountStatus;
+  // Silme talebinin otuz gunu ne zaman doluyor. Yalnizca bekleyen hesapta dolu;
+  // gecmis bir silme icin bu tarih artik bir sey ifade etmiyor.
+  purgeAt: string | null;
+  purgedAt: string | null;
 };
 
 // Community's view of the same person: what they have done and what has been
@@ -67,6 +78,16 @@ export const ROLE_HINTS: Record<GateworkRole, string> = {
   moderator: 'Şikâyet kuyruğunu işler, içerik kaldırır.',
   analyst: 'Yalnızca toplulaştırılmış metrikleri görür.',
   auditor: 'Yalnızca okur; denetim kayıtlarına erişir.',
+};
+
+// Hesap durumunun karsiligi. "Kapali" demek yetmiyor: donduran uye geri
+// donebilir, silinmeyi bekleyen uye giris yaparsa talebi iptal olur, silinmis
+// olan icin yapilacak bir sey kalmamistir.
+export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = {
+  active: 'Etkin',
+  frozen: 'Dondurulmuş — giriş yaparsa geri açılır',
+  deletion_pending: 'Silinmeyi bekliyor',
+  purged: 'Kimliği silindi',
 };
 
 export const RESTRICTION_LABELS: Record<string, string> = {

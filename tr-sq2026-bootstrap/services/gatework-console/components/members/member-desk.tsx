@@ -25,6 +25,50 @@ import { MemberDrawer } from './member-drawer';
  * for a member who exists. That is why the table's own filter box is not used
  * here: one search box that searches everything beats two that disagree.
  */
+/**
+ * Hesabin yasam dongusu, tek hucrede.
+ *
+ * Bu sutun olmadan silinmis bir hesap listede "silinmis-<id>@hesap.invalid"
+ * adiyla duran ve kimsenin ne oldugunu anlayamadigi bir satirdi. Bekleyen silme
+ * icin kalan gun de burada: otuz gunluk sure operatorun mudahale edebilecegi
+ * tek aralik.
+ */
+function AccountStatusCell({ member }: { member: IdentityMember }) {
+  if (member.accountStatus === 'active') {
+    return <span className="text-xs text-ink-faint">Etkin</span>;
+  }
+  if (member.accountStatus === 'purged') {
+    return (
+      <div className="min-w-0">
+        <Badge tone="neutral" dot>Kimliği silindi</Badge>
+        {member.purgedAt && (
+          <p className="mt-1 text-xs whitespace-nowrap text-ink-faint">{formatDate(member.purgedAt)}</p>
+        )}
+      </div>
+    );
+  }
+  if (member.accountStatus === 'frozen') {
+    return <Badge tone="warning" dot>Donduruldu</Badge>;
+  }
+  // Kalan gun tarayicinin saatinden hesaplaniyor; tarih de yaziliyor ki sayi
+  // yanlissa hangi gune bakildigini operator gorebilsin.
+  const remaining = member.purgeAt
+    ? Math.ceil((new Date(member.purgeAt).getTime() - Date.now()) / 86_400_000)
+    : null;
+  return (
+    <div className="min-w-0">
+      <Badge tone="danger" dot>Silinmeyi bekliyor</Badge>
+      <p className="mt-1 text-xs whitespace-nowrap text-ink-faint">
+        {remaining === null
+          ? 'Tarih okunamadı'
+          : remaining > 0
+            ? `${remaining} gün kaldı · ${formatDate(member.purgeAt!)}`
+            : 'Süre doldu, temizlik sırasında'}
+      </p>
+    </div>
+  );
+}
+
 export function MemberDesk({
   initialMembers,
   permissions,
@@ -107,6 +151,12 @@ export function MemberDesk({
           row.original.emailVerified
             ? <Badge tone="success" dot>Doğrulandı</Badge>
             : <Badge tone="warning" dot>Bekliyor</Badge>,
+      },
+      {
+        id: 'accountStatus',
+        header: 'Hesap',
+        accessorFn: (row) => row.accountStatus,
+        cell: ({ row }) => <AccountStatusCell member={row.original} />,
       },
       {
         id: 'createdAt',
