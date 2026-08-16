@@ -22,6 +22,7 @@ import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
 import '../features/promotions/application/promotions_controller.dart';
 import '../features/safety/application/sos_controller.dart';
+import '../features/support/application/support_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
 import 'router/app_routes.dart';
@@ -54,6 +55,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.promotionsController,
     required this.forumController,
     required this.sosController,
+    required this.supportController,
     this.navigatorObservers = const [],
   });
 
@@ -109,6 +111,10 @@ class AmericaHubApp extends StatelessWidget {
   /// üye başına tek — ekran nerede açılırsa açılsın aynı durumu göstermeli.
   final SosController sosController;
 
+  /// Yardim ve Destek: talep listesi ile yazisma ayni denetleyiciden okunuyor,
+  /// menuden acilan ekran ile bildirimden acilan ekran ayni durumu gostersin.
+  final SupportController supportController;
+
   /// Çökme raporunun hangi ekranda olduğumuzu bilmesini sağlayan gözlemci
   /// buradan geçiyor. Testlerde boş: gezinti gözlemek onların işi değil.
   final List<NavigatorObserver> navigatorObservers;
@@ -146,6 +152,7 @@ class AmericaHubApp extends StatelessWidget {
         promotionsController: promotionsController,
         forumController: forumController,
         sosController: sosController,
+        supportController: supportController,
       ).onGenerateRoute,
     );
   }

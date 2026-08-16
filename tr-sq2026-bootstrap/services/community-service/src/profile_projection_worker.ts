@@ -68,6 +68,11 @@ async function purgeMemberData(client: pg.PoolClient, userId: string) {
   // satiri karsi tarafin listesinde de duruyordu.
   await client.query('DELETE FROM relationship_projection WHERE viewer_id=$1 OR subject_id=$1', [userId]);
   await client.query('DELETE FROM viewer_location_projection WHERE user_id=$1', [userId]);
+  // Destek yazismasi. Uyenin kendi cumleleri ve cogu zaman bir sikayetin
+  // ayrintisi; hesap silindiginde bir operasyon ekraninda durmasi icin sebep
+  // yok. Mesajlar zincirleme gidiyor. Islemin yapildigi gercegi denetim
+  // kaydinda kaliyor - orada tasinan sey metin degil, kim ne zaman cevapladi.
+  await client.query('DELETE FROM support_requests WHERE member_id=$1', [userId]);
 }
 
 async function processEvent(event: Event) {

@@ -7,6 +7,7 @@ import { canSeeMarketplace } from './marketplace';
 import { canSeeMembers } from './members';
 import { canReviewReports } from './moderation';
 import { canSeeSafety } from './safety';
+import { canSeeSupport } from './support';
 import { canSeeVerification } from './verification';
 import type { GateworkRole } from './types';
 
@@ -87,6 +88,7 @@ export function navigationFor(roles: GateworkRole[]): NavGroup[] {
         canReviewReports(roles) ? { key: 'moderation', label: 'Moderasyon Merkezi', href: '/moderation' } : null,
         canReviewReports(roles) ? { key: 'communications', label: 'Mesajlar ve Gruplar', href: '/communications' } : null,
         canSeeSafety(roles) ? { key: 'safety', label: 'Güvenlik ve SOS', href: '/safety' } : null,
+        canSeeSupport(roles) ? { key: 'support', label: 'Destek Talepleri', href: '/support' } : null,
       ].filter(Boolean) as NavItem[],
     },
   ];

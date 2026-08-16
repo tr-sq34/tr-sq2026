@@ -11,6 +11,7 @@ sealed class AppDeepLink {
       'listing' => ListingDeepLink(segments[1]),
       'request' => SpecialRequestDeepLink(segments[1]),
       'friend' => FriendRequestDeepLink(segments[1]),
+      'support' => SupportDeepLink(segments[1]),
       _ => const UnknownDeepLink(),
     };
   }
@@ -21,4 +22,5 @@ class EventDeepLink extends AppDeepLink { const EventDeepLink(this.eventId); fin
 class ListingDeepLink extends AppDeepLink { const ListingDeepLink(this.listingId); final String listingId; }
 class SpecialRequestDeepLink extends AppDeepLink { const SpecialRequestDeepLink(this.requestId); final String requestId; }
 class FriendRequestDeepLink extends AppDeepLink { const FriendRequestDeepLink(this.memberId); final String memberId; }
+class SupportDeepLink extends AppDeepLink { const SupportDeepLink(this.requestId); final String requestId; }
 class UnknownDeepLink extends AppDeepLink { const UnknownDeepLink(); }

@@ -40,11 +40,14 @@ import 'package:america_hub/features/verification/application/member_capabilitie
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:america_hub/features/safety/application/sos_controller.dart';
+import 'package:america_hub/features/support/application/support_controller.dart';
+import 'package:america_hub/features/support/data/support_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'fake_image_http.dart';
 import 'test_messaging.dart';
 import 'fake_sos.dart';
+import 'fake_support.dart';
 
 /// Lets overflow reports through without failing the test.
 ///
@@ -78,6 +81,7 @@ Future<AuthController> pumpShell(
   String? signUpName,
   NotificationRepository notifications = const EmptyNotificationRepository(),
   CommunityHomeRepository? homeRepository,
+  SupportRepository? supportRepository,
 }) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
@@ -166,6 +170,9 @@ Future<AuthController> pumpShell(
           repository: MockForumRepository(viewer: () => authController.user),
         ),
         sosController: SosController(repository: FakeSosRepository()),
+        supportController: SupportController(
+          repository: supportRepository ?? FakeSupportRepository(),
+        ),
         messaging: testMessaging(viewerId: authController.user?.id ?? 'me'),
         onSignOut: () async {},
       ),
