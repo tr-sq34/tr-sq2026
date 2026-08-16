@@ -525,6 +525,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
           ),
         );
         widget.supportController.closeThread();
+      case BadgeDeepLink():
+        // Rozetin kendi ekrani yok; dolabin Rozetler sekmesi kazanilani zaten
+        // isaretli gosteriyor.
+        _openBadges();
       case EventDeepLink() || SpecialRequestDeepLink() || UnknownDeepLink():
         // Bu türlerde bildirim üretilmiyor; üretildiğinde buraya bir satır
         // eklenecek. Uydurma bir hedefe götürmek, hiçbir yere götürmemekten

@@ -55,27 +55,78 @@ export async function recomputeScore(client: pg.PoolClient, userId: string): Pro
   );
 }
 
+/// Every badge some code path in this service can actually grant.
+///
+/// The catalogue in migration 016 holds around fifty badges. Twelve of them are
+/// reachable: these. The rest describe things nobody wrote a rule for - "milli
+/// mac gunu izleme etkinligi paylastin", "vize sorularina verdigin yanit En
+/// Faydali secildi" - and a member reading the Yolculuk screen has no way to
+/// tell the two apart.
+///
+/// Naming them here does two things. The console can say, per badge, whether it
+/// is earned by a rule or given by hand, instead of showing fifty rows that all
+/// look automatic. And a test compares this list against the call sites, so a
+/// badge that gains a rule - or loses one - cannot silently disagree with what
+/// the panel tells the operator.
+export const AUTOMATED_BADGE_CODES: readonly string[] = [
+  'jfk_welcomed',
+  'i94_clean',
+  'welcome_neighbor',
+  'first_spark',
+  'vocalist',
+  'profile_champion',
+  'observer',
+  'content_machine',
+  'neighborhood_sentinel',
+  'streak_master_14',
+  'streak_master_30',
+  'founding_architect',
+];
+
 /// Grants a badge if the member does not already hold it.
 ///
 /// Returns true only when this call is the one that granted it, so the caller
 /// can decide to celebrate exactly once. A manual-only badge (the solidarity
 /// medal) is refused here rather than at the call site: the engine should not be
 /// able to hand out something a human is supposed to decide.
+///
+/// [grantedBy] is the operator when the grant came from the panel. It is stored
+/// rather than inferred, because an auditor looking at a badge months later
+/// cannot otherwise tell a rule from a decision.
 export async function awardBadge(
   client: pg.PoolClient,
   userId: string,
   code: string,
-  options: { allowManual?: boolean } = {},
+  options: { allowManual?: boolean; grantedBy?: string; reason?: string } = {},
 ): Promise<boolean> {
   const inserted = await client.query(
-    `INSERT INTO member_badges(user_id,badge_code)
-     SELECT $1,$2 FROM badge_definitions d
+    `INSERT INTO member_badges(user_id,badge_code,granted_by,granted_reason)
+     SELECT $1,$2,$4,$5 FROM badge_definitions d
       WHERE d.code=$2 AND ($3::boolean OR NOT d.manual_only)
      ON CONFLICT DO NOTHING
      RETURNING badge_code`,
-    [userId, code, options.allowManual === true],
+    [userId, code, options.allowManual === true, options.grantedBy ?? null, options.reason ?? null],
   );
   if (!inserted.rowCount) return false;
+  await recomputeScore(client, userId);
+  return true;
+}
+
+/// Takes a badge back.
+///
+/// Only ever for a grant that should not have happened - a mistyped member, a
+/// decision reversed. There is no rule that revokes: a badge earned by doing
+/// something stays earned even if the post is later deleted, because the member
+/// did do it. Returns false when the member did not hold it, so the caller can
+/// say "zaten yoktu" rather than reporting a success that changed nothing.
+export async function revokeBadge(client: pg.PoolClient, userId: string, code: string): Promise<boolean> {
+  const removed = await client.query(
+    'DELETE FROM member_badges WHERE user_id=$1 AND badge_code=$2 RETURNING badge_code',
+    [userId, code],
+  );
+  if (!removed.rowCount) return false;
+  // The points came from the badge, so they go with it. Re-summed rather than
+  // subtracted for the reason at the top of this file.
   await recomputeScore(client, userId);
   return true;
 }

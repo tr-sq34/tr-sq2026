@@ -2,6 +2,7 @@ import { canSeeAnalytics } from './analytics';
 import { canSeeAudit } from './audit';
 import { canSeeEvents } from './events';
 import { canSeeForum } from './forum';
+import { canSeeJourney } from './journey';
 import { canSeeServiceHealth } from './health';
 import { canSeeMarketplace } from './marketplace';
 import { canSeeMembers } from './members';
@@ -66,6 +67,7 @@ export function navigationFor(roles: GateworkRole[]): NavGroup[] {
         { key: 'content', label: 'İçerik Stüdyosu', href: '/content' },
         { key: 'news', label: 'Haber Merkezi', href: '/news' },
         canSeeForum(roles) ? { key: 'forum', label: 'Forum', href: '/forum' } : null,
+        canSeeJourney(roles) ? { key: 'journey', label: 'Rozetler ve Yolculuk', href: '/journey' } : null,
         canSeeEvents(roles)
           ? { key: 'events', label: 'Etkinlikler ve Biletleme', href: '/events', note: 'Yapım aşamasında' }
           : null,
