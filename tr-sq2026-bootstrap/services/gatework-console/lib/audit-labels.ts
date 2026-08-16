@@ -43,6 +43,7 @@ export const OUTCOME_LABELS: Record<string, string> = {
 // the day it ships instead of the day someone remembers to add it here.
 export const ACTION_LABELS: Record<string, string> = {
   'members.list': 'Üye listesini görüntüledi',
+  'member.sessions.list': 'Üyenin açık oturumlarını görüntüledi',
   'member.sessions.revoke': 'Oturumları sonlandırdı',
   'role.grant': 'Rol verdi',
   'role.revoke': 'Rolü geri aldı',

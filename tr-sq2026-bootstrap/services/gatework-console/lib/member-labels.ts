@@ -47,6 +47,42 @@ export type CommunityMember = {
   restriction: { kind: string; reason: string; expiresAt: string | null } | null;
 };
 
+// Acik bir oturum: bir yenileme jetonu ailesi. Cihaz imzasi ve ag blogu
+// bosluk kabul ediyor cunku eski oturumlar bu alanlar yokken acildi ve
+// istekler her zaman bir vekil sunucudan gelmiyor. Bos olani doldurmak yerine
+// ekranda bos oldugunu soyluyoruz.
+export type MemberSession = {
+  id: string;
+  userAgent: string | null;
+  // Adresin kendisi degil, /24 (IPv6'da /48) blogu. Tam IP hicbir yerde
+  // saklanmiyor, dolayisiyla panelde de gosterilemez.
+  ipPrefix: string | null;
+  createdAt: string;
+  lastSeenAt: string | null;
+  expiresAt: string | null;
+};
+
+// Cihaz imzasindan okunabilir bir ad. Tam User-Agent metnini listeye yazmak
+// satiri okunmaz hale getiriyor; taninmayan bir imzada ise metnin kendisini
+// gostermek, uydurma bir "Bilinmeyen cihaz" etiketinden durust.
+export function deviceLabel(userAgent: string | null): string {
+  if (!userAgent) return 'Cihaz bilgisi gelmedi';
+  const value = userAgent.trim();
+  if (!value) return 'Cihaz bilgisi gelmedi';
+  if (/AmericaHub/i.test(value)) {
+    if (/Android/i.test(value)) return 'AmericaHub · Android';
+    if (/iOS|iPhone|iPad/i.test(value)) return 'AmericaHub · iOS';
+    return 'AmericaHub uygulaması';
+  }
+  if (/Android/i.test(value)) return 'Android tarayıcı';
+  if (/iPhone|iPad|iOS/i.test(value)) return 'iPhone / iPad tarayıcı';
+  if (/Edg\//i.test(value)) return 'Edge · masaüstü';
+  if (/Chrome\//i.test(value)) return 'Chrome · masaüstü';
+  if (/Firefox\//i.test(value)) return 'Firefox · masaüstü';
+  if (/Safari\//i.test(value)) return 'Safari · masaüstü';
+  return value.length > 60 ? `${value.slice(0, 60)}…` : value;
+}
+
 // Which buttons are worth drawing for this operator. Resolved on the server
 // from the session roles; the services check the same rules again on every
 // call, so this only decides what is offered, never what is allowed.

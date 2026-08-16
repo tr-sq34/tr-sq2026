@@ -4,12 +4,14 @@ import { AlertTriangle, Ban, Gavel, LogOut, ShieldCheck } from 'lucide-react';
 import { apiData, errorText, formatDateTime } from '@/lib/api-client';
 import { actionLabel, OUTCOME_LABELS, SERVICE_LABELS, type AuditRow } from '@/lib/audit-labels';
 import {
+  deviceLabel,
   RESTRICTION_LABELS,
   ROLE_HINTS,
   ROLE_LABELS,
   type CommunityMember,
   type IdentityMember,
   type MemberPermissions,
+  type MemberSession,
 } from '@/lib/member-labels';
 import { gateworkRoles, type GateworkRole } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
@@ -77,6 +79,9 @@ export function MemberDrawer({
   const [pending, setPending] = useState<Pending>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Oturumlar kapatildiktan sonra listenin eski halini gostermek, islemin
+  // yapilmadigi izlenimini birakiyor. Sayaci artirmak listeyi yeniden sordurur.
+  const [sessionsVersion, setSessionsVersion] = useState(0);
 
   const loadCommunity = useCallback(async () => {
     setCommunityError(null);
@@ -113,6 +118,7 @@ export function MemberDrawer({
       setNotice(pending.next ? 'İhale açma yetkisi verildi.' : 'İhale açma yetkisi kaldırıldı.');
     } else if (pending.kind === 'sessions') {
       await apiData(`/api/members/${member.id}/sessions`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+      setSessionsVersion((version) => version + 1);
       setNotice('Tüm oturumlar kapatıldı; üye yeniden giriş yapmak zorunda.');
     }
   }
@@ -179,6 +185,7 @@ export function MemberDrawer({
             member={member}
             permissions={permissions}
             isSelf={isSelf}
+            reloadToken={sessionsVersion}
             onAsk={() => setPending({ kind: 'sessions' })}
           />
         </TabsContent>
@@ -423,12 +430,112 @@ function RolesTab({
   );
 }
 
+/**
+ * Bu hesabin acik oturumlari: her satir bir yenileme jetonu ailesi, yani bir
+ * cihazdaki bir giris.
+ *
+ * Uc alan da eksik olabiliyor ve hicbiri tahminle doldurulmuyor. Cihaz imzasi
+ * gelmemisse "Cihaz bilgisi gelmedi" yaziyor; ag blogu yoksa satirda yer
+ * kaplamiyor. Adres zaten tam haliyle saklanmiyor - kimlik servisi yalnizca
+ * /24 (IPv6'da /48) blogunu yaziyor - dolayisiyla panelde de o kadari var.
+ *
+ * Liste sondan bir onceki soruyu cevaplamiyor: "bu oturum su an calisiyor mu".
+ * Ailenin jetonlarinin en gec bitis tarihi gecmisse satir "suresi dolmus"
+ * olarak isaretleniyor; asil kapatma islemi yukaridaki dugmede.
+ */
+function SessionList({
+  member, permissions, reloadToken,
+}: {
+  member: IdentityMember;
+  permissions: MemberPermissions;
+  reloadToken: number;
+}) {
+  const [sessions, setSessions] = useState<MemberSession[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!permissions.seeAudit) return;
+    let active = true;
+    setSessions(null);
+    setError(null);
+    (async () => {
+      try {
+        const data = await apiData<MemberSession[]>(`/api/members/${member.id}/sessions`);
+        if (active) setSessions(data);
+      } catch (caught) {
+        if (active) setError(errorText(caught, 'Oturum listesi alınamadı.'));
+      }
+    })();
+    return () => { active = false; };
+  }, [member.id, permissions.seeAudit, reloadToken]);
+
+  const now = Date.now();
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Açık oturumlar</CardTitle>
+          <CardDescription>
+            Her satır bir cihazdaki bir giriş. Tam IP adresi hiçbir rolde görünmüyor çünkü hiçbir yerde saklanmıyor; yazılan şey adresin /24 (IPv6’da /48) bloğu.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!permissions.seeAudit ? (
+          <p className="text-sm text-ink-faint">Oturum listesi Sahip, Güvenlik Yöneticisi ve Denetçi rollerine açıktır.</p>
+        ) : error ? (
+          <Notice tone="warning">
+            Oturum listesi gelmedi: {error}
+            <br />
+            <span className="text-xs">Bu, üyenin açık oturumu olmadığı anlamına gelmez — liste sorulamadı.</span>
+          </Notice>
+        ) : sessions === null ? (
+          <p className="text-sm text-ink-faint">Yükleniyor…</p>
+        ) : sessions.length === 0 ? (
+          <EmptyState title="Açık oturum yok" description="Bu hesapta geçerli bir yenileme jetonu bulunmuyor; üye şu an hiçbir cihazda giriş yapmış değil." />
+        ) : (
+          <ul className="grid gap-2">
+            {sessions.map((session) => {
+              const expiry = session.expiresAt ? Date.parse(session.expiresAt) : NaN;
+              const expired = Number.isFinite(expiry) && expiry < now;
+              return (
+                <li key={session.id} className="rounded-lg border border-hairline bg-surface-raised p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm text-ink">{deviceLabel(session.userAgent)}</span>
+                    {/* Ucuncu bir hal var: ailenin hic jeton satiri yoksa
+                        bitis tarihi de yok. "Etkin" demek uydurma olurdu. */}
+                    {!Number.isFinite(expiry)
+                      ? <Badge tone="neutral">Süresi bilinmiyor</Badge>
+                      : expired
+                        ? <Badge tone="neutral">Süresi dolmuş</Badge>
+                        : <Badge tone="success">Etkin</Badge>}
+                  </div>
+                  <p className="mt-1 text-xs text-ink-faint">
+                    {session.ipPrefix ? `${session.ipPrefix} · ` : 'Ağ bloğu kaydedilmemiş · '}
+                    {session.lastSeenAt ? `son görülme ${formatDateTime(session.lastSeenAt)}` : 'son görülme kaydı yok'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-ink-faint">
+                    {`Açılış ${formatDateTime(session.createdAt)}`}
+                    {session.expiresAt ? ` · ${expired ? 'bitiş' : 'geçerlilik'} ${formatDateTime(session.expiresAt)}` : ' · bitiş tarihi okunamadı'}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SessionsTab({
-  member, permissions, isSelf, onAsk,
+  member, permissions, isSelf, reloadToken, onAsk,
 }: {
   member: IdentityMember;
   permissions: MemberPermissions;
   isSelf: boolean;
+  reloadToken: number;
   onAsk: () => void;
 }) {
   const [rows, setRows] = useState<AuditRow[] | null>(null);
@@ -476,10 +583,7 @@ function SessionsTab({
         </CardContent>
       </Card>
 
-      <NotConnected
-        what="Açık oturum listesi (cihaz, IP, son görülme)"
-        why="Kimlik servisi yenileme jetonlarını tutuyor ama panele cihaz bazında listeleyen bir uç nokta açmıyor. Buraya bir cihaz listesi çizmek, olmayan bir kaydı varmış gibi göstermek olurdu."
-      />
+      <SessionList member={member} permissions={permissions} reloadToken={reloadToken} />
 
       <Card>
         <CardHeader>
