@@ -35,6 +35,7 @@ class AuthController extends ChangeNotifier {
   AuthStatus _status = AuthStatus.initializing;
   AppUser? _user;
   OnboardingProfile? _onboarding;
+  bool _onboardingUnknown = false;
   String? _errorMessage;
 
   AuthStatus get status => _status;
@@ -49,9 +50,18 @@ class AuthController extends ChangeNotifier {
       _repository.checkEmailStatus(email: email);
 
   Future<OnboardingProfile> getOnboarding() async {
-    final profile = await _repository.getOnboarding();
-    _onboarding = profile;
-    return profile;
+    try {
+      final profile = await _repository.getOnboarding();
+      _onboarding = profile;
+      _onboardingUnknown = false;
+      return profile;
+    } catch (_) {
+      // Okunamadı ile "tamamlanmamış" aynı şey değil. Bayrak burada
+      // kaldırılıyor ki her çağıran aynı cevabı görsün; hata yine de
+      // yukarı çıkıyor, çünkü kimi çağıran bunu ekranda söylemek istiyor.
+      _onboardingUnknown = true;
+      rethrow;
+    }
   }
 
   Future<void> saveOnboarding(OnboardingDraft draft) async {
@@ -69,6 +79,7 @@ class AuthController extends ChangeNotifier {
       originCountry: draft.originCountry,
       originCity: draft.originCity,
     );
+    _onboardingUnknown = false;
     notifyListeners();
   }
 
@@ -76,6 +87,15 @@ class AuthController extends ChangeNotifier {
   /// has not been completed. `_authenticate` already fetched the profile, so
   /// this needs no extra round trip.
   bool get needsOnboarding => !(_onboarding?.completed ?? false);
+
+  /// Kurulumun bitip bitmediği okunamadı.
+  ///
+  /// Ölçülemeyen bir şey "tamamlanmamış" değildir. Sunucu bir an cevap
+  /// vermediğinde [needsOnboarding] `true` döner ve bu, kurulumunu bir yıl önce
+  /// bitirmiş bir üyeyi sihirbaza geri gönderiyordu — şehrini, geliş tarihini,
+  /// ilgi alanlarını baştan yazdırıp gerçek profilinin üstüne kaydederek.
+  /// O yüzden "bilmiyoruz" ayrı bir cevap ve yönlendirme buna bakıyor.
+  bool get onboardingUnknown => _onboardingUnknown;
 
   Future<void> restoreSession() async {
     _status = AuthStatus.initializing;
@@ -97,6 +117,8 @@ class AuthController extends ChangeNotifier {
           refreshToken: session.refreshToken ?? refreshToken,
         );
         _status = AuthStatus.authenticated;
+        // Profil okunamazsa oturum yine de geçerli; nereye gidileceğine
+        // [onboardingUnknown] karar veriyor.
         try {
           await getOnboarding();
         } catch (_) {}
@@ -196,6 +218,8 @@ class AuthController extends ChangeNotifier {
         refreshToken: session.refreshToken,
       );
       _status = AuthStatus.authenticated;
+      // Aynısı taze girişte de geçerli: giriş başarılı oldu, okunamayan tek
+      // şey kurulumun bitip bitmediği.
       try {
         await getOnboarding();
       } catch (_) {}
@@ -246,6 +270,7 @@ class AuthController extends ChangeNotifier {
     await _tokenStore.clear();
     _user = null;
     _onboarding = null;
+    _onboardingUnknown = false;
     _status = AuthStatus.unauthenticated;
     notifyListeners();
   }

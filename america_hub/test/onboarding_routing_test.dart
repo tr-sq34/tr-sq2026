@@ -21,8 +21,19 @@ class _RepositoryWithProfile extends MockAuthRepository {
   }
 }
 
+/// Profili hic veremeyen bir sunucu.
+class _RepositoryWithoutProfile extends MockAuthRepository {
+  int reads = 0;
+
+  @override
+  Future<OnboardingProfile> getOnboarding() async {
+    reads++;
+    throw Exception('Profil servisi yanit vermedi.');
+  }
+}
+
 void main() {
-  AuthController controllerFor(_RepositoryWithProfile repository) =>
+  AuthController controllerFor(MockAuthRepository repository) =>
       AuthController(
         repository: repository,
         sessionStore: InMemorySessionStore(),
@@ -96,6 +107,51 @@ void main() {
     expect(controller.needsOnboarding, isFalse);
     expect(controller.onboarding?.arrivedYear, 2019);
     expect(repository.reads, 1);
+  });
+
+  // Olculemeyen bir sey "tamamlanmamis" degil. Sunucu bir an cevap
+  // vermediginde uye sihirbaza dusuyor, sehrini ve gelis tarihini yeniden
+  // yaziyor ve gercek profilinin ustune kaydediyordu.
+  test('kurulum durumu okunamadiysa bu bir "tamamlanmadi" cevabi degil', () async {
+    final repository = _RepositoryWithoutProfile();
+    final controller = controllerFor(repository);
+
+    await controller.signIn('member@turksquare.app', 'Sifre-1234!');
+
+    expect(repository.reads, 1);
+    // Giris basarili: okunamayan tek sey kurulumun bitip bitmedigi.
+    expect(controller.isAuthenticated, isTrue);
+    expect(controller.onboardingUnknown, isTrue);
+  });
+
+  test('cevap gelince bilinmeyen bayragi kalkar', () async {
+    final controller = controllerFor(_RepositoryWithoutProfile());
+    await controller.signIn('member@turksquare.app', 'Sifre-1234!');
+    expect(controller.onboardingUnknown, isTrue);
+
+    await controller.saveOnboarding(
+      const OnboardingDraft(
+        city: 'Paterson',
+        countryCode: 'US',
+        regionCode: 'NJ',
+        interests: ['community_meet'],
+        primaryIntent: 'community',
+      ),
+    );
+
+    expect(controller.onboardingUnknown, isFalse);
+    expect(controller.needsOnboarding, isFalse);
+  });
+
+  test('okunabilen bir profil bilinmeyen birakmaz', () async {
+    final controller = controllerFor(
+      _RepositoryWithProfile(const OnboardingProfile(completed: false)),
+    );
+
+    await controller.signIn('member@turksquare.app', 'Sifre-1234!');
+
+    expect(controller.onboardingUnknown, isFalse);
+    expect(controller.needsOnboarding, isTrue);
   });
 
   test('signing out clears the cached profile', () async {

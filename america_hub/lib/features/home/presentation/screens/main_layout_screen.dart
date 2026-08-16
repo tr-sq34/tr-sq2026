@@ -369,6 +369,28 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     // The bell carries a count, so it has to know the answer before anyone
     // opens the notification list.
     widget.notificationsController.load();
+    _recheckOnboarding();
+  }
+
+  /// Kurulum durumu girişte okunamadıysa buraya gelinmiş demektir.
+  ///
+  /// Bilinmeyen bir durumda ana ekran doğru cevap — sihirbaz, yıllardır üye
+  /// olan birine profilini baştan yazdırırdı. Ama kurulumu gerçekten yarım
+  /// kalmış bir üye de aynı yoldan buraya düşebilir, o yüzden soru bir kez
+  /// daha soruluyor: ağ bu arada geri geldiyse cevap artık var. Yine
+  /// okunamazsa hiçbir şey yapılmıyor; üye ana ekranda kalıyor ve bir sonraki
+  /// açılışta yeniden deneniyor.
+  Future<void> _recheckOnboarding() async {
+    if (!widget.authController.onboardingUnknown) return;
+    try {
+      final profile = await widget.authController.getOnboarding();
+      if (!mounted || profile.completed) return;
+      await Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil(AppRoutes.onboarding, (_) => false);
+    } catch (_) {
+      // Hâlâ cevap yok. Uydurulmuş bir cevaptan iyidir.
+    }
   }
 
   @override

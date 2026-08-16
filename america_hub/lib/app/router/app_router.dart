@@ -117,8 +117,16 @@ class AppRouter {
   /// successful login there is what made the location screen reappear on each
   /// app launch. `AuthController` already fetched the profile while
   /// authenticating, so this reads a cached flag rather than hitting the API.
-  String _postAuthRoute() =>
-      authController.needsOnboarding ? AppRoutes.onboarding : AppRoutes.home;
+  ///
+  /// Kurulum durumu okunamadıysa sihirbaz yanlış cevap. Bilinmeyeni
+  /// "tamamlanmamış" saymak, yıllardır üye olan birine şehrini ve geliş
+  /// tarihini yeniden yazdırmak ve gerçek profilinin üstüne kaydetmek demekti.
+  /// Ana ekran ise geri dönülebilir: [StartupScreen] uygulama açılışında zaten
+  /// böyle davranıyordu, iki yol artık aynı cevabı veriyor.
+  String _postAuthRoute() {
+    if (authController.onboardingUnknown) return AppRoutes.home;
+    return authController.needsOnboarding ? AppRoutes.onboarding : AppRoutes.home;
+  }
 
   Route<void> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
