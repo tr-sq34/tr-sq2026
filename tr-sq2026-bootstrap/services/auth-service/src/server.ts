@@ -14,6 +14,7 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 import pg from 'pg';
 import { z } from 'zod';
 import { ACCOUNT_DELETION_GRACE_DAYS, accountStatusOf, purgeDueAccounts, type AccountStatus } from './account_purge.js';
+import { sessionContextOf, type SessionContext } from './session_context.js';
 import { databaseConnectionString, databaseSslOptions } from './database.js';
 
 const required = (name: string) => {
@@ -341,11 +342,21 @@ async function queueMessagingUserUpsert(
   );
 }
 
-async function issueSession(user: { id: string; email: string }, existingFamilyId?: string) {
+async function issueSession(
+  user: { id: string; email: string },
+  // Oturumun hangi cihazdan acildigi. Istegi olmayan tek cagri yok, ama
+  // parametre yine de istege bagli: iz birakamamak, oturum acmayi engelleyecek
+  // bir sebep degil.
+  context: SessionContext = { userAgent: null, ipPrefix: null },
+  existingFamilyId?: string,
+) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const familyId = existingFamilyId ?? (await client.query<{ id: string }>('INSERT INTO refresh_token_families(user_id) VALUES($1) RETURNING id', [user.id])).rows[0]!.id;
+    const familyId = existingFamilyId ?? (await client.query<{ id: string }>(
+      'INSERT INTO refresh_token_families(user_id,user_agent,ip_prefix,last_seen_at) VALUES($1,$2,$3,now()) RETURNING id',
+      [user.id, context.userAgent, context.ipPrefix],
+    )).rows[0]!.id;
     const refreshToken = opaqueToken();
     await client.query('INSERT INTO refresh_tokens(family_id, token_hash, expires_at) VALUES($1,$2,now() + interval \'30 days\')', [familyId, hashOpaque(refreshToken)]);
     await client.query('COMMIT');
@@ -1122,7 +1133,7 @@ app.post('/v1/auth/login', { config: { rateLimit: { max: 8, timeWindow: '15 minu
   // durumdan donuldugu de cevapta gidiyor.
   const restored = user.deletion_requested_at ? 'deletion' : user.deactivated_at ? 'freeze' : null;
   if (restored) await reopenAccount(user);
-  const session = await issueSession(user);
+  const session = await issueSession(user, sessionContextOf(request));
   return { data: { user: { id: user.id, email: user.email, displayName: user.display_name }, restoredFrom: restored, ...session } };
 });
 
@@ -1174,6 +1185,19 @@ app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 m
     await client.query('UPDATE refresh_tokens SET consumed_at=now() WHERE id=$1', [row.id]);
     const replacement = opaqueToken();
     await client.query('INSERT INTO refresh_tokens(family_id, token_hash, expires_at) VALUES($1,$2,now() + interval \'30 days\')', [row.family_id, hashOpaque(replacement)]);
+    // Oturumun son gorulme ani. Cihaz imzasi ve ag blogu da tazeleniyor:
+    // uygulama guncellenince imza degisiyor, uye ev agindan cikinca blok
+    // degisiyor. Ilk gunun degerini saklamak, listenin bugunu degil giris
+    // gununu anlatmasi olurdu.
+    const seen = sessionContextOf(request);
+    await client.query(
+      `UPDATE refresh_token_families
+          SET last_seen_at=now(),
+              user_agent=COALESCE($2, user_agent),
+              ip_prefix=COALESCE($3, ip_prefix)
+        WHERE id=$1`,
+      [row.family_id, seen.userAgent, seen.ipPrefix],
+    );
     await client.query('COMMIT');
     return { data: { user: { id: row.user_id, email: row.email, displayName: row.display_name }, accessToken: await signAccessToken({ id: row.user_id }), refreshToken: replacement } };
   } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -1269,6 +1293,42 @@ app.get('/v1/auth/gatework/members', { config: { rateLimit: { max: 60, timeWindo
         purgedAt: row.purged_at?.toISOString() ?? null,
       })),
       nextCursor: rows.rows.length === input.limit ? rows.rows.at(-1)?.id : null,
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_FORBIDDEN' } });
+  }
+});
+
+// Bir uyenin acik oturumlari. "Uc oturum var" cumlesi calinmis bir oturumu fark
+// etmeye yetmiyordu; cihaz imzasi ve ag blogu, sikayeti gelen bir hesapta neye
+// bakilacagini soyleyen tek sey. Tam IP burada da yok, blogu var.
+app.get('/v1/auth/gatework/members/:id/sessions', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const targetId = (request.params as { id: string }).id;
+  try {
+    const { user, roles } = await requireGateworkRole(request, ['owner', 'security_admin', 'auditor']);
+    const rows = await db.query<{ id: string; user_agent: string | null; ip_prefix: string | null; created_at: Date; last_seen_at: Date | null; expires_at: Date | null }>(
+      `SELECT f.id,f.user_agent,f.ip_prefix,f.created_at,f.last_seen_at,max(t.expires_at) expires_at
+         FROM refresh_token_families f
+         LEFT JOIN refresh_tokens t ON t.family_id=f.id
+        WHERE f.user_id=$1 AND f.revoked_at IS NULL
+        GROUP BY f.id
+        ORDER BY f.last_seen_at DESC NULLS LAST
+        LIMIT 20`,
+      [z.string().uuid().parse(targetId)],
+    );
+    await auditGatework({ actorId: user.id, roles, action: 'member.sessions.list', targetType: 'member', targetId, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id,
+        userAgent: row.user_agent,
+        ipPrefix: row.ip_prefix,
+        createdAt: row.created_at.toISOString(),
+        lastSeenAt: row.last_seen_at?.toISOString() ?? null,
+        // Jetonun omru dolduysa aile hala "iptal edilmemis" ama oturum bitmis
+        // demektir. Ikisini ayirt etmeden liste, kapanmis oturumlari acik
+        // gosterirdi.
+        expiresAt: row.expires_at?.toISOString() ?? null,
+      })),
     };
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_FORBIDDEN' } });
@@ -1473,7 +1533,7 @@ app.post('/v1/auth/passkeys/authentication/verify', { config: { rateLimit: { max
         if (!verified.verified) continue;
         if (!await consumeWebAuthnChallenge(item.challenge, 'authentication')) break;
         await db.query('UPDATE webauthn_credentials SET counter=$1,last_used_at=now() WHERE credential_id=$2 AND counter <= $1', [verified.authenticationInfo.newCounter, credential.credential_id]);
-        const session = await issueSession({ id: credential.user_id, email: credential.email });
+        const session = await issueSession({ id: credential.user_id, email: credential.email }, sessionContextOf(request));
         return { data: { user: { id: credential.user_id, email: credential.email, displayName: credential.display_name }, ...session } };
       } catch { /* challenge mismatch or invalid signature */ }
     }

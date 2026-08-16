@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { delegation } from './gatework';
 import { getSession } from './session';
-import type { CommunityMember, IdentityMember } from './member-labels';
+import type { CommunityMember, IdentityMember, MemberSession } from './member-labels';
 import type { GateworkRole } from './types';
 
 /**
@@ -54,7 +54,7 @@ async function communityFetch(path: string, init: RequestInit = {}) {
 }
 
 export { ROLE_LABELS, ROLE_HINTS, RESTRICTION_LABELS } from './member-labels';
-export type { IdentityMember, CommunityMember } from './member-labels';
+export type { IdentityMember, CommunityMember, MemberSession } from './member-labels';
 
 // The role gates are read off the session on the server and passed to the
 // screen as flags. The services enforce the same rules again; this only decides
@@ -87,6 +87,17 @@ export async function searchMembers(params: { query?: string; role?: string; lim
   if (params.query && params.query.trim().length >= 2) search.set('query', params.query.trim());
   if (params.role) search.set('role', params.role);
   return (await identityFetch(`/v1/auth/gatework/members?${search}`)).data as IdentityMember[];
+}
+
+/**
+ * Bir üyenin açık oturumları.
+ *
+ * Kimlik servisi yenileme jetonu ailelerini zaten tutuyordu; eksik olan, her
+ * ailenin hangi cihazdan ve hangi ağ bloğundan açıldığıydı. Tam IP burada da
+ * yok: saklanan şey /24 (IPv6'da /48) bloğu.
+ */
+export async function memberSessions(userId: string): Promise<MemberSession[]> {
+  return (await identityFetch(`/v1/auth/gatework/members/${userId}/sessions`)).data as MemberSession[];
 }
 
 export async function grantRole(userId: string, raw: unknown) {
