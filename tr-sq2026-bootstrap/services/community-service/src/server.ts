@@ -11,7 +11,7 @@ import { createDatabasePool } from './database.js';
 import { closeServiceBus, isMessagingProjectionConfigured, sendMessagingProjectionEvent } from './infrastructure/azureServiceBus.js';
 import { generateMediaUploadSasUrl, generateMediaReadSasUrl, headMediaBlob } from './infrastructure/azureBlob.js';
 import { getIdentityVerificationKey } from './infrastructure/azureKeyVault.js';
-import { advanceProgress, awardBadge, recomputeScore, reporterTrust, touchStreak } from './journey.js';
+import { AUTOMATED_BADGE_CODES, advanceProgress, awardBadge, recomputeScore, reporterTrust, revokeBadge, touchStreak } from './journey.js';
 import { LOCALITY_MIN_BUCKET, emptyLocalityBucket, suppressSmallBuckets, type LocalityBucket } from './locality.js';
 import { MIN_SESSIONS_FOR_RATE, crashFingerprint, crashFreeRate, redactCrashText } from './stability.js';
 
@@ -2939,6 +2939,8 @@ app.get('/v1/notifications', async (request, reply) => {
            -- Ayni sebeple bir: destek yaniti sayilacak bir kalabalik degil,
            -- tek bir cevap. Talep silinmisse basligi da gelmez ve satir duser.
            WHEN 'support_answer' THEN 1
+           -- Bir rozet bir kere kazanilir; sayilacak bir kalabaligi yok.
+           WHEN 'badge_earned' THEN 1
            ELSE (SELECT count(*) FROM friend_requests f WHERE f.requester_id=n.subject_id AND f.addressee_id=n.user_id AND f.status='pending')
          END actor_count,
          CASE WHEN n.kind='announcement'
@@ -2947,11 +2949,17 @@ app.get('/v1/notifications', async (request, reply) => {
            -- "bir cevap var" demek, cevabi bir tik arkasina saklamak olurdu.
            WHEN n.kind='support_answer'
            THEN (SELECT left(m.body,200) FROM support_messages m WHERE m.request_id=n.subject_id AND m.author_kind='staff' ORDER BY m.created_at DESC LIMIT 1)
+           -- Rozetin kriteri zilde yaziyor: uyeye "bir rozet kazandin" deyip
+           -- nedenini Yolculuk ekranina saklamak, haberi yarim vermek olurdu.
+           WHEN n.kind='badge_earned'
+           THEN (SELECT d.description FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code WHERE b.id=n.subject_id)
          END subject_body,
          CASE WHEN n.kind='announcement'
            THEN (SELECT a.title FROM member_announcements a WHERE a.id=n.subject_id)
            WHEN n.kind='support_answer'
            THEN (SELECT r.subject FROM support_requests r WHERE r.id=n.subject_id)
+           WHEN n.kind='badge_earned'
+           THEN (SELECT d.title FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code WHERE b.id=n.subject_id)
            WHEN n.kind IN ('post_comment','post_like','special_request')
            THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
            -- A friend request has no title of its own; who is asking is the
@@ -6044,6 +6052,245 @@ app.get('/v1/internal/gatework/announcements', async (request, reply) => {
     };
   } catch (error) {
     return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'ANNOUNCEMENTS_UNAVAILABLE', message: 'Duyurular okunamadı.' } });
+  }
+});
+
+// --- Gurbet Yolculugu: rozet katalogu ------------------------------------
+//
+// Katalogda elli civari rozet var, motorun verebildigi on iki tanesi. Aradaki
+// fark bugune kadar hicbir ekranda gorunmuyordu: uye Yolculuk ekraninda "Milli
+// Mac Muhtari - milli mac gunu izleme etkinligi paylastin" satirini goruyor ve
+// o rozeti verecek bir kural yok. Panelde de gorunmuyordu, cunku panelde rozet
+// diye bir sey yoktu.
+//
+// Bu uc uc su soruyu cevapliyor: hangi rozet gercekten dagitiliyor, hangisi
+// katalogda duruyor ama kimseye gitmiyor, ve elle verilmesi gerekenler kime
+// verildi.
+const JOURNEY_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'content_editor', 'analyst', 'auditor'];
+// Bir rozet vermek, uyenin profiline kalici bir sey yazmak ve ona XP eklemek
+// demek. Duyuru kadar geri alinamaz degil - geri alinabiliyor - ama yine de
+// platform adina verilen bir karar, o yuzden editorlerde degil.
+const JOURNEY_GRANT_ROLES: GateworkRole[] = ['owner', 'operations_admin'];
+
+const badgeGrantSchema = z.object({
+  userId: z.string().uuid(),
+  // Gerekce zorunlu. Elle verilen rozetin tek denetlenebilir tarafi bu: alti ay
+  // sonra "bu madalya neden verilmis" diye bakan kisi cevabi burada bulmali.
+  reason: z.string().trim().min(3).max(240),
+});
+
+app.get('/v1/internal/gatework/journey/badges', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, JOURNEY_READ_ROLES);
+    const [catalogue, totals, levels] = await Promise.all([
+      db.query<{
+        code: string; title: string; description: string; icon: string; category: string; tier: string;
+        points: number; is_secret: boolean; manual_only: boolean; holders: string; manual_holders: string;
+        in_progress: string; last_granted_at: Date | null;
+      }>(
+        `SELECT d.code,d.title,d.description,d.icon,d.category,d.tier,d.points,d.is_secret,d.manual_only,
+           (SELECT count(*) FROM member_badges b WHERE b.badge_code=d.code) holders,
+           (SELECT count(*) FROM member_badges b WHERE b.badge_code=d.code AND b.granted_by IS NOT NULL) manual_holders,
+           -- Sayaci ilerlemis ama henuz almamis uyeler. Sifir olmasi "kimse
+           -- ilgilenmiyor" degil, "bu rozetin sayaci hic islemiyor" da olabilir.
+           (SELECT count(*) FROM member_badge_progress p WHERE p.badge_code=d.code AND p.current>0) in_progress,
+           (SELECT max(b.earned_at) FROM member_badges b WHERE b.badge_code=d.code) last_granted_at
+         FROM badge_definitions d
+         ORDER BY d.sort_order, d.code`,
+      ),
+      db.query<{ members: string; granted: string; manual: string }>(
+        `SELECT
+           (SELECT count(*) FROM member_scores) members,
+           (SELECT count(*) FROM member_badges) granted,
+           (SELECT count(*) FROM member_badges WHERE granted_by IS NOT NULL) manual`,
+      ),
+      // Sadece uyesi olan basamaklar. Elli satirlik bos merdiven, kac kisinin
+      // nerede oldugunu gostermek yerine gizler.
+      db.query<{ level: number; title: string; members: string }>(
+        `SELECT s.level, COALESCE(l.title,'Gurbetci') title, count(*) members
+           FROM member_scores s LEFT JOIN journey_levels l ON l.level=s.level
+          GROUP BY s.level, l.title ORDER BY s.level`,
+      ),
+    ]);
+    const totalRow = totals.rows[0]!;
+    const automated = new Set(AUTOMATED_BADGE_CODES);
+    return {
+      data: {
+        members: Number(totalRow.members),
+        granted: Number(totalRow.granted),
+        manualGrants: Number(totalRow.manual),
+        levels: levels.rows.map((row) => ({ level: row.level, title: row.title, members: Number(row.members) })),
+        badges: catalogue.rows.map((row) => ({
+          code: row.code,
+          title: row.title,
+          description: row.description,
+          icon: row.icon,
+          category: row.category,
+          tier: row.tier,
+          points: row.points,
+          isSecret: row.is_secret,
+          manualOnly: row.manual_only,
+          // Panelin en onemli tek alani. `false` olan bir rozet katalogda duran
+          // bir vaat: uye kriterini okuyor, onu saglayacak kural yok.
+          automated: automated.has(row.code),
+          holders: Number(row.holders),
+          manualHolders: Number(row.manual_holders),
+          inProgress: Number(row.in_progress),
+          lastGrantedAt: row.last_granted_at?.toISOString() ?? null,
+        })),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401)
+      .send({ error: { code: 'JOURNEY_BADGES_UNAVAILABLE', message: 'Rozet katalogu okunamadi.' } });
+  }
+});
+
+/// Bir rozeti kimlerin tasidigi.
+///
+/// Elle verilmis satirlar icin gerekce ve veren kisi de geliyor: "Dayanisma
+/// Madalyasi'ni kime, neden verdik" sorusunun cevabi baska hicbir ekranda yok.
+/// Motorun verdigi satirlar da listede, cunku bir rozetin dagitiminin saglikli
+/// olup olmadigi ancak ikisi yan yana gorununce anlasilir.
+app.get('/v1/internal/gatework/journey/badges/:code/holders', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, JOURNEY_READ_ROLES);
+    const code = (request.params as { code: string }).code;
+    const rows = await db.query<{
+      user_id: string; display_name: string | null; earned_at: Date;
+      granted_by: string | null; granted_by_name: string | null; granted_reason: string | null;
+    }>(
+      `SELECT b.user_id,cp.display_name,b.earned_at,b.granted_by,
+              op.display_name granted_by_name,b.granted_reason
+         FROM member_badges b
+         LEFT JOIN community_profile_projection cp ON cp.user_id=b.user_id
+         LEFT JOIN community_profile_projection op ON op.user_id=b.granted_by
+        WHERE b.badge_code=$1
+        ORDER BY b.earned_at DESC
+        LIMIT 100`,
+      [code],
+    );
+    return {
+      data: rows.rows.map((row) => ({
+        userId: row.user_id,
+        // Projeksiyon henuz yetismemis bir uye adsiz gelir. Uydurma bir ad
+        // yerine kimligi kaliyor: operatorun elinde en azindan aranabilir bir
+        // sey olur.
+        displayName: row.display_name,
+        earnedAt: row.earned_at.toISOString(),
+        grantedBy: row.granted_by,
+        grantedByName: row.granted_by_name,
+        grantedReason: row.granted_reason,
+      })),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401)
+      .send({ error: { code: 'BADGE_HOLDERS_UNAVAILABLE', message: 'Rozeti tasiyanlar okunamadi.' } });
+  }
+});
+
+/// Elle rozet verir.
+///
+/// Kurali olan bir rozet buradan verilemez. Motorun dagittigi bir rozeti elle
+/// eklemek, o rozeti kazanmis herkesin emegini karsilastirilamaz hale getirir;
+/// dahasi sayac hala isliyor olur ve uye ilerleme cubugunu doldururken rozetin
+/// zaten kendisinde oldugunu gorur. Reddin sebebi operatore aynen yaziliyor.
+app.post('/v1/internal/gatework/journey/badges/:code/grant', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const code = (request.params as { code: string }).code;
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, JOURNEY_GRANT_ROLES);
+    const input = badgeGrantSchema.parse(request.body);
+    if (AUTOMATED_BADGE_CODES.includes(code)) throw Error('BADGE_AUTOMATED');
+    await client.query('BEGIN');
+    const definition = await client.query('SELECT 1 FROM badge_definitions WHERE code=$1', [code]);
+    if (!definition.rowCount) throw Error('BADGE_UNKNOWN');
+    const member = await client.query('SELECT 1 FROM community_profile_projection WHERE user_id=$1', [input.userId]);
+    if (!member.rowCount) throw Error('MEMBER_UNKNOWN');
+    const granted = await awardBadge(client, input.userId, code, {
+      allowManual: true,
+      grantedBy: actor.actorId,
+      reason: input.reason,
+    });
+    if (granted) {
+      // Sessizce verilen rozet verilmemis sayilir: uye Yolculuk ekranini
+      // kendiliginden acmadikca haberi olmaz.
+      const row = await client.query<{ id: string }>('SELECT id FROM member_badges WHERE user_id=$1 AND badge_code=$2', [input.userId, code]);
+      await client.query(
+        `INSERT INTO member_notifications(user_id,kind,subject_id,last_actor_id)
+         VALUES($1,'badge_earned',$2,$3) ON CONFLICT(user_id,kind,subject_id) DO NOTHING`,
+        [input.userId, row.rows[0]!.id, actor.actorId],
+      );
+    }
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'journey.badge.grant', targetType: 'member',
+      targetId: input.userId, reason: `${code}: ${input.reason}`, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    // `granted:false` bir hata degil: uye rozeti zaten tasiyor. Panelin bunu
+    // "verildi" diye gostermesi, olmayan bir degisikligi bildirmek olurdu.
+    return reply.code(granted ? 201 : 200).send({ data: { code, userId: input.userId, granted } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    const known: Record<string, [number, string]> = {
+      FORBIDDEN: [403, 'Bu islem icin yetkin yok.'],
+      BADGE_AUTOMATED: [409, 'Bu rozetin otomatik kurali var; elle verilemez.'],
+      BADGE_UNKNOWN: [404, 'Boyle bir rozet yok.'],
+      MEMBER_UNKNOWN: [404, 'Uye bulunamadi.'],
+    };
+    const known_entry = known[message] ?? [400, 'Rozet verilemedi.'];
+    return reply.code(known_entry[0] as number).send({ error: { code: 'BADGE_GRANT_REJECTED', message: known_entry[1] as string } });
+  } finally {
+    client.release();
+  }
+});
+
+/// Yanlis verilmis rozeti geri alir.
+///
+/// Sadece elle verilmis olanlar. Motorun verdigi rozeti panelden silmek, uyenin
+/// gercekten yaptigi bir seyi geri almak olurdu; motor da bir sonraki tetikte
+/// ayni rozeti yeniden verirdi.
+app.delete('/v1/internal/gatework/journey/badges/:code/holders/:userId', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const params = request.params as { code: string; userId: string };
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, JOURNEY_GRANT_ROLES);
+    await client.query('BEGIN');
+    const held = await client.query<{ granted_by: string | null; id: string }>(
+      'SELECT granted_by,id FROM member_badges WHERE user_id=$1 AND badge_code=$2',
+      [params.userId, params.code],
+    );
+    if (!held.rowCount) throw Error('BADGE_NOT_HELD');
+    if (held.rows[0]!.granted_by === null) throw Error('BADGE_EARNED');
+    // Zildeki satir da gidiyor: geri alinmis bir rozetin kutlamasi ekranda
+    // kalirsa uye onu hala tasidigini sanir.
+    await client.query("DELETE FROM member_notifications WHERE user_id=$1 AND kind='badge_earned' AND subject_id=$2", [params.userId, held.rows[0]!.id]);
+    await revokeBadge(client, params.userId, params.code);
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'journey.badge.revoke', targetType: 'member',
+      targetId: params.userId, reason: params.code, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    const known: Record<string, [number, string]> = {
+      FORBIDDEN: [403, 'Bu islem icin yetkin yok.'],
+      BADGE_NOT_HELD: [404, 'Uyede bu rozet yok.'],
+      BADGE_EARNED: [409, 'Bu rozet kazanilmis; panelden geri alinamaz.'],
+    };
+    const known_entry = known[message] ?? [400, 'Rozet geri alinamadi.'];
+    return reply.code(known_entry[0] as number).send({ error: { code: 'BADGE_REVOKE_REJECTED', message: known_entry[1] as string } });
+  } finally {
+    client.release();
   }
 });
 

@@ -76,6 +76,13 @@ async function purgeMemberData(client: pg.PoolClient, userId: string) {
   // Bildirim tercihleri. Uyenin neyi gormek istemedigi de onun hakkinda bir
   // bilgi ve hesabi silinen birinin geride birakacagi bir tercih yok.
   await client.query('DELETE FROM member_notification_preferences WHERE user_id=$1', [userId]);
+  // Rozetler ve yarim kalmis sayaclar. Puan satiri zaten yukarida silindi ama
+  // rozetler kalmisti - yani hesabi silinen bir uye panelin "bu rozeti kimler
+  // tasiyor" listesinde adsiz bir kimlik olarak durmaya devam ediyordu. Elle
+  // verilen satirlarda ustelik bir de gerekce yaziyor ve o cumle uyeyi anlatan
+  // bir metin.
+  await client.query('DELETE FROM member_badges WHERE user_id=$1', [userId]);
+  await client.query('DELETE FROM member_badge_progress WHERE user_id=$1', [userId]);
 }
 
 async function processEvent(event: Event) {

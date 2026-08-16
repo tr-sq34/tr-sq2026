@@ -80,6 +80,9 @@ class AppNotificationDto {
           'turksquare://announcement/$subjectId',
         // Destek cevabının gideceği yer belli: yazışmanın kendisi.
         AppNotificationType.supportAnswer => 'turksquare://support/$subjectId',
+        // Rozet dolabı. Konu kimliği rozetin kendisi değil o üyedeki kaydı,
+        // ama gidilecek yer aynı: Yolculuk ekranının Rozetler sekmesi.
+        AppNotificationType.badgeEarned => 'turksquare://badge/$subjectId',
         _ => 'turksquare://post/$subjectId',
       }),
       isRead: isRead,
@@ -95,6 +98,7 @@ class AppNotificationDto {
     'friend_request' => AppNotificationType.friendRequest,
     'announcement' => AppNotificationType.announcement,
     'support_answer' => AppNotificationType.supportAnswer,
+    'badge_earned' => AppNotificationType.badgeEarned,
     _ => AppNotificationType.system,
   };
 
@@ -106,6 +110,7 @@ class AppNotificationDto {
     AppNotificationType.specialRequest => 'Yeni istek',
     AppNotificationType.friendRequest => 'Arkadaşlık isteği',
     AppNotificationType.supportAnswer => 'Destek talebin yanıtlandı',
+    AppNotificationType.badgeEarned => 'Yeni rozet kazandın',
     _ => 'Bildirim',
   };
 
@@ -140,6 +145,12 @@ class AppNotificationDto {
         (body == null || body!.trim().isEmpty)
             ? '"$subject" talebine destek ekibi yanıt yazdı.'
             : body!.trim(),
+      // Rozetin adı başlıkta, kriteri gövdede. "Bir rozet kazandın" deyip
+      // hangisi olduğunu Yolculuk ekranına saklamak haberi yarım vermek olurdu.
+      AppNotificationType.badgeEarned =>
+        (body == null || body!.trim().isEmpty)
+            ? '"$subject" rozetini kazandın.'
+            : '$subject — ${body!.trim()}',
       _ => subject,
     };
   }

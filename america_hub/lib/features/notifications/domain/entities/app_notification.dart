@@ -5,7 +5,7 @@
 ///
 /// [supportAnswer] de metnini sunucudan alıyor: destek ekibinin yazdığı cevap
 /// bildirimin gövdesinde geliyor, satıra dokunmak yazışmanın kendisini açıyor.
-enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, announcement, supportAnswer, system }
+enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, announcement, supportAnswer, badgeEarned, system }
 
 class AppNotification {
   const AppNotification({
