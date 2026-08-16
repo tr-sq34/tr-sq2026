@@ -1,8 +1,8 @@
 'use client';
 import { useCallback, useMemo, useState } from 'react';
-import { BadgeCheck, Building2, FileText, Gavel, MapPinned, MessagesSquare, RefreshCw, Sparkles, UserPlus, Users } from 'lucide-react';
+import { BadgeCheck, BellOff, Building2, FileText, Gavel, MapPinned, MessagesSquare, RefreshCw, Sparkles, UserPlus, Users } from 'lucide-react';
 import { api, errorText } from '@/lib/api-client';
-import { count, percent, regionLabel, weekLabel, type AccountAnalytics, type CommunityAnalytics, type LocationAnalytics } from '@/lib/analytics-labels';
+import { count, percent, regionLabel, weekLabel, NOTIFICATION_KIND_LABELS, type AccountAnalytics, type CommunityAnalytics, type LocationAnalytics } from '@/lib/analytics-labels';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type ColumnDef } from '@/components/ui/data-table';
@@ -173,6 +173,53 @@ export function AnalyticsDesk({ initialAccounts, initialCommunity, initialLocati
           <StatCard label="Forum yanıtı" value={count(community.forumRepliesLast7Days)} detail={`son 7 gün · ${count(community.forumTopics)} konu`} icon={MessagesSquare} tone="neutral" />
           <StatCard label="Yayındaki ilan" value={count(community.activeListings)} detail={`${count(community.liveStories)} açık Story`} icon={Gavel} tone="neutral" />
         </div>
+      )}
+
+      {community && (
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Bildirim tercihleri</CardTitle>
+              <CardDescription>
+                Üyenin uygulamadan kapattığı zil türleri. Kimin kapattığı değil, kaç kişinin kapattığı gösterilir.
+                Bir türün yüksek olması o bildirimin rahatsız ettiğinin tek ölçülebilir işaretidir.
+              </CardDescription>
+            </div>
+            <BellOff size={17} className="text-brand-300" />
+          </CardHeader>
+          <CardContent>
+            {!community.notificationMutes ? (
+              // Sıfır çizmiyoruz: alan gelmediyse ölçüm yapılmamıştır, kimsenin
+              // kapatmadığı anlamına gelmez.
+              <p className="text-sm text-warning">
+                Topluluk servisi bu alanı henüz bildirmiyor. Bu, hiç kimsenin bildirim kapatmadığı anlamına gelmez — ölçüm gelmedi.
+              </p>
+            ) : (
+              <>
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {Object.entries(NOTIFICATION_KIND_LABELS).map(([kind, label]) => {
+                    const muted = community.notificationMutes!.byKind[kind] ?? 0;
+                    const total = community.notificationMutes!.totalMembers;
+                    return (
+                      <div key={kind} className="flex items-center justify-between gap-3 rounded-lg border border-hairline bg-surface-raised px-3.5 py-3">
+                        <span className="text-sm text-ink-muted">{label}</span>
+                        <span className="flex items-center gap-2 text-sm">
+                          <span className="tabular-nums font-medium text-ink">{count(muted)}</span>
+                          <span className="text-xs text-ink-faint">{percent(muted, total)}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-4 rounded-lg border border-hairline bg-canvas p-4 text-xs text-ink-muted">
+                  Paydası {count(community.notificationMutes.totalMembers)} profil.
+                  Duyuru ve destek yanıtı bu listede yok: ikisi de kapatılamıyor, o yüzden global duyurunun ulaştığı
+                  üye sayısı bu tercihlerden etkilenmez.
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {!weeks.empty && (

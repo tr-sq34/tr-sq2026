@@ -35,6 +35,7 @@ import '../../../news/application/news_controller.dart';
 import '../../../news/presentation/screens/news_article_screen.dart';
 import '../../../news/presentation/screens/news_center_screen.dart';
 import '../../../notifications/application/notifications_controller.dart';
+import '../../../notifications/presentation/screens/notification_preferences_screen.dart';
 import '../../../notifications/presentation/screens/notifications_screen.dart';
 import '../../../promotions/application/promotions_controller.dart';
 import '../../../promotions/domain/entities/promotion.dart';
@@ -473,6 +474,14 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   void _openSupport() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => SupportScreen(controller: widget.supportController),
+    ),
+  );
+
+  void _openNotificationPreferences() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => NotificationPreferencesScreen(
+        controller: widget.notificationsController,
+      ),
     ),
   );
 
@@ -1099,14 +1108,20 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                   ),
 
                   // 7. BİLDİRİM TERCİHLERİ
+                  //
+                  // Alt yazı değişti: "Anlık bildirim & e-posta" yazıyordu ve
+                  // ikisi de gönderilmiyor. Ekranın gerçekten yönettiği şey
+                  // uygulama içindeki zil.
                   _buildDrawerItem(
                     title: 'Bildirim Tercihleri',
-                    subtitle: 'Anlık bildirim & e-posta',
+                    subtitle: 'Zilde neyi göreceğini sen seç',
                     icon: Icons.notifications_none_rounded,
-                    iconBg: Colors.white.withValues(alpha: 0.05),
-                    iconColor: const Color(0xFF94A3B8),
-                    comingSoon: true,
-                    onTap: () {},
+                    iconBg: AppColors.primary.withValues(alpha: 0.15),
+                    iconColor: const Color(0xFF818CF8),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openNotificationPreferences();
+                    },
                   ),
 
                   const SizedBox(height: 4),

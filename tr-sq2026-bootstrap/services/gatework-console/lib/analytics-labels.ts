@@ -29,6 +29,22 @@ export type CommunityAnalytics = {
   activeListings: number;
   liveStories: number;
   weeks: { weekStart: string; posts: number; forumTopics: number; listings: number }[];
+  // Optional because a console build can be live for a few minutes before the
+  // service that answers with this field is. Absent means "this service does
+  // not report it yet", which the screen says instead of drawing zeros.
+  notificationMutes?: { totalMembers: number; byKind: Record<string, number> };
+};
+
+// Zilde üyenin kapatabildiği türler. Duyuru ve destek yanıtı listede yok çünkü
+// kapatılamıyor: biri hesabı ilgilendiren bildirim, diğeri üyenin kendi sorduğu
+// sorunun cevabı.
+export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
+  post_comment: 'Gönderiye yorum',
+  post_like: 'Gönderi beğenisi',
+  listing_save: 'İlan kaydetme',
+  listing_like: 'İlan beğenisi',
+  special_request: 'Özel istek',
+  friend_request: 'Arkadaşlık isteği',
 };
 
 // `threshold` and the two `suppressed` totals are part of the data, not a

@@ -1,4 +1,5 @@
 import '../../domain/entities/app_notification.dart';
+import '../../domain/entities/notification_preference.dart';
 import '../../domain/repositories/notification_repository.dart';
 
 class MockNotificationRepository implements NotificationRepository {
@@ -14,4 +15,18 @@ class MockNotificationRepository implements NotificationRepository {
 
   @override
   Future<void> markRead(String notificationId) async { final index = _items.indexWhere((item) => item.id == notificationId); if (index >= 0) _items[index] = _items[index].copyWith(isRead: true); }
+
+  var _preferences = const NotificationPreferences.allEnabled();
+
+  @override
+  Future<NotificationPreferences> getPreferences() async => _preferences;
+
+  @override
+  Future<NotificationPreferences> savePreferences(Map<String, bool> changes) async {
+    for (final entry in changes.entries) {
+      final kind = NotificationPreferenceKind.values.where((value) => value.wire == entry.key).firstOrNull;
+      if (kind != null) _preferences = _preferences.withKind(kind, entry.value);
+    }
+    return _preferences;
+  }
 }

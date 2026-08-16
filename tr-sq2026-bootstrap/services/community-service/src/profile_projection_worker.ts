@@ -73,6 +73,9 @@ async function purgeMemberData(client: pg.PoolClient, userId: string) {
   // yok. Mesajlar zincirleme gidiyor. Islemin yapildigi gercegi denetim
   // kaydinda kaliyor - orada tasinan sey metin degil, kim ne zaman cevapladi.
   await client.query('DELETE FROM support_requests WHERE member_id=$1', [userId]);
+  // Bildirim tercihleri. Uyenin neyi gormek istemedigi de onun hakkinda bir
+  // bilgi ve hesabi silinen birinin geride birakacagi bir tercih yok.
+  await client.query('DELETE FROM member_notification_preferences WHERE user_id=$1', [userId]);
 }
 
 async function processEvent(event: Event) {
