@@ -18,6 +18,7 @@ import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../journey/application/journey_controller.dart';
+import '../../../journey/domain/entities/journey_action.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
@@ -40,7 +41,9 @@ import '../../../promotions/domain/entities/promotion.dart';
 import '../../../promotions/presentation/widgets/promotion_detail_sheet.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
 import '../../../community/presentation/screens/story_viewer_screen.dart';
+import '../../../community/presentation/widgets/story_composer_sheet.dart';
 import '../../../profile/presentation/screens/account_settings_screen.dart';
+import '../../../profile/presentation/screens/location_edit_screen.dart';
 import '../../../profile/presentation/screens/member_profile_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
@@ -190,6 +193,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       tabRequests: _profileTab,
       commentsController: widget.commentsController,
       contentModerationRepository: widget.contentModerationRepository,
+      onJourneyAction: _runJourneyAction,
     ),
   ];
 
@@ -230,6 +234,61 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       builder: (_) => JourneyScreen(
         controller: widget.journeyController,
         initialTab: JourneyTab.badges,
+        onTaskAction: _runJourneyAction,
+      ),
+    ),
+  );
+
+  /// Bir görev kartına dokunulduğunda işin yapıldığı ekranı açar.
+  ///
+  /// Görev listesi kabuğun içinde değil, onun üstündeki bir sayfada duruyor;
+  /// o yüzden önce Yolculuk ekranı kapanıyor. Kapanmasaydı sekme değişimi
+  /// arkada olur, üye hâlâ görev listesine bakıyor olurdu.
+  Future<void> _runJourneyAction(JourneyDestination destination) async {
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+    if (!mounted) return;
+    switch (destination) {
+      case JourneyDestination.location:
+        await _editLocation();
+      case JourneyDestination.profileEdit:
+        _profileTab.value = 0;
+        setState(() => _currentIndex = 3);
+      case JourneyDestination.composer:
+        _openComposer();
+      case JourneyDestination.feed:
+        setState(() => _currentIndex = 1);
+      case JourneyDestination.forum:
+        _openForum();
+      case JourneyDestination.messages:
+        _openMessages();
+      case JourneyDestination.storyComposer:
+        setState(() => _currentIndex = 1);
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          backgroundColor: Colors.transparent,
+          barrierColor: const Color(0xCC000000),
+          builder: (_) => StoryComposerSheet(
+            storyController: widget.storyController,
+            mediaUploadController: widget.mediaUploadController,
+            promotionsController: widget.promotionsController,
+          ),
+        );
+    }
+  }
+
+  /// "Haritaya İğne Koy" görevinin gittiği yer. Kayıt sırasındaki konum
+  /// adımının aynısı; kaydedince profil şehri de tazeleniyor.
+  Future<void> _editLocation() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => LocationEditScreen(
+        authController: widget.authController,
+        onSaved: () async {
+          await widget.profileController.load();
+          await widget.journeyController.load();
+        },
       ),
     ),
   );

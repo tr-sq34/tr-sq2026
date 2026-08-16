@@ -17,6 +17,7 @@ import '../../../community/domain/repositories/content_moderation_repository.dar
 import '../../../community/presentation/widgets/post_comments.dart';
 import '../../../journey/application/journey_controller.dart';
 import '../../../journey/domain/entities/journey.dart';
+import '../../../journey/domain/entities/journey_action.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 import '../../application/friendship_controller.dart';
@@ -50,6 +51,7 @@ class ProfileScreen extends StatefulWidget {
     this.tabRequests,
     this.commentsController,
     this.contentModerationRepository,
+    this.onJourneyAction,
   });
 
   final ProfileController controller;
@@ -70,6 +72,11 @@ class ProfileScreen extends StatefulWidget {
   /// verilmediyse paylaşım ekranı yorum sayısını düz bir bilgi olarak yazıyor.
   final CommunityCommentsController? commentsController;
   final ContentModerationRepository? contentModerationRepository;
+
+  /// Yolculuk ekranındaki bir göreve dokunulduğunda o işin yapıldığı ekranı
+  /// açan kabuk. Sekme değiştirmek ya da düzenleyici açmak profilin işi değil,
+  /// bu yüzden karar yukarıda veriliyor.
+  final void Function(JourneyDestination destination)? onJourneyAction;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -212,6 +219,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           builder: (_) => JourneyScreen(
             controller: widget.journeyController,
             initialTab: tab,
+            onTaskAction: widget.onJourneyAction,
           ),
         ),
       );
