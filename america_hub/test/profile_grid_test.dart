@@ -1,3 +1,4 @@
+import 'package:america_hub/features/profile/presentation/screens/archive_screen.dart';
 import 'package:america_hub/features/profile/presentation/screens/profile_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -75,9 +76,19 @@ void main() {
 
     expect(onProfile('DMV randevusu sabah 7\'de kolay.'), findsNothing);
 
-    // Arşiv sekmesinde duruyor: arşivlemek silmek değil.
-    await tester.tap(onProfile('Arşiv'));
+    // Arşivde duruyor: arşivlemek silmek değil. Arşivin yeri artık ızgaranın
+    // üstündeki geçiş değil, çeker menüdeki hesap ayarları.
+    await tester.tap(find.byIcon(Icons.menu_rounded));
     await settle(tester);
-    expect(onProfile('DMV randevusu sabah 7\'de kolay.'), findsOneWidget);
+    // Menü uzun; satır ekranın en altında, alt şeridin altında kalıyor.
+    await tester.dragFrom(const Offset(150, 600), const Offset(0, -220));
+    await settle(tester);
+    await tester.tap(find.text('Profil ve Hesap Ayarları').last);
+    await settle(tester);
+    await tester.tap(find.text('Arşiv'));
+    await settle(tester);
+
+    expect(find.byType(ArchiveScreen), findsOneWidget);
+    expect(find.text('DMV randevusu sabah 7\'de kolay.'), findsOneWidget);
   });
 }

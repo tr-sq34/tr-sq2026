@@ -933,6 +933,17 @@ const FEED_PURPOSE: Record<string, string> = { imece_help: 'imeceHelp', traveler
 const NEWS_POST_LIVE = `EXISTS(SELECT 1 FROM news_articles na WHERE na.id=p.news_article_id AND na.deleted_at IS NULL AND na.published_at IS NOT NULL AND na.published_at<=now())`;
 const FEED_NEWS_VISIBLE = `(p.news_article_id IS NULL OR ${NEWS_POST_LIVE})`;
 
+/// Yazarin hesabi acik mi.
+///
+/// Hesabini donduran ya da silmek isteyen uyenin paylasimlari akista durmaya
+/// devam ediyordu: Identity oturumu kesiyor, Community ise bunu hic duymuyordu.
+/// Paylasimlar silinmiyor - dondurma geri alinabilir bir karar ve geri donen
+/// uye kendi gecmisini bulmali - yalnizca baskalarina gorunmuyor.
+/// Uyenin kendi paylasimi bu kuralin disinda: silmeden once ne yazdigini
+/// gormesi gerekebilir.
+const AUTHOR_ACCOUNT_OPEN = (viewerParam: string) =>
+  `(p.author_id=${viewerParam} OR NOT EXISTS(SELECT 1 FROM community_profile_projection ap WHERE ap.user_id=p.author_id AND ap.closed_at IS NOT NULL))`;
+
 const FEED_NEWS = `(SELECT json_build_object('id',na.id,'title',na.title,'category',na.category) FROM news_articles na WHERE na.id=p.news_article_id) news`;
 
 /// The feed's columns and the feed's JSON, named so that a single post can be
@@ -986,7 +997,7 @@ const feedPollJson = (poll: FeedPollRow | null) => poll && poll.options?.length
 app.get('/v1/community/feed', async (request, reply) => {
   try {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
-    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND ${AUTHOR_ACCOUNT_OPEN('$1')} AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
     if (input.mode === 'following') where += ` AND EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.active)`;
     // "Nearby" is the chosen state, not a radius. The original predicate asked
     // for posts within 50km of viewer_location_projection.approximate_cell, and
@@ -1235,7 +1246,7 @@ const postCommentJson = (row: PostCommentRow) => ({
  * the author, who can always read under their own post.
  */
 const postReadableWhere = (postParam: string, viewerParam: string) =>
-  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND ${AUTHOR_ACCOUNT_OPEN(viewerParam)} AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
 
 /**
  * One post, by id.
@@ -3148,7 +3159,13 @@ app.get('/v1/community/profiles/:userId', async (request, reply) => {
     // A blocked profile answers 404, not 403: confirming the account exists
     // would make the block a discovery tool.
     if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
-    const row = await db.query<ProfileRow>(`${PROFILE_SELECT} WHERE p.user_id=$1`, [ownerId]);
+    // Kapali hesap da 404: "bu hesap donduruldu" demek, kimin ara verdigini
+    // herkese duyurmak olurdu. Uyenin kendisi kendi profilini gormeye devam
+    // ediyor - silmeden once ne biraktigina bakabilmeli.
+    const row = await db.query<ProfileRow>(
+      `${PROFILE_SELECT} WHERE p.user_id=$1 AND (p.user_id=$2 OR p.closed_at IS NULL)`,
+      [ownerId, viewerId],
+    );
     if (!row.rows[0]) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
     return { data: await toProfileDto(row.rows[0], access) };
   } catch (error) {
@@ -3266,6 +3283,84 @@ app.get('/v1/community/profiles/username-available', { config: { rateLimit: { ma
 // The grid behind the "Paylasimlar" tab. Archived posts are visible to their
 // author and to nobody else, which is the difference between archiving and
 // deleting: the member keeps them, the app stops showing them.
+/// Profil ızgarasının imleci. Akışınkinden ayrı, çünkü bu liste önce
+/// sabitlenmişleri sıralıyor ve devam edilecek yer bunu da bilmek zorunda.
+const profileCursorEncode = (row: { pinned_at: Date | null; created_at: Date; id: string }) =>
+  Buffer.from(`${row.pinned_at ? 1 : 0}|${row.created_at.toISOString()}|${row.id}`).toString('base64url');
+
+const profileCursorDecode = (cursor?: string) => {
+  if (!cursor) return null;
+  try {
+    const [pinned, createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    if (pinned === undefined || !createdAt || !id) throw Error();
+    return { pinned: pinned === '1', createdAt, id };
+  } catch {
+    throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 });
+  }
+};
+
+/// Aynı anda kaç paylaşım sabitlenebilir. Instagram'da üç; buradaki sebep de
+/// aynı: ızgaranın ilk satırı bir seçki, ikinci bir akış değil.
+const MAX_PINNED_POSTS = 3;
+
+const postSettingsBody = z.object({
+  pinned: z.boolean().optional(),
+  commentsEnabled: z.boolean().optional(),
+}).refine((value) => value.pinned !== undefined || value.commentsEnabled !== undefined, {
+  message: 'Değiştirilecek bir ayar yok.',
+});
+
+/// Sabitleme ve yorumlara kapatma tek uçta: ikisi de paylaşımın sahibine ait
+/// ayarlar ve ikisi de aynı sahiplik denetiminden geçiyor.
+app.patch('/v1/community/posts/:id/settings', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = postSettingsBody.parse(request.body);
+
+    const owned = await db.query<{ pinned_at: Date | null; comments_enabled: boolean }>(
+      'SELECT pinned_at,comments_enabled FROM community_posts WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',
+      [id, userId],
+    );
+    if (!owned.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+
+    if (input.pinned === true && owned.rows[0].pinned_at === null) {
+      const pinned = await db.query<{ count: string }>(
+        'SELECT count(*) FROM community_posts WHERE author_id=$1 AND pinned_at IS NOT NULL AND deleted_at IS NULL',
+        [userId],
+      );
+      // Sessizce en eskisini düşürmek yerine hayır deniyor: üye hangisinden
+      // vazgeçtiğini kendi seçmeli.
+      if (Number(pinned.rows[0]?.count ?? 0) >= MAX_PINNED_POSTS) {
+        return reply.code(409).send({
+          error: {
+            code: 'PIN_LIMIT_REACHED',
+            message: `En fazla ${MAX_PINNED_POSTS} paylaşım sabitlenebilir. Önce birinin sabitini kaldır.`,
+          },
+        });
+      }
+    }
+
+    const updated = await db.query<{ pinned_at: Date | null; comments_enabled: boolean }>(
+      `UPDATE community_posts
+          SET pinned_at=CASE WHEN $3::boolean IS NULL THEN pinned_at WHEN $3::boolean THEN COALESCE(pinned_at,now()) ELSE NULL END,
+              comments_enabled=COALESCE($4::boolean,comments_enabled)
+        WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL
+        RETURNING pinned_at,comments_enabled`,
+      [id, userId, input.pinned ?? null, input.commentsEnabled ?? null],
+    );
+    const row = updated.rows[0];
+    if (!row) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Arşivlenmiş bir paylaşım sabitlenmiş kalabilir; ızgarada görünmediği için
+    // bir zararı yok, arşivden çıktığında yine başa gelir.
+    return { data: { pinned: row.pinned_at !== null, commentsEnabled: row.comments_enabled } };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({
+      error: { code: 'POST_SETTINGS_FAILED', message: 'Paylaşım ayarı değiştirilemedi.' },
+    });
+  }
+});
+
 app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
   try {
     const viewerId = await viewer(request.headers);
@@ -3276,14 +3371,16 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
     if (input.state === 'archived' && !access.self) return reply.code(403).send({ error: { code: 'ARCHIVE_IS_PRIVATE', message: 'Arşiv yalnızca sahibine açıktır.' } });
     if (!access.full) return { data: [], meta: { nextCursor: null, locked: true } };
 
-    const cursor = decodeCursor(input.cursor);
+    const cursor = profileCursorDecode(input.cursor);
     const params: unknown[] = [ownerId, viewerId];
     let where = `p.author_id=$1 AND p.deleted_at IS NULL AND p.moderation_state='active' AND p.archived_at IS ${input.state === 'archived' ? 'NOT NULL' : 'NULL'}`;
     if (!access.self) where += " AND p.visibility='public'";
-    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    // İmleç sabitlik bayrağını da taşıyor: sıralama ondan başladığı için,
+    // taşımasaydı sabitlenmiş paylaşım ikinci sayfanın da başında çıkardı.
+    if (cursor) { params.push(cursor.pinned, cursor.createdAt, cursor.id); where += ` AND (p.pinned_at IS NOT NULL,p.created_at,p.id) < ($${params.length - 2}::boolean,$${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const rows = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; visibility: string; likes: string; comments: string; is_liked: boolean; thumbnail_url: string | null; safe_url: string | null }>(
-      `SELECT p.id,p.created_at,p.body,p.location_label,p.visibility,
+    const rows = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; visibility: string; likes: string; comments: string; is_liked: boolean; thumbnail_url: string | null; safe_url: string | null; pinned_at: Date | null; comments_enabled: boolean }>(
+      `SELECT p.id,p.created_at,p.body,p.location_label,p.visibility,p.pinned_at,p.comments_enabled,
               (SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,
               (SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,
               EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$2 AND x.kind='like') is_liked,
@@ -3291,7 +3388,7 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
               (SELECT m.safe_url FROM post_media_refs r JOIN media_assets m ON m.id=r.media_id WHERE r.post_id=p.id AND m.status='ready' ORDER BY r.ordinal LIMIT 1) safe_url
          FROM community_posts p
         WHERE ${where}
-        ORDER BY p.created_at DESC,p.id DESC
+        ORDER BY (p.pinned_at IS NOT NULL) DESC,p.created_at DESC,p.id DESC
         LIMIT $${params.length}`,
       params,
     );
@@ -3306,9 +3403,11 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
       comments: Number(post.comments),
       isLiked: post.is_liked,
       archived: input.state === 'archived',
+      pinned: post.pinned_at !== null,
+      commentsEnabled: post.comments_enabled,
       thumbnailUrl: post.thumbnail_url ? await mediaObjectUrl(post.thumbnail_url) : post.safe_url ? await mediaObjectUrl(post.safe_url) : null,
     })));
-    return { data, meta: { nextCursor: rows.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null, locked: false } };
+    return { data, meta: { nextCursor: rows.rows.length > input.limit ? profileCursorEncode(page[page.length - 1]!) : null, locked: false } };
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({ error: { code: 'PROFILE_POSTS_UNAVAILABLE', message: 'Paylaşımlar yüklenemedi.' } });
   }

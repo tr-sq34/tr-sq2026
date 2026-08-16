@@ -42,6 +42,11 @@ const passwordSafetyEndpoint = required('PASSWORD_SAFETY_FUNCTION_NAME');
  */
 const OUTBOX_ROUTES: ReadonlyArray<{ queue: OutboxQueue; eventType: string }> = [
   { queue: 'community-profile', eventType: 'community.profile_upserted' },
+  // Hesap durumu profil kuyrugundan gidiyor: ikisi de ayni projeksiyon satirina
+  // dokunuyor ve ayni kuyrukta kaldiklari surece sirali geliyorlar. Ayri bir
+  // kuyruk, "donduruldu" olayinin "profil guncellendi" olayini gecmesine ve
+  // kapali bir hesabin geri acilmis gibi gorunmesine izin verirdi.
+  { queue: 'community-profile', eventType: 'community.account_status_changed' },
   { queue: 'messaging-projection', eventType: 'messaging.user_upserted' },
 ];
 const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken'] } });
@@ -102,6 +107,10 @@ const registerSchema = z.object({ name: z.string().trim().min(2).max(100), email
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(128) });
 const refreshSchema = z.object({ refreshToken: z.string().min(32).max(512) });
 const logoutSchema = z.object({ refreshToken: z.string().min(32).max(512) });
+// Silmek geri alinamayan bir karar; dondurmak degil. Bu yuzden silme sifre
+// soruyor ve dondurma sormuyor: acik kalmis bir telefonu eline geciren birinin
+// hesabi kapatabilmesi ile silebilmesi ayni sey degil.
+const accountDeleteSchema = z.object({ password: z.string().min(1).max(128) });
 const actionSchema = z.object({ token: z.string().min(32).max(512) });
 const emailSchema = z.object({ email: z.string().trim().email().max(254) });
 const emailVerificationCodeSchema = emailSchema.extend({ code: z.string().regex(/^\d{6}$/) });
@@ -637,9 +646,66 @@ async function requireUser(request: { headers: { authorization?: string } }) {
   const verified = await jwtVerify(token, kmsPublicKey, { issuer, audience, algorithms: ['RS256'] });
   const userId = verified.payload.sub;
   if (!userId) throw new Error('UNAUTHORIZED');
-  const result = await db.query<{ id: string; email: string; display_name: string }>('SELECT id,email,display_name FROM users WHERE id=$1 AND email_verified_at IS NOT NULL', [userId]);
+  // Dondurulmus ya da silinmeyi bekleyen hesap, elindeki erisim jetonu henuz
+  // sure dolmadigi icin calismaya devam etmesin: jeton omru dakikalarla olculse
+  // de "hesabimi kapattim" diyen uye o dakikalarda hala yaziyor olurdu.
+  const result = await db.query<{ id: string; email: string; display_name: string }>(
+    'SELECT id,email,display_name FROM users WHERE id=$1 AND email_verified_at IS NOT NULL AND deactivated_at IS NULL AND deletion_requested_at IS NULL',
+    [userId],
+  );
   if (!result.rows[0]) throw new Error('UNAUTHORIZED');
   return result.rows[0];
+}
+
+/// Hesabin kapatilmasi: oturumlar kesiliyor, Community ile Messaging haber
+/// aliyor. Iki yazi da tek islemde, cunku yarim kalmis bir kapatma - oturumu
+/// dusmus ama profili hala akista duran bir uye - en kotu ihtimal.
+async function closeAccount(
+  userId: string,
+  displayName: string,
+  reason: 'frozen' | 'deletion_pending',
+) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      reason === 'frozen'
+        ? 'UPDATE users SET deactivated_at=COALESCE(deactivated_at, now()),updated_at=now() WHERE id=$1'
+        : 'UPDATE users SET deletion_requested_at=COALESCE(deletion_requested_at, now()),updated_at=now() WHERE id=$1',
+      [userId],
+    );
+    await client.query('UPDATE refresh_token_families SET revoked_at=COALESCE(revoked_at, now()) WHERE user_id=$1', [userId]);
+    await queueAccountStatus(client, userId, reason);
+    await queueMessagingUserUpsert(client, { id: userId, displayName, active: false });
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+/// Hesabin geri acilmasi. Giris yapmak hem dondurmayi hem de silme talebini
+/// geri aliyor: "vazgectim" demenin baska bir yolunu kurmak, sifresini bilen
+/// uyeye ikinci bir sinav vermek olurdu. Hangi durumdan donuldugu geri
+/// donduruluyor ki uygulama dogru cumleyi yazabilsin.
+async function reopenAccount(user: { id: string; display_name: string }) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE users SET deactivated_at=NULL,deletion_requested_at=NULL,updated_at=now() WHERE id=$1', [user.id]);
+    await queueAccountStatus(client, user.id, 'active');
+    await queueMessagingUserUpsert(client, { id: user.id, displayName: user.display_name, active: true });
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+async function queueAccountStatus(
+  client: pg.PoolClient,
+  userId: string,
+  status: 'active' | 'frozen' | 'deletion_pending',
+) {
+  await client.query(
+    `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
+     VALUES('user_account',$1,'community.account_status_changed',$2::jsonb)`,
+    [userId, JSON.stringify({ userId, status })],
+  );
 }
 
 type GateworkRole = 'owner' | 'security_admin' | 'operations_admin' | 'content_editor' | 'moderator' | 'analyst' | 'auditor';
@@ -1045,13 +1111,51 @@ app.post('/v1/auth/password-reset/confirm', { config: { rateLimit: { max: 8, tim
 
 app.post('/v1/auth/login', { config: { rateLimit: { max: 8, timeWindow: '15 minutes' } } }, async (request, reply) => {
   const input = loginSchema.parse(request.body);
-  const result = await db.query<{ id: string; email: string; display_name: string; password_hash: string; email_verified_at: Date | null }>('SELECT id,email,display_name,password_hash,email_verified_at FROM users WHERE email=$1', [input.email.toLowerCase()]);
+  const result = await db.query<{ id: string; email: string; display_name: string; password_hash: string; email_verified_at: Date | null; deactivated_at: Date | null; deletion_requested_at: Date | null }>('SELECT id,email,display_name,password_hash,email_verified_at,deactivated_at,deletion_requested_at FROM users WHERE email=$1', [input.email.toLowerCase()]);
   const user = result.rows[0];
   const valid = await verifyPassword(input.password, user?.password_hash);
   if (!valid) return reply.code(401).send({ error: { code: 'INVALID_CREDENTIALS', message: 'E-posta veya şifre hatalı.' } });
   if (!user.email_verified_at) return reply.code(403).send({ error: { code: 'EMAIL_VERIFICATION_REQUIRED', message: 'E-posta doğrulaması gerekli.' } });
+  // Kapali bir hesaba dogru sifreyle girmek onu geri aciyor. Uygulamanin
+  // "geri hos geldin, silme talebin iptal edildi" diyebilmesi icin hangi
+  // durumdan donuldugu de cevapta gidiyor.
+  const restored = user.deletion_requested_at ? 'deletion' : user.deactivated_at ? 'freeze' : null;
+  if (restored) await reopenAccount(user);
   const session = await issueSession(user);
-  return { data: { user: { id: user.id, email: user.email, displayName: user.display_name }, ...session } };
+  return { data: { user: { id: user.id, email: user.email, displayName: user.display_name }, restoredFrom: restored, ...session } };
+});
+
+// Hesabi dondurma. Silme degil: paylasimlar, mesajlar ve arkadasliklar oldugu
+// gibi duruyor, yalnizca hesap kapali. Geri acmanin yolu giris yapmak.
+app.post('/v1/auth/account/freeze', async (request, reply) => {
+  try {
+    const user = await requireUser(request);
+    await closeAccount(user.id, user.display_name, 'frozen');
+    return reply.code(204).send();
+  } catch {
+    return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
+  }
+});
+
+// Hesabi silme talebi. Satir hemen silinmiyor: otuz gunluk bir bekleme var,
+// hem vazgecme hakki icin hem de baska uyelerin sohbetlerinde duran isim gibi
+// baglarin duzgun cozulmesi icin.
+const ACCOUNT_DELETION_GRACE_DAYS = 30;
+app.post('/v1/auth/account/delete', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  let user: { id: string; email: string; display_name: string };
+  try {
+    user = await requireUser(request);
+  } catch {
+    return reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'Oturum doğrulanamadı.' } });
+  }
+  const input = accountDeleteSchema.parse(request.body);
+  const row = await db.query<{ password_hash: string }>('SELECT password_hash FROM users WHERE id=$1', [user.id]);
+  if (!(await verifyPassword(input.password, row.rows[0]?.password_hash))) {
+    return reply.code(403).send({ error: { code: 'INVALID_CREDENTIALS', message: 'Şifre doğrulanamadı.' } });
+  }
+  await closeAccount(user.id, user.display_name, 'deletion_pending');
+  const purgeAt = new Date(Date.now() + ACCOUNT_DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000);
+  return { data: { purgeAt: purgeAt.toISOString(), graceDays: ACCOUNT_DELETION_GRACE_DAYS } };
 });
 
 app.post('/v1/auth/refresh', { config: { rateLimit: { max: 30, timeWindow: '15 minutes' } } }, async (request, reply) => {

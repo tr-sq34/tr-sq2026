@@ -57,4 +57,13 @@ abstract interface class ProfileRepository {
   /// whole difference between archiving and deleting.
   Future<void> archivePost(String postId);
   Future<void> unarchivePost(String postId);
+
+  /// Başa sabitleme ve yorumlara kapatma. İkisi de paylaşımın sahibine ait
+  /// ayarlar, o yüzden tek çağrıda; dönen değer sunucunun son sözü, çünkü
+  /// sabitleme sayısı dolduğunda istek reddedilebiliyor.
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  });
 }

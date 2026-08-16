@@ -40,6 +40,7 @@ import '../../../promotions/domain/entities/promotion.dart';
 import '../../../promotions/presentation/widgets/promotion_detail_sheet.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
 import '../../../community/presentation/screens/story_viewer_screen.dart';
+import '../../../profile/presentation/screens/account_settings_screen.dart';
 import '../../../profile/presentation/screens/member_profile_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
@@ -187,6 +188,8 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       mediaUploadController: widget.mediaUploadController,
       postCommands: widget.postCommands,
       tabRequests: _profileTab,
+      commentsController: widget.commentsController,
+      contentModerationRepository: widget.contentModerationRepository,
     ),
   ];
 
@@ -203,6 +206,20 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
   /// gelindiğinde değişiyor; sayfalar bir kez kurulduğu için istek buradan
   /// iletiliyor.
   final ValueNotifier<int> _profileTab = ValueNotifier<int>(0);
+
+  /// Çeker menüdeki "Profil ve Hesap Ayarları". Profil sekmesinin yerine
+  /// geçmiyor, üstüne açılıyor: gizlilik, arşiv ve hesabı kapatma kararları
+  /// profilin sekmelerinde değil, ayrı bir sayfada durmalı.
+  void _openAccountSettings() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => AccountSettingsScreen(
+        profileController: widget.profileController,
+        authController: widget.authController,
+        onSignOut: widget.onSignOut,
+        onDeletePost: (post) => widget.postCommands.deletePost(post.id),
+      ),
+    ),
+  );
 
   /// The home screen's badge card promised a destination and never had one.
   /// It leads where the profile's badge counter leads: the Journey cabinet,
@@ -980,16 +997,16 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 6. PROFİL VE HESAP
+                  // 6. PROFİL VE HESAP AYARLARI
                   _buildDrawerItem(
-                    title: 'Profil ve Hesap',
-                    subtitle: 'Üyelik & kişisel veriler',
-                    icon: Icons.person_outline_rounded,
+                    title: 'Profil ve Hesap Ayarları',
+                    subtitle: 'Gizlilik, arşiv ve hesabın',
+                    icon: Icons.manage_accounts_outlined,
                     iconBg: Colors.white.withValues(alpha: 0.05),
                     iconColor: const Color(0xFF94A3B8),
                     onTap: () {
                       Navigator.pop(context);
-                      setState(() => _currentIndex = 3);
+                      _openAccountSettings();
                     },
                   ),
 

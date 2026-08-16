@@ -78,6 +78,39 @@ class ProfileController extends ChangeNotifier {
     await loadArchived(profile.value.id);
   }
 
+  /// Başa sabitle / sabiti kaldır. Null dönerse istek gitmedi ya da sunucu
+  /// reddetti; ekran nedenini yazıyor ve kart eski hâlinde kalıyor.
+  Future<String?> setPinned(String postId, bool pinned) async {
+    final profile = _state;
+    if (profile is! AsyncData<UserProfile>) return 'Profil henüz yüklenmedi.';
+    try {
+      final result = await _repository.setPostSettings(postId, pinned: pinned);
+      if (result.pinned != pinned) {
+        return 'En fazla 3 paylaşım sabitlenebilir. Önce birinin sabitini kaldır.';
+      }
+    } catch (error) {
+      return '$error'.contains('PIN_LIMIT_REACHED')
+          ? 'En fazla 3 paylaşım sabitlenebilir. Önce birinin sabitini kaldır.'
+          : 'Paylaşım sabitlenemedi.';
+    }
+    // Sıralamayı sunucu yapıyor; listeyi elde yeniden dizmek, ızgaranın
+    // sunucudakinden farklı görünmesine giden ilk adım olurdu.
+    await loadPosts(profile.value.id);
+    return null;
+  }
+
+  Future<String?> setCommentsEnabled(String postId, bool enabled) async {
+    final profile = _state;
+    if (profile is! AsyncData<UserProfile>) return 'Profil henüz yüklenmedi.';
+    try {
+      await _repository.setPostSettings(postId, commentsEnabled: enabled);
+    } catch (_) {
+      return enabled ? 'Yorumlar açılamadı.' : 'Yorumlar kapatılamadı.';
+    }
+    await loadPosts(profile.value.id);
+    return null;
+  }
+
   Future<void> updateBio(String bio) => _mutate(() => _repository.updateProfile(bio: (value: bio.trim())));
 
   Future<void> updateAvatar(String mediaId) =>

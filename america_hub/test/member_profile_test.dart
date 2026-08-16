@@ -202,6 +202,13 @@ class _FakeProfiles implements ProfileRepository {
   Future<void> unarchivePost(String postId) async {}
 
   @override
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  }) async => (pinned: pinned ?? false, commentsEnabled: commentsEnabled ?? true);
+
+  @override
   Future<UsernameCheck> checkUsername(String username) async {
     if (failCheck) throw StateError('network');
     return const {'elif', 'ahmet'}.contains(username)

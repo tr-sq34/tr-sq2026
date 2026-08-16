@@ -165,11 +165,22 @@ class MockProfileRepository implements ProfileRepository {
     ProfilePostState state = ProfilePostState.active,
   }) async {
     final wantArchived = state == ProfilePostState.archived;
-    return [
+    final posts = [
       for (final post in await _ownPosts())
         if (_archivedIds.contains(post.id) == wantArchived)
-          wantArchived ? _asArchived(post) : post,
+          (wantArchived ? _asArchived(post) : post).copyWith(
+            pinned: _pinnedIds.contains(post.id),
+            commentsEnabled: !_commentsClosedIds.contains(post.id),
+          ),
     ];
+    // Sunucudaki sıralamanın aynısı: önce sabitlenenler, sonra yeniler. Ayrı
+    // sıralamak, ızgaranın sunucuda ve çevrimdışı kopyada farklı görünmesi
+    // demek olurdu.
+    posts.sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    return posts;
   }
 
   /// Üyenin kendi paylaşımları, en yenisi başta. Demo hesabın iki eski kaydı
@@ -222,6 +233,37 @@ class MockProfileRepository implements ProfileRepository {
 
   @override
   Future<void> unarchivePost(String postId) async => _archivedIds.remove(postId);
+
+  /// Sabitlenmiş paylaşımlar ve yorumlara kapatılanlar. Sunucudaki sütunların
+  /// çevrimdışı karşılığı; ikisi de paylaşımın kendisinde değil burada duruyor
+  /// çünkü akış kaydı bu ayarları taşımıyor.
+  final Set<String> _pinnedIds = {};
+  final Set<String> _commentsClosedIds = {};
+
+  @override
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  }) async {
+    if (pinned != null) {
+      // Sunucudaki sınırın aynısı: dolduğunda sessizce en eskisi düşmüyor,
+      // istek reddediliyor.
+      if (pinned && !_pinnedIds.contains(postId) && _pinnedIds.length >= 3) {
+        throw StateError('PIN_LIMIT_REACHED');
+      }
+      pinned ? _pinnedIds.add(postId) : _pinnedIds.remove(postId);
+    }
+    if (commentsEnabled != null) {
+      commentsEnabled
+          ? _commentsClosedIds.remove(postId)
+          : _commentsClosedIds.add(postId);
+    }
+    return (
+      pinned: _pinnedIds.contains(postId),
+      commentsEnabled: !_commentsClosedIds.contains(postId),
+    );
+  }
 
   /// Sunucuda benzersizliği indeks garanti ediyor; burada bir avuç ad, "bu
   /// alınmış" yolunun da çalıştığını görebilmek için.

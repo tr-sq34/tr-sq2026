@@ -267,6 +267,8 @@ class ProfilePost {
     this.likes = 0,
     this.comments = 0,
     this.archived = false,
+    this.pinned = false,
+    this.commentsEnabled = true,
   });
 
   final String id;
@@ -276,4 +278,24 @@ class ProfilePost {
   final int likes;
   final int comments;
   final bool archived;
+
+  /// Izgaranın başına sabitlenmiş mi. Sunucu sıralamayı da buna göre yapıyor;
+  /// ekran yalnızca rozetini çiziyor.
+  final bool pinned;
+
+  /// Yorumlara açık mı. Kapalıyken yorum kutusu hiç açılmıyor - açılıp da
+  /// gönderilen yorumun reddedilmesi, kapatmayı işlevsiz göstermek olurdu.
+  final bool commentsEnabled;
+
+  ProfilePost copyWith({bool? pinned, bool? commentsEnabled}) => ProfilePost(
+    id: id,
+    message: message,
+    createdAt: createdAt,
+    thumbnailUrl: thumbnailUrl,
+    likes: likes,
+    comments: comments,
+    archived: archived,
+    pinned: pinned ?? this.pinned,
+    commentsEnabled: commentsEnabled ?? this.commentsEnabled,
+  );
 }

@@ -79,6 +79,28 @@ class ApiProfileRepository implements ProfileRepository {
       _client.delete<void>(ApiEndpoints.communityPostArchive(postId));
 
   @override
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  }) async {
+    final response = await _client.patch<Map<String, dynamic>>(
+      ApiEndpoints.communityPostSettings(postId),
+      data: {
+        if (pinned != null) 'pinned': pinned,
+        if (commentsEnabled != null) 'commentsEnabled': commentsEnabled,
+      },
+    );
+    final data = response.data?['data'] as Map<String, dynamic>? ?? const {};
+    // Sunucunun döndüğü hâl esas alınıyor: sabit sınırı dolduğunda istek
+    // reddediliyor ve istenen değer gerçekleşmemiş oluyor.
+    return (
+      pinned: data['pinned'] as bool? ?? pinned ?? false,
+      commentsEnabled: data['commentsEnabled'] as bool? ?? commentsEnabled ?? true,
+    );
+  }
+
+  @override
   Future<UsernameCheck> checkUsername(String username) async {
     final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.communityUsernameAvailable,
@@ -211,5 +233,7 @@ class ApiProfileRepository implements ProfileRepository {
     likes: (json['likes'] as num?)?.toInt() ?? 0,
     comments: (json['comments'] as num?)?.toInt() ?? 0,
     archived: json['archived'] as bool? ?? false,
+    pinned: json['pinned'] as bool? ?? false,
+    commentsEnabled: json['commentsEnabled'] as bool? ?? true,
   );
 }

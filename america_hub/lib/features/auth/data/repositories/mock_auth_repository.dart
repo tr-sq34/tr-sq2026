@@ -81,6 +81,9 @@ class MockAuthRepository implements AuthRepository {
     _displayName = normalised == demoEmail
         ? demoName
         : await _store.read(_accountKey(normalised));
+    // Sunucudaki `reopenAccount` ile aynı: dondurulmuş ya da silinmeyi bekleyen
+    // bir hesaba tekrar giriş yapmak onu geri açar.
+    await _store.remove(_closedKey(normalised));
     await _store.write(_sessionKey, normalised);
     return _sessionFor(normalised);
   }
@@ -222,6 +225,36 @@ class MockAuthRepository implements AuthRepository {
     }
     await _store.write(_onboardingKey(email), jsonEncode(_encodeDraft(draft)));
   }
+
+  @override
+  Future<void> freezeAccount() async {
+    final email = _email ?? await _restoreSession();
+    if (email == null) throw const AuthException('Oturum bulunamadı.');
+    await _store.write(_closedKey(email), 'frozen');
+    await signOut();
+  }
+
+  @override
+  Future<DateTime> requestAccountDeletion({required String password}) async {
+    final email = _email ?? await _restoreSession();
+    if (email == null) throw const AuthException('Oturum bulunamadı.');
+    // Bu kopya hiçbir şifreyi saklamıyor, dolayısıyla doğrulayamaz da. Demo
+    // hesabın şifresi bilindiği için o gerçekten kontrol ediliyor; diğerleri
+    // için tek yapılabilen boş bırakılmadığını görmek.
+    if (password.isEmpty ||
+        (email == demoEmail && password != demoPassword)) {
+      throw const AuthException('Şifre doğrulanamadı.');
+    }
+    await _store.write(_closedKey(email), 'deletion_pending');
+    await signOut();
+    return DateTime.now().add(const Duration(days: accountDeletionGraceDays));
+  }
+
+  /// Sunucudaki `ACCOUNT_DELETION_GRACE_DAYS` ile aynı: silme talebinden sonra
+  /// üyenin geri dönebileceği gün sayısı.
+  static const accountDeletionGraceDays = 30;
+
+  static String _closedKey(String email) => 'mock_auth.closed.$email';
 
   /// Reads the last signed-in address back off disk and reinstates it as the
   /// current session. Returns null when this device has never had one.

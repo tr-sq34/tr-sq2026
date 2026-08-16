@@ -49,4 +49,14 @@ abstract interface class AuthRepository {
   Future<void> signOut({String? refreshToken});
   Future<OnboardingProfile> getOnboarding();
   Future<void> saveOnboarding(OnboardingDraft draft);
+
+  /// Hesabı dondurur. Paylaşımlar, mesajlar ve arkadaşlıklar silinmiyor;
+  /// yalnızca hesap kapanıyor ve oturumlar kesiliyor. Geri açmanın yolu tekrar
+  /// giriş yapmak - bu yüzden şifre sorulmuyor.
+  Future<void> freezeAccount();
+
+  /// Hesabın silinmesini ister. Şifre burada tekrar soruluyor: geri alınamayan
+  /// bir kararı, açık kalmış bir telefonu eline geçiren biri veremesin.
+  /// Dönen tarih, vazgeçme süresinin bittiği an.
+  Future<DateTime> requestAccountDeletion({required String password});
 }

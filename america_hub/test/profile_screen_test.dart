@@ -14,6 +14,7 @@ import 'package:america_hub/features/journey/presentation/screens/journey_screen
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/domain/entities/user_profile.dart';
 import 'package:america_hub/features/profile/domain/repositories/profile_repository.dart';
+import 'package:america_hub/features/profile/presentation/screens/profile_post_screen.dart';
 import 'package:america_hub/features/profile/presentation/screens/profile_screen.dart';
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
 import 'package:flutter/material.dart';
@@ -39,6 +40,7 @@ class _FakeProfileRepository implements ProfileRepository {
   List<ProfilePost> posts;
   List<ProfilePost> archived = const [];
   final List<String> archiveCalls = [];
+  final List<({String postId, bool? pinned, bool? commentsEnabled})> settingsCalls = [];
 
   @override
   Future<UserProfile> getProfile() async => profile;
@@ -110,6 +112,29 @@ class _FakeProfileRepository implements ProfileRepository {
 
   @override
   Future<void> unarchivePost(String postId) async {}
+
+  /// Sunucu gibi davranıyor: ayarı kaydediyor, sabitlenmişi de öne alıyor.
+  /// Ekran listeyi kendi elinde sıralamadığı için, sıra burada bozulursa testte
+  /// de bozuk görünmeli.
+  @override
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  }) async {
+    settingsCalls.add((postId: postId, pinned: pinned, commentsEnabled: commentsEnabled));
+    final index = posts.indexWhere((item) => item.id == postId);
+    final updated = posts[index].copyWith(
+      pinned: pinned,
+      commentsEnabled: commentsEnabled,
+    );
+    posts = [...posts]..[index] = updated;
+    posts.sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    return (pinned: updated.pinned, commentsEnabled: updated.commentsEnabled);
+  }
 }
 
 /// Arkadaşlık deposu: gelen kutusunu ve listeyi testin dikte ettiği hâliyle
@@ -213,6 +238,20 @@ Future<_FakeProfileRepository> _pumpProfile(
   return repository;
 }
 
+/// Paylaşımlar sekmesini açar ve başlığı yukarı kaydırır: NestedScrollView
+/// ızgarayı katlamanın altına yerleştiriyor, orada bir dokunuş dış görünüme
+/// düşüyor.
+Future<void> _openGrid(WidgetTester tester) async {
+  await tester.tap(find.widgetWithText(Tab, 'Paylaşımlar'));
+  for (var i = 0; i < 6; i++) {
+    await tester.pump(const Duration(milliseconds: 60));
+  }
+  await tester.dragFrom(const Offset(180, 700), const Offset(0, -400));
+  for (var i = 0; i < 6; i++) {
+    await tester.pump(const Duration(milliseconds: 60));
+  }
+}
+
 void main() {
   testWidgets('the tabs read Profil, Paylaşımlar, Arkadaşlar in that order', (tester) async {
     await _pumpProfile(tester, _base);
@@ -221,13 +260,18 @@ void main() {
     expect(tabs.map((tab) => tab.text).toList(), ['Profil', 'Paylaşımlar', 'Arkadaşlar']);
   });
 
-  testWidgets('a member who has told us where they came from sees the journey', (tester) async {
+  testWidgets('memleket ve konum iki ayri rozet, bayraklariyla', (tester) async {
     await _pumpProfile(
       tester,
       _base.copyWith(originCity: 'İzmir', originCountry: 'TR'),
     );
 
-    expect(find.text('İzmir, TR ➜ Paterson, NJ'), findsWidgets);
+    // "İzmir, TR ➜ Paterson, NJ" tek satırdı ve hangisinin memleket, hangisinin
+    // şimdiki yer olduğu okuyucunun tahminine kalıyordu.
+    expect(find.text('İzmir'), findsOneWidget);
+    expect(find.text('Paterson, NJ'), findsOneWidget);
+    expect(find.text('🇹🇷'), findsOneWidget);
+    expect(find.text('🇺🇸'), findsOneWidget);
   });
 
   testWidgets('a missing origin asks for it instead of inventing one', (tester) async {
@@ -237,23 +281,30 @@ void main() {
     expect(find.textContaining('kurulum ekranından ekleyebilirsin'), findsOneWidget);
   });
 
-  testWidgets('the facts are lines on one surface, not a card each', (tester) async {
+  testWidgets('ilgi alanlari pastil, fazlasi sayiya donusuyor', (tester) async {
     await _pumpProfile(
       tester,
       _base.copyWith(
         originCity: 'İzmir',
         originCountry: 'TR',
-        interests: const ['yemek', 'futbol', 'göçmenlik'],
+        interests: const [
+          'yemek',
+          'futbol',
+          'göçmenlik',
+          'müzik',
+          'tarih',
+          'balık',
+          'yazılım',
+        ],
       ),
     );
 
-    // Every fact used to open its own padded card, so three short answers ate
-    // most of the screen. Labelled rows now, and the interests are one line
-    // instead of a pile of chips.
-    expect(find.text('Nerelisin'), findsOneWidget);
     expect(find.text('İlgi alanları'), findsOneWidget);
-    expect(find.text('yemek, futbol, göçmenlik'), findsOneWidget);
-    expect(find.byType(Chip), findsNothing);
+    expect(find.text('yemek'), findsOneWidget);
+    expect(find.text('tarih'), findsOneWidget);
+    // Yedi ilgi alanı profili yemiyor: beşi yazılı, kalanı sayı olarak duruyor.
+    expect(find.text('balık'), findsNothing);
+    expect(find.text('+2'), findsOneWidget);
   });
 
   testWidgets('the avatar draws the photo it was given', (tester) async {
@@ -323,10 +374,133 @@ void main() {
       await tester.pump(const Duration(milliseconds: 60));
     }
     // Archiving is not deleting: the post leaves the grid but the repository
-    // still holds it, ready for the Arşiv segment.
+    // still holds it, ready for the archive screen under account settings.
     expect(repository.archiveCalls, ['post-1']);
     expect(repository.archived.single.id, 'post-1');
     expect(find.textContaining('Paterson\'da yeni fırın'), findsNothing);
+  });
+
+  testWidgets('paylasimlar sekmesinde arsiv gecisi yok', (tester) async {
+    // Arşiv, kendi profiline bakan herkesin ızgarasının üstünde duran bir
+    // düğmeydi; hiç arşivi olmayan da onu görüyordu. Yeri artık çeker menüdeki
+    // "Profil ve Hesap Ayarları".
+    await _pumpProfile(
+      tester,
+      _base,
+      posts: [
+        ProfilePost(
+          id: 'post-1',
+          message: 'Paterson\'da yeni fırın',
+          createdAt: DateTime(2026, 7, 2),
+        ),
+      ],
+    );
+
+    await _openGrid(tester);
+
+    expect(find.text('Arşiv'), findsNothing);
+    expect(find.textContaining('Paterson\'da yeni fırın'), findsOneWidget);
+  });
+
+  testWidgets('kareye dokunmak paylasimin kendisini aciyor', (tester) async {
+    // Izgara uzun süre bir çıkmazdı: dokunmak hiçbir şey yapmıyor, yalnızca
+    // uzun basmak bir menü açıyordu. Dokunmanın karşılığı artık paylaşımın
+    // tamamı.
+    await _pumpProfile(
+      tester,
+      _base,
+      posts: [
+        ProfilePost(
+          id: 'post-1',
+          message: 'Paterson\'da yeni fırın',
+          createdAt: DateTime(2026, 7, 2),
+          likes: 12,
+          comments: 3,
+        ),
+      ],
+    );
+    await _openGrid(tester);
+
+    await tester.tap(find.textContaining('Paterson\'da yeni fırın'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+
+    expect(find.byType(ProfilePostScreen), findsOneWidget);
+    expect(find.text('12 beğeni'), findsOneWidget);
+    expect(find.text('3 yorum'), findsOneWidget);
+  });
+
+  testWidgets('basa sabitlemek sunucuya gidiyor ve sirayi sunucudan okuyor', (
+    tester,
+  ) async {
+    final repository = await _pumpProfile(
+      tester,
+      _base,
+      posts: [
+        ProfilePost(
+          id: 'yeni',
+          message: 'Bugünkü paylaşım',
+          createdAt: DateTime(2026, 7, 10),
+        ),
+        ProfilePost(
+          id: 'eski',
+          message: 'Geçen ayki paylaşım',
+          createdAt: DateTime(2026, 6, 1),
+        ),
+      ],
+    );
+    await _openGrid(tester);
+
+    await tester.longPress(find.textContaining('Geçen ayki paylaşım'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+    expect(find.text('Başa sabitle'), findsOneWidget);
+    expect(find.text('Yorumlara kapat'), findsOneWidget);
+
+    await tester.tap(find.text('Başa sabitle'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+
+    expect(repository.settingsCalls.single.postId, 'eski');
+    expect(repository.settingsCalls.single.pinned, isTrue);
+    // Sıralamayı sunucu yapıyor; ekran listeyi elde yeniden dizmiyor.
+    expect(repository.posts.first.id, 'eski');
+    expect(find.text('Paylaşım profilinin başına sabitlendi.'), findsOneWidget);
+  });
+
+  testWidgets('yorumlara kapatmak yazilmis yorumlari silmiyor', (tester) async {
+    final repository = await _pumpProfile(
+      tester,
+      _base,
+      posts: [
+        ProfilePost(
+          id: 'post-1',
+          message: 'Paterson\'da yeni fırın',
+          createdAt: DateTime(2026, 7, 2),
+          comments: 4,
+        ),
+      ],
+    );
+    await _openGrid(tester);
+
+    await tester.longPress(find.textContaining('Paterson\'da yeni fırın'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+    await tester.tap(find.text('Yorumlara kapat'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 60));
+    }
+
+    expect(repository.settingsCalls.single.commentsEnabled, isFalse);
+    expect(repository.posts.single.comments, 4);
+    expect(
+      find.text('Yorumlar kapatıldı. Yazılmış yorumlar duruyor.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('the friends tab locks rather than listing made-up names', (tester) async {

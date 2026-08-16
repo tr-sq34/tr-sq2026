@@ -12,6 +12,8 @@ abstract final class ApiEndpoints {
   static const authRefresh = 'auth/refresh';
   static const authLogout = 'auth/logout';
   static const authOnboarding = 'auth/onboarding';
+  static const authAccountFreeze = 'auth/account/freeze';
+  static const authAccountDelete = 'auth/account/delete';
   static const authPasskeyRegistrationOptions =
       'auth/passkeys/registration/options';
   static const authPasskeyRegistrationVerify =
@@ -82,6 +84,10 @@ abstract final class ApiEndpoints {
       '/community/members/$userId/follower';
   static String communityPostArchive(String postId) =>
       '/community/posts/$postId/archive';
+  // Sabitleme ve yorumlara kapatma tek ucta: ikisi de paylaşımın sahibine ait
+  // ayarlar ve sunucuda aynı sahiplik denetiminden geçiyor.
+  static String communityPostSettings(String postId) =>
+      '/community/posts/$postId/settings';
   // Akış yorumları. Silme ucu paylaşımı değil yorumu adresliyor; sunucu yorumu
   // ya yazanın ya da paylaşım sahibinin kaldırabileceğini oradan çözüyor.
   static String communityPostComments(String postId) =>
