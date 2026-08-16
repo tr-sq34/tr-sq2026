@@ -36,23 +36,28 @@ class CreatePostDraft {
     if (normalizedMessage.length > CommunityPost.maxMessageLength) {
       return 'Paylaşım metni en fazla ${CommunityPost.maxMessageLength} karakter olabilir.';
     }
-    if (media.length > 10)
+    if (media.length > 10) {
       return 'Bir paylaşımda en fazla 10 medya kullanılabilir.';
+    }
     if (media.where((item) => item.type == PostMediaType.video).length > 1) {
       return 'Bir paylaşımda yalnızca bir video kullanılabilir.';
     }
     if (poll != null) {
       if (poll!.question.trim().isEmpty ||
           poll!.options.length < 2 ||
-          poll!.options.length > 4)
+          poll!.options.length > 4) {
         return 'Anket için soru ve 2–4 seçenek gereklidir.';
-      if (poll!.options.any((option) => option.label.trim().isEmpty))
+      }
+      if (poll!.options.any((option) => option.label.trim().isEmpty)) {
         return 'Anket seçenekleri boş olamaz.';
+      }
     }
-    if (marketplaceListingId != null && marketplaceListingId!.trim().isEmpty)
+    if (marketplaceListingId != null && marketplaceListingId!.trim().isEmpty) {
       return 'Geçerli bir Çarşı ilanı seçin.';
-    if (purpose == CommunityPostPurpose.travelerMatch && travelerMatch == null)
+    }
+    if (purpose == CommunityPostPurpose.travelerMatch && travelerMatch == null) {
       return 'Yolculuk için nereden ve nereye bilgisini ekleyin.';
+    }
     if (purpose == CommunityPostPurpose.travelerMatch &&
         travelerMatch != null &&
         travelerMatch!.packageDetails.trim().isEmpty) {

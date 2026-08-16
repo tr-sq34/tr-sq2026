@@ -1,4 +1,3 @@
-import '../../../../core/moderation/report_category.dart';
 
 export '../../../../core/moderation/report_category.dart';
 

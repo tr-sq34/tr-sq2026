@@ -457,9 +457,14 @@ class _InboxScreenState extends State<InboxScreen> {
           child: InkWell(
             onTap: () async {
               HapticFeedback.selectionClick();
+              // Navigator bekleme oncesinde aliniyor: buradaki context liste
+              // satirina ait ve okundu isaretlendikten sonra liste yeniden
+              // kurulup bu satir yok olabiliyor. State'in mounted'i o durumu
+              // gormuyor.
+              final navigator = Navigator.of(context);
               await widget.controller.markRead(chat.id);
               if (!mounted) return;
-              Navigator.of(context).push(MaterialPageRoute<void>(
+              navigator.push(MaterialPageRoute<void>(
                   builder: (_) => ConversationScreen(
                         conversation: chat,
                         createController: widget.createConversationController,
@@ -1140,10 +1145,13 @@ class _InboxScreenState extends State<InboxScreen> {
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () async {
+                        // Kabul edilen istek listeden cikiyor, yani bu dugmenin
+                        // context'i cevap donmeden once olabiliyor.
+                        final navigator = Navigator.of(context);
                         final conversation = await widget.controller
                             .respondToRequest(item.id, RequestDecision.accepted);
                         if (!mounted || conversation == null) return;
-                        Navigator.of(context).push(MaterialPageRoute<void>(
+                        navigator.push(MaterialPageRoute<void>(
                             builder: (_) => ConversationScreen(
                                   conversation: conversation,
                                   createController:

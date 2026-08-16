@@ -46,7 +46,7 @@ class ApiProfileRepository implements ProfileRepository {
       if (avatarMediaId != null) 'avatarMediaId': avatarMediaId.value,
       if (visibility != null)
         'visibility': visibility == ProfileVisibility.public ? 'public' : 'friends_only',
-      if (showcasedBadges != null) 'showcasedBadges': showcasedBadges,
+      'showcasedBadges': ?showcasedBadges,
       if (username != null) 'username': username.value,
     };
     final response = await _client.patch<Map<String, dynamic>>(
@@ -87,8 +87,8 @@ class ApiProfileRepository implements ProfileRepository {
     final response = await _client.patch<Map<String, dynamic>>(
       ApiEndpoints.communityPostSettings(postId),
       data: {
-        if (pinned != null) 'pinned': pinned,
-        if (commentsEnabled != null) 'commentsEnabled': commentsEnabled,
+        'pinned': ?pinned,
+        'commentsEnabled': ?commentsEnabled,
       },
     );
     final data = response.data?['data'] as Map<String, dynamic>? ?? const {};

@@ -74,17 +74,19 @@ class _CommentsSheetState extends State<CommentsSheet> {
       _messageController.clear();
       setState(() => _replyingTo = null);
     } on StateError catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } on ArgumentError catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(error.message?.toString() ?? 'Yorum gönderilemedi.'),
           ),
         );
+      }
     }
   }
 
@@ -124,28 +126,31 @@ class _CommentsSheetState extends State<CommentsSheet> {
             animation: widget.controller,
             builder: (context, _) {
               final state = widget.controller.state;
-              if (state is AsyncLoading<List<CommunityComment>>)
+              if (state is AsyncLoading<List<CommunityComment>>) {
                 return const AppLoadingView(label: 'Yorumlar yükleniyor...');
-              if (state is AsyncFailure<List<CommunityComment>>)
+              }
+              if (state is AsyncFailure<List<CommunityComment>>) {
                 return AppErrorState(
                   message: state.message,
                   onRetry: () => widget.controller.load(widget.targetId),
                 );
+              }
               final comments = state is AsyncData<List<CommunityComment>>
                   ? state.value
                   : const <CommunityComment>[];
-              if (comments.isEmpty)
+              if (comments.isEmpty) {
                 return const AppEmptyState(
                   icon: Icons.forum_outlined,
                   title: 'Henüz yorum yok',
                   message: 'Bu sohbete ilk sen katılabilirsin.',
                 );
+              }
               final roots = comments
                   .where((comment) => comment.parentId == null)
                   .toList(growable: false);
               return ListView.separated(
                 itemCount: roots.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 16),
+                separatorBuilder: (_, _) => const SizedBox(height: 16),
                 itemBuilder: (_, index) {
                   final comment = roots[index];
                   final replies = comments
