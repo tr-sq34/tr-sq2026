@@ -4,6 +4,7 @@ import 'package:america_hub/core/storage/in_memory_token_store.dart';
 import 'package:america_hub/features/notifications/application/notifications_controller.dart';
 import 'package:america_hub/features/notifications/data/repositories/api_notification_repository.dart';
 import 'package:america_hub/features/notifications/domain/entities/app_notification.dart';
+import 'package:america_hub/features/notifications/domain/entities/notification_preference.dart';
 import 'package:america_hub/features/notifications/domain/repositories/notification_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,6 +67,13 @@ class _StubRepository implements NotificationRepository {
   Future<void> markRead(String notificationId) async {
     if (failWrites) throw Exception('offline');
   }
+
+  @override
+  Future<NotificationPreferences> getPreferences() async => const NotificationPreferences.allEnabled();
+
+  @override
+  Future<NotificationPreferences> savePreferences(Map<String, bool> changes) async =>
+      const NotificationPreferences.allEnabled();
 }
 
 AppNotification unread(String id) => AppNotification(

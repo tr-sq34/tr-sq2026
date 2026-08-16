@@ -2963,6 +2963,13 @@ app.get('/v1/notifications', async (request, reply) => {
        FROM member_notifications n
        LEFT JOIN community_profile_projection cp ON cp.user_id=n.last_actor_id
        WHERE n.user_id=$1
+         -- Kapatilmis turler burada eleniyor, yazilirken degil: kapali gecen
+         -- surede olan biteni silmek yerine gizliyoruz, tekrar acan uye onlari
+         -- goruyor. Satiri olmayan tur acik.
+         AND NOT EXISTS (
+           SELECT 1 FROM member_notification_preferences p
+            WHERE p.user_id=n.user_id AND p.kind=n.kind AND p.enabled=false
+         )
        ORDER BY n.updated_at DESC
        LIMIT 60`,
       [userId],
@@ -3006,6 +3013,96 @@ app.put('/v1/notifications/:id/read', async (request, reply) => {
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NOTIFICATION_READ_FAILED', message: 'Bildirim güncellenemedi.' } });
+  }
+});
+
+/// Zilde kapatilabilen turler.
+///
+/// `support_answer` ve `announcement` bilerek disarida: biri uyenin kendi
+/// sordugu sorunun cevabi, digeri hesabini ilgilendiren duyuru. Ikisini de
+/// kapatilabilir yapmak, sonra "haberim yoktu" demesine yol acardi.
+const MUTABLE_NOTIFICATION_KINDS = [
+  'post_comment',
+  'post_like',
+  'listing_save',
+  'listing_like',
+  'special_request',
+  'friend_request',
+] as const;
+
+/// Govde yalnizca degisen turleri tasiyabilir, hepsini degil; ama tanimadigimiz
+/// bir tur sessizce yutulmuyor. Yanlis yazilmis bir anahtari gormezden gelmek,
+/// uyeye "kaydedildi" deyip hicbir sey kaydetmemek olurdu.
+const notificationPreferencesSchema = z.object({
+  preferences: z
+    .object({
+      post_comment: z.boolean(),
+      post_like: z.boolean(),
+      listing_save: z.boolean(),
+      listing_like: z.boolean(),
+      special_request: z.boolean(),
+      friend_request: z.boolean(),
+    })
+    .partial()
+    .strict(),
+});
+
+/// Uyenin bildirim tercihleri.
+///
+/// Satiri olmayan tur acik sayiliyor, o yuzden cevap once hepsini acik kurup
+/// veritabanindan geleni uzerine yaziyor: ekran, kaydedilmis bir tercihle
+/// varsayilan arasindaki farki bilmek zorunda kalmiyor.
+app.get('/v1/notifications/preferences', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query<{ kind: string; enabled: boolean }>(
+      'SELECT kind,enabled FROM member_notification_preferences WHERE user_id=$1',
+      [userId],
+    );
+    const preferences: Record<string, boolean> = {};
+    for (const kind of MUTABLE_NOTIFICATION_KINDS) preferences[kind] = true;
+    for (const row of rows.rows) {
+      if (row.kind in preferences) preferences[row.kind] = row.enabled;
+    }
+    return { data: { preferences } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'NOTIFICATION_PREFERENCES_UNAVAILABLE', message: 'Bildirim tercihleri yüklenemedi.' } });
+  }
+});
+
+/// Tercihleri kaydet.
+///
+/// Govde yalnizca degisen turleri tasiyabilir; gonderilmeyen tur oldugu gibi
+/// kaliyor. Tek tek UPSERT, cunku iki cihazdan ayni anda yapilan iki degisiklik
+/// birbirini silmemeli - "hepsini sil, yenisini yaz" bicimi bunu yapardi.
+app.put('/v1/notifications/preferences', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const body = notificationPreferencesSchema.parse(request.body ?? {});
+    const entries = Object.entries(body.preferences);
+    for (const [kind, enabled] of entries) {
+      await db.query(
+        `INSERT INTO member_notification_preferences (user_id,kind,enabled)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (user_id,kind) DO UPDATE SET enabled=EXCLUDED.enabled, updated_at=now()`,
+        [userId, kind, enabled],
+      );
+    }
+    const rows = await db.query<{ kind: string; enabled: boolean }>(
+      'SELECT kind,enabled FROM member_notification_preferences WHERE user_id=$1',
+      [userId],
+    );
+    const preferences: Record<string, boolean> = {};
+    for (const kind of MUTABLE_NOTIFICATION_KINDS) preferences[kind] = true;
+    for (const row of rows.rows) {
+      if (row.kind in preferences) preferences[row.kind] = row.enabled;
+    }
+    return { data: { preferences } };
+  } catch (error) {
+    if ((error as Error).message === 'UNAUTHORIZED') {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Oturum gerekli.' } });
+    }
+    return reply.code(400).send({ error: { code: 'NOTIFICATION_PREFERENCES_INVALID', message: 'Bildirim tercihleri kaydedilemedi.' } });
   }
 });
 
@@ -5996,12 +6093,23 @@ app.get('/v1/internal/gatework/analytics/overview', async (request, reply) => {
               (SELECT count(*) FROM marketplace_listings WHERE status='active') active_listings,
               (SELECT count(*) FROM stories WHERE expires_at>now()) live_stories`,
     );
-    const [posts, topics, listings] = await Promise.all([
+    const [posts, topics, listings, mutes] = await Promise.all([
       db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('community_posts', 'AND s.deleted_at IS NULL')),
       db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('forum_topics', 'AND s.deleted_at IS NULL')),
       db.query<{ week_start: Date; total: number }>(analyticsSeriesSql('marketplace_listings')),
+      // Uyenin zilde neyi kapattigi. Toplam sayilar; kimin kapattigi degil,
+      // kac kisinin kapattigi. Panelin bunu bilmesi lazim: bir turu herkesin
+      // kapatmis olmasi, o bildirimin rahatsiz ettiginin tek isareti.
+      db.query<{ kind: string; members: string }>(
+        `SELECT kind, count(*) members FROM member_notification_preferences WHERE enabled=false GROUP BY kind`,
+      ),
     ]);
     const row = totals.rows[0]!;
+    const mutedByKind: Record<string, number> = {};
+    for (const kind of MUTABLE_NOTIFICATION_KINDS) mutedByKind[kind] = 0;
+    for (const mute of mutes.rows) {
+      if (mute.kind in mutedByKind) mutedByKind[mute.kind] = Number(mute.members);
+    }
     return {
       data: {
         members: Number(row.members),
@@ -6013,6 +6121,9 @@ app.get('/v1/internal/gatework/analytics/overview', async (request, reply) => {
         forumRepliesLast7Days: Number(row.replies_7d),
         activeListings: Number(row.active_listings),
         liveStories: Number(row.live_stories),
+        // Uyeler paydasi ayrica gonderiliyor: "412 kisi kapatmis" tek basina
+        // buyuk mu kucuk mu belli degil, toplam uye sayisiyla birlikte belli.
+        notificationMutes: { totalMembers: Number(row.members), byKind: mutedByKind },
         // Three series, one week axis: the console draws them together, so they
         // are built from the same generate_series and are guaranteed aligned.
         weeks: posts.rows.map((week, index) => ({

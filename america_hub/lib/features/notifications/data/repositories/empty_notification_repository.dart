@@ -1,4 +1,5 @@
 import '../../domain/entities/app_notification.dart';
+import '../../domain/entities/notification_preference.dart';
 import '../../domain/repositories/notification_repository.dart';
 
 /// Nothing, honestly.
@@ -20,4 +21,13 @@ class EmptyNotificationRepository implements NotificationRepository {
 
   @override
   Future<void> markAllRead() async {}
+
+  /// Zil hiç çalmadığı için kapatılacak bir şey de yok; hepsi açık görünüyor ve
+  /// değiştirme denemesi sessizce hiçbir şey yapmıyor.
+  @override
+  Future<NotificationPreferences> getPreferences() async => const NotificationPreferences.allEnabled();
+
+  @override
+  Future<NotificationPreferences> savePreferences(Map<String, bool> changes) async =>
+      const NotificationPreferences.allEnabled();
 }

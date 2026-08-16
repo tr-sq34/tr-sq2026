@@ -1,6 +1,7 @@
 import 'package:america_hub/features/community/presentation/widgets/comments_sheet.dart';
 import 'package:america_hub/features/marketplace/presentation/screens/marketplace_screen.dart';
 import 'package:america_hub/features/notifications/domain/entities/app_notification.dart';
+import 'package:america_hub/features/notifications/domain/entities/notification_preference.dart';
 import 'package:america_hub/features/notifications/domain/repositories/notification_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +25,13 @@ class _Notifications implements NotificationRepository {
 
   @override
   Future<void> markRead(String notificationId) async {}
+
+  @override
+  Future<NotificationPreferences> getPreferences() async => const NotificationPreferences.allEnabled();
+
+  @override
+  Future<NotificationPreferences> savePreferences(Map<String, bool> changes) async =>
+      const NotificationPreferences.allEnabled();
 }
 
 AppNotification _row({

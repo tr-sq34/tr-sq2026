@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../../core/navigation/app_deep_link.dart';
 import '../../../core/network/api_exception.dart';
 import '../domain/entities/app_notification.dart';
+import '../domain/entities/notification_preference.dart';
 import '../domain/repositories/notification_repository.dart';
 
 class NotificationsController extends ChangeNotifier {
@@ -72,5 +73,69 @@ class NotificationsController extends ChangeNotifier {
       } catch (_) {}
     }
     return AppDeepLink.parse(notification.deepLink);
+  }
+
+  // --- Bildirim tercihleri ---------------------------------------------------
+
+  /// Sunucudan okunmuş tercihler. `null` "hepsi açık" demek değil, "henüz
+  /// okunmadı" demek; ekran bu ikisini ayırt edebilsin diye ayrı duruyor.
+  NotificationPreferences? preferences;
+  bool isPreferencesLoading = false;
+  String? preferencesError;
+
+  /// Kaydedilmeyi bekleyen tür. Ekran o satırın anahtarını kilitliyor;
+  /// tamamını kilitlemek, bir türü kapatan üyenin diğerlerine dokunamaması
+  /// demek olurdu.
+  NotificationPreferenceKind? savingKind;
+
+  Future<void> loadPreferences() async {
+    isPreferencesLoading = true;
+    preferencesError = null;
+    await Future<void>.microtask(() {});
+    notifyListeners();
+    try {
+      preferences = await _repository.getPreferences();
+    } on ApiException catch (failure) {
+      preferencesError = failure.statusCode == 401
+          ? 'Oturumun sona ermiş. Tercihleri görmek için yeniden giriş yap.'
+          : 'Bildirim tercihlerin okunamadı: ${failure.message}';
+    } catch (_) {
+      preferencesError = 'Bildirim tercihlerin okunamadı.';
+    } finally {
+      isPreferencesLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Tek bir türü aç/kapat.
+  ///
+  /// Anahtar önce yerelde dönüyor - dokunulduğu anda tepki vermeyen bir anahtar
+  /// bozuk sayılır - ama sunucu kabul etmezse eski hâline dönüyor ve sebebi
+  /// ekranda yazıyor. Sessizce geri alınan bir ayar, kapattığını sanan üyenin
+  /// bildirim almaya devam etmesi demek.
+  Future<bool> setPreference(NotificationPreferenceKind kind, bool enabled) async {
+    final current = preferences ?? const NotificationPreferences.allEnabled();
+    final previous = current;
+    preferences = current.withKind(kind, enabled);
+    savingKind = kind;
+    preferencesError = null;
+    notifyListeners();
+    try {
+      preferences = await _repository.savePreferences({kind.wire: enabled});
+      return true;
+    } on ApiException catch (failure) {
+      preferences = previous;
+      preferencesError = failure.statusCode == 401
+          ? 'Oturumun sona ermiş. Tercih kaydedilmedi.'
+          : 'Tercih kaydedilemedi: ${failure.message}';
+      return false;
+    } catch (_) {
+      preferences = previous;
+      preferencesError = 'Tercih kaydedilemedi. Ayar eski hâline döndü.';
+      return false;
+    } finally {
+      savingKind = null;
+      notifyListeners();
+    }
   }
 }
