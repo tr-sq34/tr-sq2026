@@ -114,6 +114,18 @@ test('a hand-granted badge records who gave it and why', () => {
   assert.match(grants, /'badge_earned'/);
 });
 
+test('the reason written for a member reaches that member', () => {
+  // The operator writes the sentence about this one person. Keeping it in the
+  // panel and showing the member only the shared catalogue line would be
+  // handing over a medal and filing the citation.
+  const catalogue = /app\.get\('\/v1\/community\/badges'([\s\S]*?)\n\}\);/.exec(server);
+  assert.ok(catalogue, 'the member-facing badge route moved');
+  assert.match(catalogue[1]!, /b\.granted_reason/);
+  assert.match(catalogue[1]!, /grantedReason: badge\.granted_reason/);
+  // And the bell says the reason rather than the catalogue text.
+  assert.match(server, /COALESCE\(b\.granted_reason, d\.description\)/);
+});
+
 test('a purged account leaves no badges behind', () => {
   // The panel now lists holders by name; a purged member would otherwise sit in
   // that list as a bare identifier, next to a reason sentence written about
