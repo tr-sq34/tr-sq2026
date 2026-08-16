@@ -6303,6 +6303,195 @@ app.delete('/v1/internal/gatework/journey/badges/:code/holders/:userId', { confi
   }
 });
 
+// --- Legal documents -----------------------------------------------------
+// Kullanim Kosullari ve Gizlilik Politikasi.
+//
+// Giris ekraninin altindaki iki baglanti hicbir yere gitmiyordu ve yanlarinda
+// "Devam ederek ... kabul etmis olursunuz" yaziyordu. Uyeden okuyamadigi bir
+// seyi kabul etmesi isteniyordu.
+//
+// Metin panelden yaziliyor: bir gizlilik politikasi hukuki bir taahhut ve her
+// degistiginde uygulamanin yeni surumunu magazadan gecirmek, metnin gunu gecmis
+// kalmasinin en yaygin sebebi.
+const LEGAL_KINDS = ['terms', 'privacy'] as const;
+type LegalKind = (typeof LEGAL_KINDS)[number];
+const isLegalKind = (value: string): value is LegalKind => (LEGAL_KINDS as readonly string[]).includes(value);
+
+// Taslagi yazan ile yayimlayan ayri. Yayimlamak bir hukuki taahhudu yururluge
+// koymak; metni yazabilen herkesin bunu tek basina yapabilmesi, incelemeyi
+// istege bagli hale getirirdi.
+const LEGAL_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'content_editor', 'auditor'];
+const LEGAL_DRAFT_ROLES: GateworkRole[] = ['owner', 'operations_admin', 'content_editor'];
+const LEGAL_PUBLISH_ROLES: GateworkRole[] = ['owner', 'security_admin'];
+
+const legalDraftSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  body: z.string().trim().min(1).max(200_000),
+  changeNote: z.string().trim().max(500).optional(),
+});
+
+/// Uygulamanin okudugu yol. Kimlik istemiyor - bu metinlerin baglantisi giris
+/// ekraninin altinda duruyor ve orada henuz kimse giris yapmis degil. Iceride
+/// uye verisi yok; herkese ayni metin gidiyor.
+app.get('/v1/public/legal/:kind', async (request, reply) => {
+  const kind = (request.params as { kind: string }).kind;
+  if (!isLegalKind(kind)) {
+    return reply.code(404).send({ error: { code: 'LEGAL_UNKNOWN_KIND', message: 'Boyle bir metin yok.' } });
+  }
+  try {
+    const document = await db.query<{ version: number; title: string; body: string; change_note: string | null; published_at: Date }>(
+      `SELECT version,title,body,change_note,published_at FROM legal_documents
+        WHERE kind=$1 AND published_at IS NOT NULL ORDER BY version DESC LIMIT 1`,
+      [kind],
+    );
+    const row = document.rows[0];
+    // Yayimlanmamis olan yok sayilmiyor, "yok" deniyor. Uygulama bu farki
+    // ekranda soyluyor: bos bir sayfa, metnin bos oldugunu ima ederdi.
+    if (!row) {
+      return reply.code(404).send({ error: { code: 'LEGAL_NOT_PUBLISHED', message: 'Bu metin henuz yayimlanmadi.' } });
+    }
+    return reply
+      // Hukuki bir metin dakikada bir degismiyor, ama degistiginde eski
+      // surumun gunlerce onbellekte kalmasi da olmaz.
+      .header('cache-control', 'public, max-age=900')
+      .send({
+        data: {
+          kind,
+          version: row.version,
+          title: row.title,
+          body: row.body,
+          changeNote: row.change_note,
+          publishedAt: row.published_at.toISOString(),
+        },
+      });
+  } catch (error) {
+    app.log.error({ err: error, kind }, 'yasal metin okunamadi');
+    return reply.code(500).send({ error: { code: 'LEGAL_UNAVAILABLE', message: 'Metin su an okunamiyor.' } });
+  }
+});
+
+/// Panelin gordugu: her tur icin yayimlanmis surum, uzerinde calisilan taslak
+/// ve gecmis surumler.
+app.get('/v1/internal/gatework/legal', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, LEGAL_READ_ROLES);
+    const rows = await db.query<{
+      id: string; kind: LegalKind; version: number; title: string; body: string;
+      change_note: string | null; published_at: Date | null; updated_at: Date;
+    }>(
+      `SELECT id,kind,version,title,body,change_note,published_at,updated_at
+         FROM legal_documents ORDER BY kind, version DESC`,
+    );
+    const documents = LEGAL_KINDS.map((kind) => {
+      const forKind = rows.rows.filter((row) => row.kind === kind);
+      const draft = forKind.find((row) => row.published_at === null) ?? null;
+      const published = forKind.filter((row) => row.published_at !== null);
+      const live = published[0] ?? null;
+      return {
+        kind,
+        // Yayimlanmis metin yoksa `null`. Sifir surum degil: sifir, bir kere
+        // yayimlanip geri cekilmis gibi okunurdu.
+        published: live && {
+          id: live.id, version: live.version, title: live.title, body: live.body,
+          changeNote: live.change_note, publishedAt: live.published_at!.toISOString(),
+        },
+        draft: draft && {
+          id: draft.id, version: draft.version, title: draft.title, body: draft.body,
+          changeNote: draft.change_note, updatedAt: draft.updated_at.toISOString(),
+        },
+        history: published.map((row) => ({
+          version: row.version, title: row.title, publishedAt: row.published_at!.toISOString(), changeNote: row.change_note,
+        })),
+      };
+    });
+    return { data: { documents } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401)
+      .send({ error: { code: 'LEGAL_UNAVAILABLE', message: 'Yasal metinler okunamadi.' } });
+  }
+});
+
+/// Taslagi yazar. Yayimlanmis surume dokunmuyor: uyenin kabul ettigi metnin
+/// altindan degistirilmesi, kabul edilen seyin ne oldugunu belirsizlestirirdi.
+app.put('/v1/internal/gatework/legal/:kind/draft', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const kind = (request.params as { kind: string }).kind;
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, LEGAL_DRAFT_ROLES);
+    if (!isLegalKind(kind)) throw Error('LEGAL_UNKNOWN_KIND');
+    const input = legalDraftSchema.parse(request.body);
+    // Taslagin surum numarasi, yayimlandiginda alacagi numara. Panelde bunu
+    // gostermek, "kacinci surumu yayimliyorum" sorusunu yayimlamadan once
+    // cevaplandiriyor.
+    const saved = await db.query<{ id: string; version: number }>(
+      `INSERT INTO legal_documents(kind,version,title,body,change_note,created_by)
+       VALUES($1,(SELECT COALESCE(max(version),0)+1 FROM legal_documents WHERE kind=$1),$2,$3,$4,$5)
+       ON CONFLICT (kind) WHERE published_at IS NULL
+       DO UPDATE SET title=EXCLUDED.title, body=EXCLUDED.body, change_note=EXCLUDED.change_note, updated_at=now()
+       RETURNING id,version`,
+      [kind, input.title, input.body, input.changeNote ?? null, actor.actorId],
+    );
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'legal.draft.save', targetType: 'legal_document',
+      targetId: kind, reason: input.changeNote, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    return { data: { kind, id: saved.rows[0]!.id, version: saved.rows[0]!.version } };
+  } catch (error) {
+    const message = (error as Error).message;
+    const known: Record<string, [number, string]> = {
+      FORBIDDEN: [403, 'Bu islem icin yetkin yok.'],
+      UNAUTHORIZED: [401, 'Oturum gecerli degil.'],
+      LEGAL_UNKNOWN_KIND: [404, 'Boyle bir metin yok.'],
+    };
+    const entry = known[message] ?? [400, 'Taslak kaydedilemedi.'];
+    return reply.code(entry[0] as number).send({ error: { code: 'LEGAL_DRAFT_REJECTED', message: entry[1] as string } });
+  }
+});
+
+/// Taslagi yururluge koyar.
+///
+/// Yayimlanan surum bir daha degistirilemez; sonraki duzenleme yeni bir taslak
+/// acar. "O tarihte hangi metni kabul ettim" sorusunun cevabinin bir yerde
+/// durmasi buna bagli.
+app.post('/v1/internal/gatework/legal/:kind/publish', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const kind = (request.params as { kind: string }).kind;
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, LEGAL_PUBLISH_ROLES);
+    if (!isLegalKind(kind)) throw Error('LEGAL_UNKNOWN_KIND');
+    await client.query('BEGIN');
+    const draft = await client.query<{ id: string; version: number; body: string }>(
+      'SELECT id,version,body FROM legal_documents WHERE kind=$1 AND published_at IS NULL FOR UPDATE',
+      [kind],
+    );
+    if (!draft.rowCount) throw Error('LEGAL_NO_DRAFT');
+    await client.query('UPDATE legal_documents SET published_at=now(), published_by=$2, updated_at=now() WHERE id=$1', [draft.rows[0]!.id, actor.actorId]);
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles, action: 'legal.publish', targetType: 'legal_document',
+      targetId: `${kind}:v${draft.rows[0]!.version}`, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    return reply.code(201).send({ data: { kind, version: draft.rows[0]!.version } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    const known: Record<string, [number, string]> = {
+      FORBIDDEN: [403, 'Yayimlama yetkisi yalnizca sahibi ve guvenlik yoneticisinde.'],
+      UNAUTHORIZED: [401, 'Oturum gecerli degil.'],
+      LEGAL_UNKNOWN_KIND: [404, 'Boyle bir metin yok.'],
+      LEGAL_NO_DRAFT: [409, 'Yayimlanacak bir taslak yok.'],
+    };
+    const entry = known[message] ?? [400, 'Metin yayimlanamadi.'];
+    return reply.code(entry[0] as number).send({ error: { code: 'LEGAL_PUBLISH_REJECTED', message: entry[1] as string } });
+  } finally {
+    client.release();
+  }
+});
+
 // --- Analytics and locality ----------------------------------------------
 // The console's Analitik ve Konum screen. Two rules shape everything below,
 // and both come from how locality was designed in migration 008: locality is a

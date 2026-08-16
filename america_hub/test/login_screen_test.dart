@@ -126,4 +126,36 @@ void main() {
     // and dismiss on a screen they have already been moved away from.
     expect(find.text('E-posta doğrulaması gerekli.'), findsNothing);
   });
+
+  // "Devam ederek Kullanim Kosullari ve Gizlilik Politikasi'ni kabul etmis
+  // olursunuz" cumlesindeki iki baglantinin da alti ciziliydi ve ikisi de
+  // hicbir yere gitmiyordu. Uyeden okuyamadigi bir metni kabul etmesi
+  // isteniyordu.
+  testWidgets('yasal metin baglantilari bir yere gidiyor', (tester) async {
+    final acildi = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          onCheckEmailStatus: (_) async => true,
+          onSignIn: (_, _) async {},
+          onTermsOfService: () => acildi.add('terms'),
+          onPrivacyPolicy: () => acildi.add('privacy'),
+        ),
+      ),
+    );
+
+    final kosullar = find.text('Kullanım Koşulları');
+    await tester.ensureVisible(kosullar);
+    await tester.pumpAndSettle();
+    await tester.tap(kosullar);
+    await tester.pumpAndSettle();
+
+    final gizlilik = find.text('Gizlilik Politikası');
+    await tester.ensureVisible(gizlilik);
+    await tester.pumpAndSettle();
+    await tester.tap(gizlilik);
+    await tester.pumpAndSettle();
+
+    expect(acildi, ['terms', 'privacy']);
+  });
 }

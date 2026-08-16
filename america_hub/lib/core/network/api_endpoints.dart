@@ -30,6 +30,10 @@ abstract final class ApiEndpoints {
       '/community/me/story-audience-contacts';
   static const communityMyStoryHighlights = '/community/me/story-highlights';
   static const mediaUploadPresign = '/media/uploads/presign';
+
+  /// Kimlik istemeyen tek okuma. Bagilantisi giris ekraninin altinda duruyor ve
+  /// orada henuz kimse giris yapmis degil.
+  static String legalDocument(String kind) => '/public/legal/$kind';
   // Served by the messaging gateway, so these resolve against
   // ApiConfig.messagingBaseUrl rather than the identity or community base URL.
   static const messagingConversations = '/messages/conversations';

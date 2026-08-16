@@ -51,6 +51,9 @@ import 'features/profile/domain/repositories/profile_repository.dart';
 import 'features/journey/application/journey_controller.dart';
 import 'features/journey/data/repositories/api_journey_repository.dart';
 import 'features/journey/data/repositories/mock_journey_repository.dart';
+import 'features/legal/data/repositories/api_legal_repository.dart';
+import 'features/legal/data/repositories/mock_legal_repository.dart';
+import 'features/legal/domain/repositories/legal_repository.dart';
 import 'features/journey/domain/repositories/journey_repository.dart';
 import 'features/messaging/application/messaging_controller.dart';
 import 'features/community/data/repositories/api_content_moderation_repository.dart';
@@ -403,6 +406,13 @@ Future<void> _bootstrap() async {
     repository: ApiSupportRepository(client: communityApiClient),
   );
 
+  // Metin panelden yazılıp panelden yayımlanıyor. Sahte kipte kısa bir örnek
+  // metin var; oraya gerçek politikanın bir kopyasını koymak, iki yerde duran
+  // ve biri er geç eskiyecek iki gizlilik politikası demekti.
+  final LegalRepository legalRepository = useMockServices
+      ? const MockLegalRepository()
+      : ApiLegalRepository(client: communityApiClient);
+
   // Zil artık gerçek bir kaynağa bağlı. Sahte kipte hâlâ boş: uydurma bir
   // "Yeni eşleşme isteği", hiç bildirim olmamasından daha kötü.
   final notificationsController = NotificationsController(
@@ -438,6 +448,7 @@ Future<void> _bootstrap() async {
       forumController: forumController,
       sosController: sosController,
       supportController: supportController,
+      legalRepository: legalRepository,
       navigatorObservers: [CrashScreenObserver(crashReporter)],
     ),
   );

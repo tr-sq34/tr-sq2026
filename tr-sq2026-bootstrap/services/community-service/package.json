@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test tests/journey.test.ts tests/locality.test.ts tests/stability.test.ts tests/sql_shape.test.ts tests/notification_preferences.test.ts tests/journey_badges.test.ts",
+    "test": "node --import tsx --test tests/journey.test.ts tests/locality.test.ts tests/stability.test.ts tests/sql_shape.test.ts tests/notification_preferences.test.ts tests/journey_badges.test.ts tests/legal.test.ts",
     "start": "node dist/server.js",
     "migrate": "node dist/migrate.js",
     "start:media-processor": "node dist/media_processor_worker.js",

@@ -22,6 +22,7 @@ import '../features/news/application/news_controller.dart';
 import '../features/notifications/application/notifications_controller.dart';
 import '../features/promotions/application/promotions_controller.dart';
 import '../features/safety/application/sos_controller.dart';
+import '../features/legal/domain/repositories/legal_repository.dart';
 import '../features/support/application/support_controller.dart';
 import '../features/verification/application/member_capabilities_controller.dart';
 import 'router/app_router.dart';
@@ -56,6 +57,7 @@ class AmericaHubApp extends StatelessWidget {
     required this.forumController,
     required this.sosController,
     required this.supportController,
+    required this.legalRepository,
     this.navigatorObservers = const [],
   });
 
@@ -115,6 +117,11 @@ class AmericaHubApp extends StatelessWidget {
   /// menuden acilan ekran ile bildirimden acilan ekran ayni durumu gostersin.
   final SupportController supportController;
 
+  /// Kullanım Koşulları ve Gizlilik Politikası. Giriş ekranının altındaki iki
+  /// bağlantı buradan okuyor, o yüzden bir denetleyici değil doğrudan depo:
+  /// metin oturum açılmadan önce de okunabilir olmalı.
+  final LegalRepository legalRepository;
+
   /// Çökme raporunun hangi ekranda olduğumuzu bilmesini sağlayan gözlemci
   /// buradan geçiyor. Testlerde boş: gezinti gözlemek onların işi değil.
   final List<NavigatorObserver> navigatorObservers;
@@ -153,6 +160,7 @@ class AmericaHubApp extends StatelessWidget {
         forumController: forumController,
         sosController: sosController,
         supportController: supportController,
+        legalRepository: legalRepository,
       ).onGenerateRoute,
     );
   }

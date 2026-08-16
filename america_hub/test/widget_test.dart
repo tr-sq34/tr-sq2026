@@ -38,6 +38,7 @@ import 'package:america_hub/features/promotions/application/promotions_controlle
 import 'package:america_hub/features/promotions/data/repositories/mock_promotion_repository.dart';
 import 'package:america_hub/features/profile/data/repositories/mock_profile_repository.dart';
 import 'package:america_hub/features/journey/application/journey_controller.dart';
+import 'package:america_hub/features/legal/data/repositories/mock_legal_repository.dart';
 import 'package:america_hub/features/journey/data/repositories/mock_journey_repository.dart';
 import 'package:america_hub/features/verification/application/member_capabilities_controller.dart';
 import 'package:america_hub/features/safety/application/sos_controller.dart';
@@ -84,6 +85,7 @@ void main() {
         directMessageRepository: MockDirectMessageRepository(),
         messageModerationRepository: MockMessageModerationRepository(),
         contentModerationRepository: MockContentModerationRepository(),
+        legalRepository: const MockLegalRepository(),
         communityHomeController: CommunityHomeController(
           ApiCommunityHomeRepository(apiClient),
         ),

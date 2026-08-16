@@ -31,6 +31,9 @@ import '../../features/auth/presentation/screens/phone_login_screen.dart';
 import '../../features/auth/presentation/screens/email_verification_screen.dart';
 import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/home/presentation/screens/main_layout_screen.dart';
+import '../../features/legal/domain/entities/legal_document.dart';
+import '../../features/legal/domain/repositories/legal_repository.dart';
+import '../../features/legal/presentation/screens/legal_document_screen.dart';
 import '../../features/promotions/application/promotions_controller.dart';
 import '../../features/safety/application/sos_controller.dart';
 import '../../features/support/application/support_controller.dart';
@@ -64,6 +67,7 @@ class AppRouter {
     required this.forumController,
     required this.sosController,
     required this.supportController,
+    required this.legalRepository,
   });
 
   final AuthController authController;
@@ -91,6 +95,10 @@ class AppRouter {
   final ForumController forumController;
   final SosController sosController;
   final SupportController supportController;
+
+  /// Giris ekraninin altindaki iki baglantinin arkasi. Kimlik istemiyor:
+  /// metinleri okumasi gereken kisi henuz giris yapmamis olan.
+  final LegalRepository legalRepository;
 
   /// Bir üyeyle sohbeti nereden olursa olsun açan taraf. Çarşı'daki satıcı
   /// düğmeleri de gelen kutusu da aynı kurulumu kullanıyor.
@@ -184,6 +192,15 @@ class AppRouter {
                 ).pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
               }
             },
+          ),
+        );
+      case AppRoutes.legal:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (_) => LegalDocumentScreen(
+            kind: settings.arguments as LegalDocumentKind? ??
+                LegalDocumentKind.terms,
+            repository: legalRepository,
           ),
         );
       case AppRoutes.inbox:
@@ -288,6 +305,16 @@ class AppRouter {
             ).pushNamed(AppRoutes.forgotPassword, arguments: email),
             onCreateAccount: () =>
                 Navigator.of(context).pushNamed(AppRoutes.register),
+            // Bu iki baglantinin alti ciziliydi ve hicbir yere gitmiyordu -
+            // yanlarinda "Devam ederek ... kabul etmis olursunuz" yazarken.
+            onTermsOfService: () => Navigator.of(context).pushNamed(
+              AppRoutes.legal,
+              arguments: LegalDocumentKind.terms,
+            ),
+            onPrivacyPolicy: () => Navigator.of(context).pushNamed(
+              AppRoutes.legal,
+              arguments: LegalDocumentKind.privacy,
+            ),
             onPhoneLogin: () =>
                 Navigator.of(context).pushNamed(AppRoutes.phoneLogin),
             onPasskeyLogin: authController.supportsPasskeys
