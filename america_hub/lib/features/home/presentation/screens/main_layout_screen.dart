@@ -285,8 +285,9 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     }
   }
 
-  /// "Haritaya İğne Koy" görevinin gittiği yer. Kayıt sırasındaki konum
-  /// adımının aynısı; kaydedince profil şehri de tazeleniyor.
+  /// "Haritaya İğne Koy" görevinin ve üst bardaki şehir satırının gittiği yer.
+  /// Kayıt sırasındaki konum adımının aynısı; kaydedince şehrin okunduğu her
+  /// yer tazeleniyor.
   Future<void> _editLocation() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => LocationEditScreen(
@@ -294,6 +295,10 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         onSaved: () async {
           await widget.profileController.load();
           await widget.journeyController.load();
+          // Üst bardaki satır ve ana sayfadaki "yakınındakiler" bu özetten
+          // okunuyor. Tazelenmezse üye şehrini değiştirir, ekranın tepesinde
+          // hâlâ eski şehri görür - kayıt olmamış gibi.
+          await widget.homeController.load();
         },
       ),
     ),
@@ -687,6 +692,11 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                             ? user?.shortName
                             : null,
                         subtitle: _currentIndex == 0 ? _localityLabel : null,
+                        // Şehir satırı bir aydır dokunulabilir görünüp hiçbir
+                        // şey yapmıyordu: çengel vardı, ucuna bağlı ekran
+                        // yoktu. Konumunu değiştirmek isteyen üyenin ilk
+                        // dokunacağı yer burası.
+                        onTapSubtitle: _editLocation,
                         onOpenMenu: _openMenu,
                         onOpenNotifications: _openNotifications,
                         unreadNotifications:

@@ -26,6 +26,10 @@ class AppTopBar extends StatelessWidget {
 
   /// The location line under the title, or null for tabs that have none.
   final String? subtitle;
+
+  /// Şehir satırına dokunulduğunda ne olacağı. Verilmezse satır düz yazı
+  /// olarak duruyor: dokunulacak bir şey yokken ok işareti göstermek, hiç
+  /// açılmayacak bir ekranın sözünü vermek olurdu.
   final VoidCallback? onTapSubtitle;
 
   final VoidCallback onOpenMenu;
@@ -74,30 +78,44 @@ class AppTopBar extends StatelessWidget {
                   ),
                 if (subtitle != null) ...[
                   const SizedBox(height: 4),
-                  InkWell(
-                    onTap: onTapSubtitle,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.location_on_rounded,
-                          size: 14,
-                          color: Color(0xFFF43F5E),
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            subtitle!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF64748B),
+                  Semantics(
+                    button: onTapSubtitle != null,
+                    label: onTapSubtitle == null
+                        ? null
+                        : 'Konumun: ${subtitle!}. Değiştirmek için dokun.',
+                    child: InkWell(
+                      onTap: onTapSubtitle,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.location_on_rounded,
+                            size: 14,
+                            color: Color(0xFFF43F5E),
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              subtitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF64748B),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                          if (onTapSubtitle != null) ...[
+                            const SizedBox(width: 2),
+                            const Icon(
+                              Icons.expand_more_rounded,
+                              size: 16,
+                              color: Color(0xFF94A3B8),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
                 ],

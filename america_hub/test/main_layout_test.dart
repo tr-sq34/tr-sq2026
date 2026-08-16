@@ -1,5 +1,6 @@
 import 'package:america_hub/features/community/presentation/screens/post_composer_screen.dart';
 import 'package:america_hub/features/home/presentation/widgets/app_top_bar.dart';
+import 'package:america_hub/features/profile/presentation/screens/location_edit_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -163,5 +164,20 @@ void main() {
     // would give a stale placeholder away on its own.
     expect(find.text('ZK'), findsOneWidget);
     expect(find.text('A'), findsNothing);
+  });
+
+  // Ust bardaki sehir satiri InkWell icindeydi ama hicbir cagiran ona bir is
+  // vermiyordu: dokunulabilir gorunen, dokununca hicbir sey yapmayan bir
+  // satir. Sehrini degistirmek isteyen uyenin ilk denedigi yer burasi.
+  testWidgets('the city line under the greeting opens the location screen', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+
+    expect(find.text('Paterson, NJ'), findsOneWidget);
+    await tester.tap(find.text('Paterson, NJ'));
+    await settle(tester);
+
+    expect(find.byType(LocationEditScreen), findsOneWidget);
   });
 }
