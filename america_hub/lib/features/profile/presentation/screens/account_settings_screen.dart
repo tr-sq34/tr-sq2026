@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/state/async_state.dart';
 import '../../../auth/application/auth_controller.dart';
+import '../../../legal/domain/entities/legal_document.dart';
 import '../../application/profile_controller.dart';
 import '../../domain/entities/user_profile.dart';
 import 'archive_screen.dart';
@@ -21,6 +22,7 @@ class AccountSettingsScreen extends StatefulWidget {
     required this.authController,
     required this.onSignOut,
     this.onDeletePost,
+    this.onOpenLegal,
   });
 
   final ProfileController profileController;
@@ -32,6 +34,11 @@ class AccountSettingsScreen extends StatefulWidget {
 
   /// Arşivden silme. Null ise arşiv ekranında "Sil" satırı hiç görünmüyor.
   final Future<void> Function(ProfilePost)? onDeletePost;
+
+  /// Kullanım Koşulları ve Gizlilik Politikası'nı açar. Null ise "Yasal" bölümü
+  /// hiç görünmüyor: hiçbir yere gitmeyen bir satır koymaktansa satırı hiç
+  /// koymamak doğru - giriş ekranındaki iki bağlantı yıllarca öyle duruyordu.
+  final void Function(LegalDocumentKind)? onOpenLegal;
 
   @override
   State<AccountSettingsScreen> createState() => _AccountSettingsScreenState();
@@ -134,6 +141,33 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         danger: true,
         onTap: _closing ? null : _confirmDelete,
       ),
+      if (widget.onOpenLegal != null) ...[
+        const SizedBox(height: 28),
+        const _SectionTitle('Yasal'),
+        const SizedBox(height: 6),
+        // Bu iki metin kayıt olurken kabul ediliyor ama kabul edildikten sonra
+        // uygulamanın içinde okunabilecek hiçbir yer yoktu. Kabul ettiği şeyi
+        // sonradan okuyamamak, kabul etmemişle aynı şey.
+        const Text(
+          'Kayıt olurken kabul ettiğin metinler. Yayımlanan her sürümün numarası '
+          've tarihi metnin altında yazıyor.',
+          style: TextStyle(fontSize: 12.5, height: 1.4, color: AppColors.textMuted),
+        ),
+        const SizedBox(height: 10),
+        _SettingTile(
+          icon: Icons.gavel_rounded,
+          title: LegalDocumentKind.terms.label,
+          subtitle: 'Uygulamayı kullanırken geçerli olan kurallar.',
+          onTap: () => widget.onOpenLegal!(LegalDocumentKind.terms),
+        ),
+        const SizedBox(height: 8),
+        _SettingTile(
+          icon: Icons.privacy_tip_outlined,
+          title: LegalDocumentKind.privacy.label,
+          subtitle: 'Hangi verinin toplandığı, nerede durduğu ve ne zaman silindiği.',
+          onTap: () => widget.onOpenLegal!(LegalDocumentKind.privacy),
+        ),
+      ],
       if (_closing) ...[
         const SizedBox(height: 20),
         const Center(child: CircularProgressIndicator()),

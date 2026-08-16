@@ -227,6 +227,11 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         authController: widget.authController,
         onSignOut: widget.onSignOut,
         onDeletePost: (post) => widget.postCommands.deletePost(post.id),
+        // Yasal metinler adlandırılmış yoldan açılıyor: ekranın deposu
+        // yönlendiricide zaten kurulu, buradan tekrar taşımanın anlamı yok.
+        onOpenLegal: (kind) => Navigator.of(
+          context,
+        ).pushNamed(AppRoutes.legal, arguments: kind),
       ),
     ),
   );
