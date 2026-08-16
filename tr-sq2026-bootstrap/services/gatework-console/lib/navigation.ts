@@ -3,6 +3,7 @@ import { canSeeAudit } from './audit';
 import { canSeeEvents } from './events';
 import { canSeeForum } from './forum';
 import { canSeeJourney } from './journey';
+import { canSeeLegal } from './legal';
 import { canSeeServiceHealth } from './health';
 import { canSeeMarketplace } from './marketplace';
 import { canSeeMembers } from './members';
@@ -58,6 +59,9 @@ export function navigationFor(roles: GateworkRole[]): NavGroup[] {
         canSeeServiceHealth(roles) ? { key: 'health', label: 'Sistem Sağlığı ve Bakım', href: '/health' } : null,
         canSeeAnalytics(roles) ? { key: 'analytics', label: 'Analitik ve Konum', href: '/analytics' } : null,
         canSeeAudit(roles) ? { key: 'system', label: 'Sistem ve Denetim', href: '/system' } : null,
+        // Hukuki metinler burada, icerik grubunda degil: bir gizlilik
+        // politikasi bir paylasim degil, platformun verdigi bir soz.
+        canSeeLegal(roles) ? { key: 'legal', label: 'Yasal Metinler', href: '/legal' } : null,
       ].filter(Boolean) as NavItem[],
     },
     {

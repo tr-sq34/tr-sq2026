@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Activity, Award, BadgeCheck, CalendarDays, ChevronDown, GalleryVerticalEnd, Gavel, LayoutDashboard, LogOut, MapPinned,
-  LifeBuoy, Megaphone, MessageSquare, MessagesSquare, Menu, Newspaper, ScrollText, ShieldAlert, Siren, Users, X,
+  LifeBuoy, Megaphone, MessageSquare, MessagesSquare, Menu, Newspaper, Scale, ScrollText, ShieldAlert, Siren, Users, X,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { NavGroup } from '@/lib/navigation';
@@ -23,6 +23,7 @@ const ICONS: Record<string, React.ComponentType<{ size?: number; className?: str
   health: Activity,
   analytics: MapPinned,
   system: ScrollText,
+  legal: Scale,
   content: GalleryVerticalEnd,
   news: Newspaper,
   forum: MessagesSquare,
