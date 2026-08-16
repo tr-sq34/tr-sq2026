@@ -151,6 +151,24 @@ const readFailureStatus = (error: unknown) =>
   (error as { statusCode?: number }).statusCode
   ?? ((error as Error)?.message === 'UNAUTHORIZED' ? 401 : 500);
 
+/// Ayni kural yazma yollari icin. Buradaki yanlis, okuma yollarindakinin tam
+/// tersiydi: `viewer()` jetonu reddettiginde firlattigi hatanin `statusCode`
+/// alani yok, bu yuzden yakalayan taraf 400 doneriyordu. Uygulama oturum
+/// yenilemeyi yalnizca 401 gorunce basliyor; 400 goren istemci jetonu
+/// tazelemiyor, istegi de tekrarlamiyor. Suresi dolmus bir jetonla gorsel
+/// yuklemek, gorev ilerletmek, arkadaslik istegi gondermek "kabul edilemedi"
+/// diye geri doniyordu ve uye uygulamayi kapatip acmadan bir daha calismiyordu.
+///
+/// Reddedilen jeton 401, yetmeyen rol 403, kalan her sey istemcinin gonderdigi
+/// govde demek oldugu icin `fallback` (varsayilan 400).
+const writeFailureStatus = (error: unknown, fallback = 400) =>
+  (error as { statusCode?: number }).statusCode
+  ?? ((error as Error)?.message === 'UNAUTHORIZED'
+    ? 401
+    : (error as Error)?.message === 'FORBIDDEN'
+      ? 403
+      : fallback);
+
 type GateworkRole='owner'|'security_admin'|'operations_admin'|'content_editor'|'moderator'|'analyst'|'auditor';
 const gateworkRoles=new Set<GateworkRole>(['owner','security_admin','operations_admin','content_editor','moderator','analyst','auditor']);
 async function gateworkActor(headers:{authorization?:string}) { const token=headers.authorization?.replace(/^Bearer\s+/i,''); if(!token) throw Error('UNAUTHORIZED'); const verified=await jwtVerify(token,identityVerificationKey,{issuer:required('JWT_ISSUER'),audience:required('GATEWORK_JWT_AUDIENCE'),algorithms:['RS256']}); const actorId=verified.payload.sub; const scopes=Array.isArray(verified.payload.scope)?verified.payload.scope.filter((v):v is GateworkRole=>typeof v==='string'&&gateworkRoles.has(v as GateworkRole)):[]; if(!actorId||!scopes.length) throw Error('UNAUTHORIZED'); return {actorId,roles:scopes}; }
@@ -408,7 +426,7 @@ app.post('/v1/internal/gatework/system-accounts', { config: { rateLimit: { max: 
       throw error;
     } finally { client.release(); }
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNT_REJECTED' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNT_REJECTED' } });
   }
 });
 
@@ -446,7 +464,7 @@ app.get('/v1/internal/gatework/system-accounts', async (request, reply) => {
       })),
     };
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNTS_UNAVAILABLE', message: 'Resmî hesaplar okunamadı.' } });
+    return reply.code(writeFailureStatus(error, 401)).send({ error: { code: 'GATEWORK_SYSTEM_ACCOUNTS_UNAVAILABLE', message: 'Resmî hesaplar okunamadı.' } });
   }
 });
 
@@ -475,7 +493,7 @@ app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWi
       throw error;
     } finally { client.release(); }
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_POST_REJECTED' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_POST_REJECTED' } });
   }
 });
 
@@ -524,7 +542,7 @@ app.post('/v1/internal/gatework/stories', { config: { rateLimit: { max: 20, time
     } finally { client.release(); }
   } catch (error) {
     const known = error instanceof Error ? error.message : '';
-    return reply.code(known === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_REJECTED', message: known === 'MEDIA_NOT_READY' ? 'Gorsel taramasi bitmeden Story yayinlanamaz.' : known === 'OFFICIAL_NOT_ACTIVE' ? 'Secilen resmi hesap aktif degil.' : 'Story yayinlanamadi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_STORY_REJECTED', message: known === 'MEDIA_NOT_READY' ? 'Gorsel taramasi bitmeden Story yayinlanamaz.' : known === 'OFFICIAL_NOT_ACTIVE' ? 'Secilen resmi hesap aktif degil.' : 'Story yayinlanamadi.' } });
   }
 });
 
@@ -560,7 +578,7 @@ app.get('/v1/internal/gatework/stories', async (request, reply) => {
       }))),
     };
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORIES_UNAVAILABLE', message: 'Panelden acilan Storyler okunamadi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_STORIES_UNAVAILABLE', message: 'Panelden acilan Storyler okunamadi.' } });
   }
 });
 
@@ -578,7 +596,7 @@ app.delete('/v1/internal/gatework/stories/:id', async (request, reply) => {
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'official_story.retract', targetType: 'story', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(204).send();
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_RETRACT_FAILED', message: 'Story geri cekilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_STORY_RETRACT_FAILED', message: 'Story geri cekilemedi.' } });
   }
 });
 
@@ -719,7 +737,7 @@ app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWind
     const input = mediaPresignBody.parse(request.body);
     return reply.code(201).send({ data: await openMediaUpload(userId, input) });
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'MEDIA_UPLOAD_NOT_ACCEPTED', message: 'Medya yükleme isteği kabul edilemedi.' },
     });
   }
@@ -733,7 +751,7 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
     if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
     return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'MEDIA_COMPLETE_FAILED', message: 'Medya doğrulama kuyruğa alınamadı.' },
     });
   }
@@ -747,7 +765,7 @@ app.get('/v1/media/:id', async (request, reply) => {
     if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' } });
     return { data };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'MEDIA_STATUS_FAILED', message: 'Medya durumu okunamadı.' },
     });
   }
@@ -785,7 +803,7 @@ app.post('/v1/internal/gatework/media/uploads/presign', { config: { rateLimit: {
     await requireOfficialOwner(ownerId);
     return reply.code(201).send({ data: await openMediaUpload(ownerId, input) });
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'GATEWORK_MEDIA_NOT_ACCEPTED', message: 'Görsel yükleme isteği kabul edilemedi.' },
     });
   }
@@ -800,7 +818,7 @@ app.post('/v1/internal/gatework/media/uploads/complete', { config: { rateLimit: 
     if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
     return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'GATEWORK_MEDIA_COMPLETE_FAILED', message: 'Görsel doğrulama kuyruğa alınamadı.' },
     });
   }
@@ -816,7 +834,7 @@ app.get('/v1/internal/gatework/media/:id', async (request, reply) => {
     if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Görsel bulunamadı.' } });
     return { data };
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'GATEWORK_MEDIA_STATUS_FAILED', message: 'Görselin durumu okunamadı.' },
     });
   }
@@ -1602,7 +1620,7 @@ const readListing = async (listingId: string, userId: string) => {
   return row.rows[0] ?? null;
 };
 
-app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(input.sellerId){params.push(input.sellerId);where+=` AND l.owner_id=$${params.length}`;}if(input.category){params.push(input.category);where+=` AND l.category=$${params.length}`;}if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;const data=await Promise.all(page.map(listingJson));return{data,meta:{nextCursor:next}};}catch(error){return reply.code((error as {statusCode?:number}).statusCode??401).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
+app.get('/v1/marketplace/listings',async(request,reply)=>{try{const userId=await viewer(request.headers);const input=listingQuery.parse(request.query);const cursor=decodeCursor(input.cursor);const params:unknown[]=[userId];let where="l.status='active'";if(input.sellerId){params.push(input.sellerId);where+=` AND l.owner_id=$${params.length}`;}if(input.category){params.push(input.category);where+=` AND l.category=$${params.length}`;}if(cursor){params.push(cursor.createdAt,cursor.id);where+=` AND (l.created_at,l.id) < ($${params.length-1}::timestamptz,$${params.length}::uuid)`;}params.push(input.limit+1);const rows=await db.query<ListingRow>(`SELECT ${listingColumns('$1')} FROM marketplace_listings l LEFT JOIN community_profile_projection cp ON cp.user_id=l.owner_id LEFT JOIN community_profile_projection v ON v.user_id=$1 WHERE ${where} ORDER BY (l.region_code=v.region_code) DESC,l.created_at DESC,l.id DESC LIMIT $${params.length}`,params);const page=rows.rows.slice(0,input.limit);const next=rows.rows.length>input.limit?encodeCursor(page[page.length-1]!):null;const data=await Promise.all(page.map(listingJson));return{data,meta:{nextCursor:next}};}catch(error){return reply.code(writeFailureStatus(error, 401)).send({error:{code:'LISTINGS_UNAVAILABLE'}});}});
 
 /**
  * The seller behind a listing.
@@ -3473,7 +3491,7 @@ app.patch('/v1/community/posts/:id/settings', async (request, reply) => {
     // bir zararı yok, arşivden çıktığında yine başa gelir.
     return { data: { pinned: row.pinned_at !== null, commentsEnabled: row.comments_enabled } };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({
+    return reply.code(writeFailureStatus(error)).send({
       error: { code: 'POST_SETTINGS_FAILED', message: 'Paylaşım ayarı değiştirilemedi.' },
     });
   }
@@ -3527,7 +3545,7 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
     })));
     return { data, meta: { nextCursor: rows.rows.length > input.limit ? profileCursorEncode(page[page.length - 1]!) : null, locked: false } };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({ error: { code: 'PROFILE_POSTS_UNAVAILABLE', message: 'Paylaşımlar yüklenemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'PROFILE_POSTS_UNAVAILABLE', message: 'Paylaşımlar yüklenemedi.' } });
   }
 });
 
@@ -3879,7 +3897,7 @@ app.get('/v1/community/news', async (request, reply) => {
       meta: { nextCursor: rows.rows.length > input.limit && last ? encodeCursor({ created_at: last.published_at, id: last.id }) : null },
     };
   } catch (error) {
-    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : writeFailureStatus(error))
       .send({ error: { code: 'NEWS_UNAVAILABLE', message: 'Haberler yüklenemedi.' } });
   }
 });
@@ -4098,7 +4116,7 @@ app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWin
       throw error;
     } finally { client.release(); }
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_REJECTED' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_NEWS_REJECTED' } });
   }
 });
 
@@ -4162,7 +4180,7 @@ app.get('/v1/internal/gatework/news', async (request, reply) => {
       }))),
     };
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
+    return reply.code(writeFailureStatus(error, 401)).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
   }
 });
 
@@ -4223,7 +4241,7 @@ app.delete('/v1/internal/gatework/news/:id', async (request, reply) => {
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.retract', targetType: 'news_article', targetId: id, reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: removed.rowCount ? 'succeeded' : 'failed' });
     return reply.code(204).send();
   } catch (error) {
-    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_NEWS_RETRACT_REJECTED' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_NEWS_RETRACT_REJECTED' } });
   }
 });
 
@@ -4611,7 +4629,7 @@ app.post('/v1/internal/gatework/promotions', { config: { rateLimit: { max: 30, t
     return reply.code(201).send({ data: row.rows[0] });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_PROMOTION_REJECTED' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'GATEWORK_PROMOTION_REJECTED' } });
   } finally {
     client.release();
   }
@@ -4772,7 +4790,7 @@ app.get('/v1/community/forum/topics', async (request, reply) => {
     const last = page[page.length - 1];
     return { data: page.map(forumTopicJson), meta: { nextCursor: rows.rows.length > input.limit && last ? forumCursorEncode(last) : null } };
   } catch (error) {
-    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : writeFailureStatus(error))
       .send({ error: { code: 'FORUM_TOPICS_UNAVAILABLE', message: 'Konular yüklenemedi.' } });
   }
 });
@@ -4853,7 +4871,7 @@ app.get('/v1/community/forum/topics/:id/replies', async (request, reply) => {
     const last = page[page.length - 1];
     return { data: page.map(forumReplyJson), meta: { nextCursor: rows.rows.length > input.limit && last ? encodeCursor(last) : null } };
   } catch (error) {
-    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : (error as { statusCode?: number }).statusCode ?? 400)
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : writeFailureStatus(error))
       .send({ error: { code: 'FORUM_REPLIES_UNAVAILABLE', message: 'Yanıtlar yüklenemedi.' } });
   }
 });
@@ -5537,7 +5555,7 @@ app.post('/v1/safety/sos', { config: { rateLimit: { max: 30, timeWindow: '5 minu
     // response saying otherwise would be read as "my location was dropped".
     return reply.code(201).send({ data: { id: alert.id, status: alert.status, createdAt: alert.created_at.toISOString(), locationShared: alert.has_location } });
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'SOS_NOT_SENT', message: 'Yardım çağrısı gönderilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_NOT_SENT', message: 'Yardım çağrısı gönderilemedi.' } });
   }
 });
 
@@ -5595,7 +5613,7 @@ app.post('/v1/safety/sos/:id/cancel', async (request, reply) => {
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     return reply.code(204).send();
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'SOS_CANCEL_REJECTED', message: 'Çağrı geri alınamadı.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_CANCEL_REJECTED', message: 'Çağrı geri alınamadı.' } });
   }
 });
 
@@ -5660,7 +5678,7 @@ app.post('/v1/internal/gatework/safety/alerts/:id/acknowledge', async (request, 
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.acknowledge', targetType: 'sos_alert', targetId: id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(204).send();
   } catch (error) {
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_ACKNOWLEDGE_REJECTED', message: 'Çağrı üstlenilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_ACKNOWLEDGE_REJECTED', message: 'Çağrı üstlenilemedi.' } });
   }
 });
 
@@ -5685,7 +5703,7 @@ app.post('/v1/internal/gatework/safety/alerts/:id/location-access', async (reque
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.location_access', targetType: 'sos_alert', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(201).send({ data: { grantId: grant.rows[0]!.id, expiresAt: grant.rows[0]!.expires_at.toISOString() } });
   } catch (error) {
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_LOCATION_ACCESS_REJECTED', message: 'Konum erişimi açılamadı.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_LOCATION_ACCESS_REJECTED', message: 'Konum erişimi açılamadı.' } });
   }
 });
 
@@ -5710,7 +5728,7 @@ app.get('/v1/internal/gatework/safety/alerts/:id/location', async (request, repl
     if (!point) return reply.code(403).send({ error: { code: 'SOS_LOCATION_SEALED', message: 'Bu konumu görme yetkin yok veya süresi doldu.' } });
     return { data: { latitude: point.latitude, longitude: point.longitude, accuracyMeters: point.accuracy, capturedAt: point.captured_at?.toISOString() ?? null, accessExpiresAt: point.expires_at.toISOString() } };
   } catch (error) {
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_LOCATION_UNAVAILABLE', message: 'Konum okunamadı.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_LOCATION_UNAVAILABLE', message: 'Konum okunamadı.' } });
   }
 });
 
@@ -5739,7 +5757,7 @@ app.post('/v1/internal/gatework/safety/alerts/:id/close', async (request, reply)
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'sos.close', targetType: 'sos_alert', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(204).send();
   } catch (error) {
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'SOS_CLOSE_REJECTED', message: 'Çağrı kapatılamadı.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'SOS_CLOSE_REJECTED', message: 'Çağrı kapatılamadı.' } });
   }
 });
 
@@ -5860,7 +5878,7 @@ app.put('/v1/events/:id/rsvp', async (request, reply) => {
     const row = await db.query<EventRow>(`${eventSelect('$1')} WHERE e.id=$2`, [userId, id]);
     return { data: await eventJson(row.rows[0]!) };
   } catch (error) {
-    return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({ error: { code: 'EVENT_RSVP_REJECTED', message: 'Katılım kaydedilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'EVENT_RSVP_REJECTED', message: 'Katılım kaydedilemedi.' } });
   }
 });
 
@@ -5926,7 +5944,7 @@ app.post('/v1/internal/gatework/events', { config: { rateLimit: { max: 30, timeW
     return reply.code(201).send({ data: { id: row.rows[0]!.id, duplicate: false } });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'EVENT_CREATE_REJECTED', message: 'Etkinlik kaydedilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'EVENT_CREATE_REJECTED', message: 'Etkinlik kaydedilemedi.' } });
   } finally {
     client.release();
   }
@@ -5959,7 +5977,7 @@ app.post('/v1/internal/gatework/events/:id/cancel', async (request, reply) => {
     await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'event.cancel', targetType: 'event', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
     return reply.code(204).send();
   } catch (error) {
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'EVENT_CANCEL_REJECTED', message: 'Etkinlik iptal edilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'EVENT_CANCEL_REJECTED', message: 'Etkinlik iptal edilemedi.' } });
   }
 });
 
@@ -6027,7 +6045,7 @@ app.post('/v1/internal/gatework/announcements', { config: { rateLimit: { max: 10
     return reply.code(201).send({ data: { id, recipientCount: fanout.rowCount ?? 0, duplicate: false } });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
-    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'ANNOUNCEMENT_REJECTED', message: 'Duyuru gönderilemedi.' } });
+    return reply.code(writeFailureStatus(error)).send({ error: { code: 'ANNOUNCEMENT_REJECTED', message: 'Duyuru gönderilemedi.' } });
   } finally {
     client.release();
   }
