@@ -84,6 +84,8 @@ import 'features/notifications/data/repositories/api_notification_repository.dar
 import 'features/notifications/data/repositories/empty_notification_repository.dart';
 import 'features/safety/application/sos_controller.dart';
 import 'features/safety/data/sos_repository.dart';
+import 'features/support/application/support_controller.dart';
+import 'features/support/data/support_repository.dart';
 import 'features/verification/application/member_capabilities_controller.dart';
 
 /// Hata yakalayan üç kanal var ve üçü de farklı şeyi yakalıyor; biri
@@ -395,6 +397,12 @@ Future<void> _bootstrap() async {
     repository: ApiSosRepository(client: communityApiClient),
   );
 
+  // Destek de sahte kipte gerçek uca gidiyor: cevap bekleyen bir üyeye
+  // "iletildi" deyip hiçbir kuyruğa düşmemek, hiç yazdırmamaktan kötü.
+  final supportController = SupportController(
+    repository: ApiSupportRepository(client: communityApiClient),
+  );
+
   // Zil artık gerçek bir kaynağa bağlı. Sahte kipte hâlâ boş: uydurma bir
   // "Yeni eşleşme isteği", hiç bildirim olmamasından daha kötü.
   final notificationsController = NotificationsController(
@@ -429,6 +437,7 @@ Future<void> _bootstrap() async {
       promotionsController: promotionsController,
       forumController: forumController,
       sosController: sosController,
+      supportController: supportController,
       navigatorObservers: [CrashScreenObserver(crashReporter)],
     ),
   );

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Activity, BadgeCheck, CalendarDays, ChevronDown, GalleryVerticalEnd, Gavel, LayoutDashboard, LogOut, MapPinned,
-  Megaphone, MessageSquare, MessagesSquare, Menu, Newspaper, ScrollText, ShieldAlert, Siren, Users, X,
+  LifeBuoy, Megaphone, MessageSquare, MessagesSquare, Menu, Newspaper, ScrollText, ShieldAlert, Siren, Users, X,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { NavGroup } from '@/lib/navigation';
@@ -34,6 +34,7 @@ const ICONS: Record<string, React.ComponentType<{ size?: number; className?: str
   moderation: ShieldAlert,
   communications: MessageSquare,
   safety: Siren,
+  support: LifeBuoy,
 };
 
 function NavLink({ item, active, onNavigate }: { item: NavGroup['items'][number]; active: boolean; onNavigate: () => void }) {

@@ -44,6 +44,10 @@ export const OUTCOME_LABELS: Record<string, string> = {
 export const ACTION_LABELS: Record<string, string> = {
   'members.list': 'Üye listesini görüntüledi',
   'member.sessions.list': 'Üyenin açık oturumlarını görüntüledi',
+  'support.request.read': 'Destek yazışmasını okudu',
+  'support.request.reply': 'Destek talebini yanıtladı',
+  'support.request.reply_and_close': 'Destek talebini yanıtlayıp kapattı',
+  'support.request.close': 'Destek talebini yanıtsız kapattı',
   'member.sessions.revoke': 'Oturumları sonlandırdı',
   'role.grant': 'Rol verdi',
   'role.revoke': 'Rolü geri aldı',

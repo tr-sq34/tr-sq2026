@@ -78,6 +78,8 @@ class AppNotificationDto {
         // içinde. Bildirimler ekranı bu türü kendisi açıyor, kabuğa göndermiyor.
         AppNotificationType.announcement =>
           'turksquare://announcement/$subjectId',
+        // Destek cevabının gideceği yer belli: yazışmanın kendisi.
+        AppNotificationType.supportAnswer => 'turksquare://support/$subjectId',
         _ => 'turksquare://post/$subjectId',
       }),
       isRead: isRead,
@@ -92,6 +94,7 @@ class AppNotificationDto {
     'special_request' => AppNotificationType.specialRequest,
     'friend_request' => AppNotificationType.friendRequest,
     'announcement' => AppNotificationType.announcement,
+    'support_answer' => AppNotificationType.supportAnswer,
     _ => AppNotificationType.system,
   };
 
@@ -102,6 +105,7 @@ class AppNotificationDto {
     AppNotificationType.listingLiked => 'İlanın beğenildi',
     AppNotificationType.specialRequest => 'Yeni istek',
     AppNotificationType.friendRequest => 'Arkadaşlık isteği',
+    AppNotificationType.supportAnswer => 'Destek talebin yanıtlandı',
     _ => 'Bildirim',
   };
 
@@ -130,6 +134,12 @@ class AppNotificationDto {
       // istek sayısı. Yanıtlandığında satır kayboluyor.
       AppNotificationType.friendRequest =>
         '${subject.isEmpty ? 'Bir üye' : subject} sana arkadaşlık isteği gönderdi.',
+      // Cevabın kendisi gövdede geliyor; satırda ilk iki satırı görünüyor.
+      // Sunucu göndermediyse hiç değilse hangi talep olduğu yazıyor.
+      AppNotificationType.supportAnswer =>
+        (body == null || body!.trim().isEmpty)
+            ? '"$subject" talebine destek ekibi yanıt yazdı.'
+            : body!.trim(),
       _ => subject,
     };
   }

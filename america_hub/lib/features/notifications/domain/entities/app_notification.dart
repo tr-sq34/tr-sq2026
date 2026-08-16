@@ -2,7 +2,10 @@
 /// kurmuyor, TurkSquare yetkilisi yazıyor. Bu yüzden başlığı da gövdesi de
 /// sunucudan olduğu gibi geliyor ve satıra dokunmak bir paylaşıma değil,
 /// duyurunun tam metnine götürüyor.
-enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, announcement, system }
+///
+/// [supportAnswer] de metnini sunucudan alıyor: destek ekibinin yazdığı cevap
+/// bildirimin gövdesinde geliyor, satıra dokunmak yazışmanın kendisini açıyor.
+enum AppNotificationType { specialRequest, friendRequest, postComment, postLike, listingSaved, listingLiked, eventReminder, announcement, supportAnswer, system }
 
 class AppNotification {
   const AppNotification({

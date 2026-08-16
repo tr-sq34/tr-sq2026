@@ -140,6 +140,12 @@ abstract final class ApiEndpoints {
   static const safetySos = '/safety/sos';
   static const safetySosActive = '/safety/sos/active';
   static String safetySosCancel(String id) => '/safety/sos/$id/cancel';
+  // Destek. Şikâyet uçlarından ayrı duruyor çünkü muhatabı ayrı: şikâyette
+  // başka bir üye inceleniyor, burada biz cevap veriyoruz.
+  static const supportRequests = '/support/requests';
+  static String supportRequest(String id) => '/support/requests/$id';
+  static String supportRequestMessages(String id) =>
+      '/support/requests/$id/messages';
   static const eventsUpcoming = '/events';
   static String eventRsvp(String id) => '/events/$id/rsvp';
   static const marketplaceListings = '/marketplace/listings';

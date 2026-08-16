@@ -33,6 +33,7 @@ import '../../features/auth/presentation/screens/onboarding_screen.dart';
 import '../../features/home/presentation/screens/main_layout_screen.dart';
 import '../../features/promotions/application/promotions_controller.dart';
 import '../../features/safety/application/sos_controller.dart';
+import '../../features/support/application/support_controller.dart';
 import '../startup/startup_screen.dart';
 import 'app_routes.dart';
 
@@ -62,6 +63,7 @@ class AppRouter {
     required this.promotionsController,
     required this.forumController,
     required this.sosController,
+    required this.supportController,
   });
 
   final AuthController authController;
@@ -88,6 +90,7 @@ class AppRouter {
   final PromotionsController promotionsController;
   final ForumController forumController;
   final SosController sosController;
+  final SupportController supportController;
 
   /// Bir üyeyle sohbeti nereden olursa olsun açan taraf. Çarşı'daki satıcı
   /// düğmeleri de gelen kutusu da aynı kurulumu kullanıyor.
@@ -150,6 +153,7 @@ class AppRouter {
             promotionsController: promotionsController,
             forumController: forumController,
             sosController: sosController,
+            supportController: supportController,
             onSignOut: () async {
               await authController.signOut();
               if (context.mounted) {

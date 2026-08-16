@@ -2936,13 +2936,22 @@ app.get('/v1/notifications', async (request, reply) => {
            -- one because the filter below drops rows that count zero, and an
            -- announcement is always worth showing.
            WHEN 'announcement' THEN 1
+           -- Ayni sebeple bir: destek yaniti sayilacak bir kalabalik degil,
+           -- tek bir cevap. Talep silinmisse basligi da gelmez ve satir duser.
+           WHEN 'support_answer' THEN 1
            ELSE (SELECT count(*) FROM friend_requests f WHERE f.requester_id=n.subject_id AND f.addressee_id=n.user_id AND f.status='pending')
          END actor_count,
          CASE WHEN n.kind='announcement'
            THEN (SELECT a.body FROM member_announcements a WHERE a.id=n.subject_id)
+           -- Yanitin kendisi zilde gorunuyor: uyeyi destek ekranina gonderip
+           -- "bir cevap var" demek, cevabi bir tik arkasina saklamak olurdu.
+           WHEN n.kind='support_answer'
+           THEN (SELECT left(m.body,200) FROM support_messages m WHERE m.request_id=n.subject_id AND m.author_kind='staff' ORDER BY m.created_at DESC LIMIT 1)
          END subject_body,
          CASE WHEN n.kind='announcement'
            THEN (SELECT a.title FROM member_announcements a WHERE a.id=n.subject_id)
+           WHEN n.kind='support_answer'
+           THEN (SELECT r.subject FROM support_requests r WHERE r.id=n.subject_id)
            WHEN n.kind IN ('post_comment','post_like','special_request')
            THEN (SELECT left(p.body,80) FROM community_posts p WHERE p.id=n.subject_id AND p.deleted_at IS NULL)
            -- A friend request has no title of its own; who is asking is the
@@ -6220,6 +6229,334 @@ app.post('/v1/internal/gatework/community/restrictions/:userId', { config: { rat
       .send({ error: { code: 'MEMBER_RESTRICTION_REJECTED', message: 'Kısıtlama uygulanamadı.' } });
   } finally {
     client.release();
+  }
+});
+
+// --- Yardim ve Destek ---------------------------------------------------
+//
+// Uyenin platformun kendisiyle konustugu tek yer. Sikayet mekanizmasindan
+// ayri: o baska bir uyeyi isaret ediyor, bu bizi.
+//
+// Bir sey bilerek yapilmadi: kisitlanmis uye de destek yazabiliyor. Susturulan
+// ya da askiya alinan bir uyenin "neden" diye sorabilecegi bir yer kalmazsa,
+// karari itiraz edilemez hale getirmis oluruz. Kisitlama paylasimi durdurur,
+// itirazi degil.
+const SUPPORT_READ_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'moderator', 'auditor'];
+const SUPPORT_ACT_ROLES: GateworkRole[] = ['owner', 'security_admin', 'operations_admin', 'moderator'];
+
+// Ayni anda acik durabilecek talep sayisi. Sinir yoksa tek bir uye kuyrugu
+// dolduruyor ve sirada bekleyen herkesin cevabi geciciyor.
+const SUPPORT_OPEN_LIMIT = 5;
+
+const supportCreateBody = z.object({
+  topic: z.enum(['account', 'safety', 'marketplace', 'content', 'technical', 'other']),
+  subject: z.string().trim().min(3).max(120),
+  body: z.string().trim().min(10).max(4000),
+  appVersion: z.string().trim().max(40).optional(),
+  platform: z.enum(['android', 'ios', 'web']).optional(),
+  clientToken: z.string().uuid(),
+});
+const supportReplyBody = z.object({ body: z.string().trim().min(2).max(4000) });
+const supportStaffReplyBody = z.object({ body: z.string().trim().min(2).max(4000), close: z.boolean().default(false) });
+const supportCloseBody = z.object({ reason: z.string().trim().min(5).max(500) });
+
+const supportRequestRow = (row: {
+  id: string; topic: string; subject: string; status: string; app_version: string | null; platform: string | null;
+  created_at: Date; updated_at: Date; last_member_at: Date; last_staff_at: Date | null; closed_at: Date | null; closure_reason: string | null;
+}) => ({
+  id: row.id,
+  topic: row.topic,
+  subject: row.subject,
+  status: row.status,
+  appVersion: row.app_version,
+  platform: row.platform,
+  createdAt: row.created_at.toISOString(),
+  updatedAt: row.updated_at.toISOString(),
+  lastMemberAt: row.last_member_at.toISOString(),
+  lastStaffAt: row.last_staff_at?.toISOString() ?? null,
+  closedAt: row.closed_at?.toISOString() ?? null,
+  closureReason: row.closure_reason,
+});
+
+app.post('/v1/support/requests', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const userId = await viewer(request.headers);
+    const input = supportCreateBody.parse(request.body);
+    await client.query('BEGIN');
+    // Ayni form iki kez gonderildiginde ikinci gonderim yeni bir talep degil,
+    // birincinin kendisi. Uyeye "gonderildi" demek ve arkada iki kayit acmak,
+    // operatorun ayni soruyu iki kez cevaplamasi demek.
+    const existing = await client.query<{ id: string }>(
+      'SELECT id FROM support_requests WHERE member_id=$1 AND client_token=$2',
+      [userId, input.clientToken],
+    );
+    if (existing.rows[0]) {
+      await client.query('COMMIT');
+      return reply.code(200).send({ data: { id: existing.rows[0].id, duplicate: true } });
+    }
+    const open = await client.query<{ count: string }>(
+      "SELECT count(*) count FROM support_requests WHERE member_id=$1 AND status<>'closed'",
+      [userId],
+    );
+    if (Number(open.rows[0]?.count ?? 0) >= SUPPORT_OPEN_LIMIT) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'SUPPORT_TOO_MANY_OPEN', message: `Aynı anda en fazla ${SUPPORT_OPEN_LIMIT} açık talebin olabilir. Yeni bir talep açmak için önce mevcut taleplerinden birinin yanıtını bekle.` } });
+    }
+    const created = await client.query<{ id: string }>(
+      `INSERT INTO support_requests(member_id,topic,subject,app_version,platform,client_token)
+       VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [userId, input.topic, input.subject, input.appVersion ?? null, input.platform ?? null, input.clientToken],
+    );
+    const id = created.rows[0]!.id;
+    await client.query(
+      "INSERT INTO support_messages(request_id,author_kind,author_id,body) VALUES($1,'member',$2,$3)",
+      [id, userId, input.body],
+    );
+    await client.query('COMMIT');
+    return reply.code(201).send({ data: { id, duplicate: false } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_REQUEST_REJECTED', message: 'Destek talebi gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/v1/support/requests', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const rows = await db.query(
+      `SELECT id,topic,subject,status,app_version,platform,created_at,updated_at,last_member_at,last_staff_at,closed_at,closure_reason
+         FROM support_requests WHERE member_id=$1 ORDER BY updated_at DESC LIMIT 50`,
+      [userId],
+    );
+    return { data: rows.rows.map((row) => supportRequestRow(row as Parameters<typeof supportRequestRow>[0])) };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_REQUESTS_UNAVAILABLE', message: 'Destek taleplerin okunamadı.' } });
+  }
+});
+
+app.get('/v1/support/requests/:id', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const found = await db.query(
+      `SELECT id,topic,subject,status,app_version,platform,created_at,updated_at,last_member_at,last_staff_at,closed_at,closure_reason
+         FROM support_requests WHERE id=$1 AND member_id=$2`,
+      [id, userId],
+    );
+    if (!found.rows.length) return reply.code(404).send({ error: { code: 'SUPPORT_REQUEST_NOT_FOUND', message: 'Destek talebi bulunamadı.' } });
+    const messages = await db.query<{ id: string; author_kind: string; body: string; created_at: Date }>(
+      'SELECT id,author_kind,body,created_at FROM support_messages WHERE request_id=$1 ORDER BY created_at ASC',
+      [id],
+    );
+    return {
+      data: {
+        ...supportRequestRow(found.rows[0] as Parameters<typeof supportRequestRow>[0]),
+        // Operatorun kimligi uyeye gitmiyor: cevap veren kisi degil, platform.
+        // Bir destek yanitinin altinda calisanin adi, uyenin o kisiyi profilden
+        // bulmasi demek.
+        messages: messages.rows.map((message) => ({
+          id: message.id,
+          from: message.author_kind === 'staff' ? 'destek' : 'uye',
+          body: message.body,
+          createdAt: message.created_at.toISOString(),
+        })),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_REQUEST_UNAVAILABLE', message: 'Destek talebi okunamadı.' } });
+  }
+});
+
+app.post('/v1/support/requests/:id/messages', { config: { rateLimit: { max: 20, timeWindow: '10 minutes' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = supportReplyBody.parse(request.body);
+    await client.query('BEGIN');
+    // Kapali talebe yazilamaz. Yazilabilseydi kimse fark etmeden konusma
+    // devam ederdi: kapali talep hicbir kuyrukta gorunmuyor.
+    const updated = await client.query(
+      "UPDATE support_requests SET status='open',last_member_at=now(),updated_at=now() WHERE id=$1 AND member_id=$2 AND status<>'closed'",
+      [id, userId],
+    );
+    if (!updated.rowCount) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'SUPPORT_REQUEST_CLOSED', message: 'Bu talep kapanmış. Yeni bir talep açabilirsin.' } });
+    }
+    await client.query("INSERT INTO support_messages(request_id,author_kind,author_id,body) VALUES($1,'member',$2,$3)", [id, userId, input.body]);
+    await client.query('COMMIT');
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_MESSAGE_REJECTED', message: 'Mesaj gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+// Panel tarafi. Kuyruk sirasi cevap bekleme suresine gore: uc gundur bekleyen
+// talep, bu sabah gelenin onunde.
+app.get('/v1/internal/gatework/support/requests', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SUPPORT_READ_ROLES);
+    const input = z.object({
+      state: z.enum(['waiting', 'open', 'closed', 'all']).default('waiting'),
+      topic: z.enum(['account', 'safety', 'marketplace', 'content', 'technical', 'other']).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+    }).parse(request.query);
+    const rows = await db.query(
+      `SELECT r.id,r.topic,r.subject,r.status,r.app_version,r.platform,r.created_at,r.updated_at,
+              r.last_member_at,r.last_staff_at,r.closed_at,r.closure_reason,
+              r.member_id,cp.display_name member_name,
+              (SELECT m.body FROM support_messages m WHERE m.request_id=r.id ORDER BY m.created_at DESC LIMIT 1) last_body,
+              (SELECT count(*) FROM support_messages m WHERE m.request_id=r.id) message_count
+         FROM support_requests r
+         LEFT JOIN community_profile_projection cp ON cp.user_id=r.member_id
+        WHERE ($1='all'
+               OR ($1='waiting' AND r.status='open')
+               OR ($1='open' AND r.status<>'closed')
+               OR ($1='closed' AND r.status='closed'))
+          AND ($2::text IS NULL OR r.topic=$2)
+        ORDER BY (r.status='open') DESC, r.last_member_at ASC
+        LIMIT $3`,
+      [input.state, input.topic ?? null, input.limit],
+    );
+    return {
+      data: rows.rows.map((row) => {
+        const typed = row as Parameters<typeof supportRequestRow>[0] & { member_id: string; member_name: string | null; last_body: string | null; message_count: string };
+        return {
+          ...supportRequestRow(typed),
+          memberId: typed.member_id,
+          // Topluluk projeksiyonu bu uyeyi henuz gormemis olabilir; adi
+          // uydurmak yerine bos birakiliyor, ekran "ad gelmedi" diyor.
+          memberName: typed.member_name,
+          lastMessage: typed.last_body,
+          messageCount: Number(typed.message_count),
+        };
+      }),
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401)
+      .send({ error: { code: 'SUPPORT_QUEUE_UNAVAILABLE', message: 'Destek kuyruğu okunamadı.' } });
+  }
+});
+
+app.get('/v1/internal/gatework/support/requests/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SUPPORT_READ_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const found = await db.query(
+      `SELECT r.id,r.topic,r.subject,r.status,r.app_version,r.platform,r.created_at,r.updated_at,
+              r.last_member_at,r.last_staff_at,r.closed_at,r.closure_reason,r.member_id,cp.display_name member_name
+         FROM support_requests r
+         LEFT JOIN community_profile_projection cp ON cp.user_id=r.member_id
+        WHERE r.id=$1`,
+      [id],
+    );
+    if (!found.rows.length) return reply.code(404).send({ error: { code: 'SUPPORT_REQUEST_NOT_FOUND', message: 'Destek talebi bulunamadı.' } });
+    const messages = await db.query<{ id: string; author_kind: string; author_id: string; author_roles: string[] | null; body: string; created_at: Date }>(
+      'SELECT id,author_kind,author_id,author_roles,body,created_at FROM support_messages WHERE request_id=$1 ORDER BY created_at ASC',
+      [id],
+    );
+    const typed = found.rows[0] as Parameters<typeof supportRequestRow>[0] & { member_id: string; member_name: string | null };
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'support.request.read', targetType: 'support_request', targetId: id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return {
+      data: {
+        ...supportRequestRow(typed),
+        memberId: typed.member_id,
+        memberName: typed.member_name,
+        messages: messages.rows.map((message) => ({
+          id: message.id,
+          authorKind: message.author_kind,
+          // Panelde cevabi kimin yazdigi duruyor - uyeye gitmiyor, ama ekip
+          // ici sorumluluk icin gerekli.
+          authorId: message.author_id,
+          authorRoles: message.author_roles ?? [],
+          body: message.body,
+          createdAt: message.created_at.toISOString(),
+        })),
+      },
+    };
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : 401)
+      .send({ error: { code: 'SUPPORT_REQUEST_UNAVAILABLE', message: 'Destek talebi okunamadı.' } });
+  }
+});
+
+app.post('/v1/internal/gatework/support/requests/:id/reply', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SUPPORT_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = supportStaffReplyBody.parse(request.body);
+    await client.query('BEGIN');
+    const updated = await client.query<{ member_id: string }>(
+      `UPDATE support_requests
+          SET status=CASE WHEN $2 THEN 'closed' ELSE 'answered' END,
+              last_staff_at=now(),updated_at=now(),
+              closed_at=CASE WHEN $2 THEN now() ELSE closed_at END,
+              closed_by=CASE WHEN $2 THEN $3::uuid ELSE closed_by END
+        WHERE id=$1 AND status<>'closed'
+        RETURNING member_id`,
+      [id, input.close, actor.actorId],
+    );
+    if (!updated.rowCount) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ error: { code: 'SUPPORT_REQUEST_CLOSED', message: 'Bu talep kapanmış; yeniden yanıtlanamaz.' } });
+    }
+    await client.query(
+      "INSERT INTO support_messages(request_id,author_kind,author_id,author_roles,body) VALUES($1,'staff',$2,$3,$4)",
+      [id, actor.actorId, actor.roles, input.body],
+    );
+    // Zil. Cevabi gormek icin uyenin destek ekranini kendiliginden acmasini
+    // beklemek, cevabi gondermemekle ayni sey.
+    await client.query(
+      `INSERT INTO member_notifications(user_id,kind,subject_id,last_actor_id)
+       VALUES($1,'support_answer',$2,$3)
+       ON CONFLICT(user_id,kind,subject_id) DO UPDATE SET updated_at=now(),read_at=NULL,last_actor_id=EXCLUDED.last_actor_id`,
+      [updated.rows[0]!.member_id, id, actor.actorId],
+    );
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: input.close ? 'support.request.reply_and_close' : 'support.request.reply', targetType: 'support_request', targetId: id, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    await client.query('COMMIT');
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_REPLY_REJECTED', message: 'Yanıt gönderilemedi.' } });
+  } finally {
+    client.release();
+  }
+});
+
+// Yanitsiz kapatma. Yanlislikla acilmis ya da kendi kendine cozulmus talepler
+// icin; sebep zorunlu cunku uye bu cumleyi goruyor.
+app.post('/v1/internal/gatework/support/requests/:id/close', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, SUPPORT_ACT_ROLES);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = supportCloseBody.parse(request.body);
+    const updated = await db.query(
+      "UPDATE support_requests SET status='closed',closed_at=now(),closed_by=$2,closure_reason=$3,updated_at=now() WHERE id=$1 AND status<>'closed'",
+      [id, actor.actorId, input.reason],
+    );
+    if (!updated.rowCount) return reply.code(409).send({ error: { code: 'SUPPORT_REQUEST_CLOSED', message: 'Talep zaten kapalı.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'support.request.close', targetType: 'support_request', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'FORBIDDEN' ? 403 : (error as Error).message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'SUPPORT_CLOSE_REJECTED', message: 'Talep kapatılamadı.' } });
   }
 });
 

@@ -213,6 +213,7 @@ class _NotificationTile extends StatelessWidget {
     AppNotificationType.listingLiked => Icons.storefront_outlined,
     AppNotificationType.eventReminder => Icons.event_outlined,
     AppNotificationType.announcement => Icons.campaign_outlined,
+    AppNotificationType.supportAnswer => Icons.support_agent_outlined,
     AppNotificationType.system => Icons.info_outline_rounded,
   };
 }

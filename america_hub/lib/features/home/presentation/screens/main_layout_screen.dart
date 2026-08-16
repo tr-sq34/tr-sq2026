@@ -51,6 +51,9 @@ import '../widgets/app_top_bar.dart';
 import '../../application/community_home_controller.dart';
 import '../../../safety/application/sos_controller.dart';
 import '../../../safety/presentation/screens/sos_screen.dart';
+import '../../../support/application/support_controller.dart';
+import '../../../support/presentation/screens/support_screen.dart';
+import '../../../support/presentation/screens/support_thread_screen.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 import '../../../../app/router/app_routes.dart';
 import '../../../auth/application/auth_controller.dart';
@@ -80,6 +83,7 @@ class MainLayoutScreen extends StatefulWidget {
     required this.promotionsController,
     required this.forumController,
     required this.sosController,
+    required this.supportController,
     required this.messaging,
   });
   final CommunityFeedController communityController;
@@ -118,6 +122,7 @@ class MainLayoutScreen extends StatefulWidget {
 
   /// Yardım Çağrısı çeker menüden açılır.
   final SosController sosController;
+  final SupportController supportController;
 
   @override
   State<MainLayoutScreen> createState() => _MainLayoutScreenState();
@@ -465,6 +470,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
     ),
   );
 
+  void _openSupport() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => SupportScreen(controller: widget.supportController),
+    ),
+  );
+
   void _openNotifications() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => NotificationsScreen(
@@ -495,6 +506,16 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         Navigator.of(context).popUntil((route) => route.isFirst);
         _selectPage(3);
         _profileTab.value = 2;
+      case SupportDeepLink(:final requestId):
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => SupportThreadScreen(
+              controller: widget.supportController,
+              requestId: requestId,
+            ),
+          ),
+        );
+        widget.supportController.closeThread();
       case EventDeepLink() || SpecialRequestDeepLink() || UnknownDeepLink():
         // Bu türlerde bildirim üretilmiyor; üretildiğinde buraya bir satır
         // eklenecek. Uydurma bir hedefe götürmek, hiçbir yere götürmemekten
@@ -1093,12 +1114,14 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
                   // 8. YARDIM & DESTEK
                   _buildDrawerItem(
                     title: 'Yardım & Destek',
-                    subtitle: 'SSS ve canlı destek',
+                    subtitle: 'Sık sorulanlar ve destek talepleri',
                     icon: Icons.help_outline_rounded,
-                    iconBg: Colors.white.withValues(alpha: 0.05),
-                    iconColor: const Color(0xFF94A3B8),
-                    comingSoon: true,
-                    onTap: () {},
+                    iconBg: AppColors.primary.withValues(alpha: 0.15),
+                    iconColor: const Color(0xFF818CF8),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openSupport();
+                    },
                   ),
                 ],
               ),
