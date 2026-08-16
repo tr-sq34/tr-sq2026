@@ -1,4 +1,5 @@
 ﻿import { ServiceBusClient, ServiceBusReceiver } from '@azure/service-bus';
+import type pg from 'pg';
 import { createDatabasePool } from './database.js';
 import { awardBadge } from './journey.js';
 
@@ -10,7 +11,7 @@ const db = createDatabasePool();
 const sbClient = new ServiceBusClient(connectionString);
 const receiver = sbClient.createReceiver(queueName, { receiveMode: 'peekLock' });
 
-type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted' | 'community.account_status_changed'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; primaryIntent?: string | null; bornInUs?: boolean; arrivedMonth?: number | null; arrivedYear?: number | null; originCountry?: string | null; originCity?: string | null; identityVerified?: boolean; auctionSellerEligible?: boolean; status?: 'active' | 'frozen' | 'deletion_pending' } };
+type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted' | 'community.account_status_changed'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; primaryIntent?: string | null; bornInUs?: boolean; arrivedMonth?: number | null; arrivedYear?: number | null; originCountry?: string | null; originCity?: string | null; identityVerified?: boolean; auctionSellerEligible?: boolean; status?: 'active' | 'frozen' | 'deletion_pending' | 'purged' } };
 
 /// Identity already range-checks these, but a projection that trusts its
 /// producer stores whatever a replayed bad payload contains. Out-of-range values
@@ -26,6 +27,48 @@ const originCityOrNull = (value: string | null | undefined) => {
   const trimmed = value?.trim();
   return trimmed && trimmed.length >= 2 && trimmed.length <= 100 ? trimmed : null;
 };
+
+/// Silinmis hesabin adi. Olay yalnizca kimlik ve durum tasiyor - ad tasimiyor -
+/// cunku gonderilecek bir ad kalmadi. Sutun NOT NULL oldugu icin yerine bir sey
+/// yazilmasi gerekiyor ve bu, Identity'nin kendi satirina yazdiginin aynisi
+/// (auth-service/src/account_purge.ts, PURGED_DISPLAY_NAME).
+const PURGED_DISPLAY_NAME = 'Silinmiş üye';
+
+/**
+ * Silinen uyenin Community'de yazili olan kisisel bilgileri.
+ *
+ * Ayni islemin icinde calisiyor: yarim kalmis bir temizlik, adi silinmis ama
+ * memleketi ve kullanici adi duran bir satir birakirdi.
+ */
+async function purgeMemberData(client: pg.PoolClient, userId: string) {
+  await client.query(
+    `UPDATE community_profile_projection
+        SET display_name=$2,city=NULL,region_code=NULL,interests='{}',
+            born_in_us=FALSE,arrived_month=NULL,arrived_year=NULL,
+            origin_country=NULL,origin_city=NULL,primary_intent=NULL,updated_at=now()
+      WHERE user_id=$1`,
+    [userId, PURGED_DISPLAY_NAME],
+  );
+  // Uyenin kendi yazdiklari: biyografi, avatar, secilen kullanici adi. Kullanici
+  // adi NULL'a donuyor ve benzersizlik indeksi NULL'lari saymadigi icin ad
+  // baskasina serbest kaliyor.
+  await client.query(
+    `UPDATE member_profiles
+        SET bio=NULL,avatar_media_id=NULL,username=NULL,
+            visibility='friends_only',showcased_badges='{}',updated_at=now()
+      WHERE user_id=$1`,
+    [userId],
+  );
+  // Liderlik tablosu yasayan uyelerin listesi. Silinen hesabin puani orada
+  // durursa tablo, artik var olmayan birini sehrinin en aktif uyesi diye
+  // gostermeye devam eder.
+  await client.query('DELETE FROM member_scores WHERE user_id=$1', [userId]);
+  // Kimi takip ettigi, kimin arkadasi oldugu ve nerede oldugu. Uyenin kendi
+  // verisi; iki yonu birden siliniyor cunku "silinmis uyeyi takip ediyorsun"
+  // satiri karsi tarafin listesinde de duruyordu.
+  await client.query('DELETE FROM relationship_projection WHERE viewer_id=$1 OR subject_id=$1', [userId]);
+  await client.query('DELETE FROM viewer_location_projection WHERE user_id=$1', [userId]);
+}
 
 async function processEvent(event: Event) {
   if (!['community.profile_upserted','community.member_capabilities_upserted','community.account_status_changed'].includes(event.eventType)) return;
@@ -81,7 +124,7 @@ async function processEvent(event: Event) {
     // gibi gostermek olurdu.
     if (inserted.rowCount && event.eventType === 'community.account_status_changed') {
       const status = event.payload.status;
-      if (status !== 'active' && status !== 'frozen' && status !== 'deletion_pending') {
+      if (status !== 'active' && status !== 'frozen' && status !== 'deletion_pending' && status !== 'purged') {
         throw new Error('Invalid account status event');
       }
       await client.query(
@@ -90,6 +133,14 @@ async function processEvent(event: Event) {
           : 'UPDATE community_profile_projection SET closed_at=COALESCE(closed_at, now()),closed_reason=$2,updated_at=now() WHERE user_id=$1',
         status === 'active' ? [event.payload.userId] : [event.payload.userId, status],
       );
+      // Bekleme suresi doldu ve Identity kimligi sildi. Kapali isaretlemek
+      // yetmez: ad, sehir, memleket ve kullanici adi burada duruyor ve bu
+      // taraftan okunabiliyordu. Satir bosaltiliyor ama silinmiyor - paylasim
+      // ve yorumlar author_id ile bu satira bakiyor, satir gidince kalan
+      // icerik sahipsiz kalirdi.
+      if (status === 'purged') {
+        await purgeMemberData(client, event.payload.userId);
+      }
     }
     if (inserted.rowCount && event.eventType === 'community.member_capabilities_upserted') {
       await client.query(`INSERT INTO member_capabilities(user_id,identity_verified,auction_seller_eligible) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET identity_verified=EXCLUDED.identity_verified,auction_seller_eligible=EXCLUDED.auction_seller_eligible,updated_at=now()`, [event.payload.userId, event.payload.identityVerified === true, event.payload.auctionSellerEligible === true]);

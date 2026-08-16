@@ -13,6 +13,7 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server';
 import pg from 'pg';
 import { z } from 'zod';
+import { ACCOUNT_DELETION_GRACE_DAYS, accountStatusOf, purgeDueAccounts, type AccountStatus } from './account_purge.js';
 import { databaseConnectionString, databaseSslOptions } from './database.js';
 
 const required = (name: string) => {
@@ -699,7 +700,7 @@ async function reopenAccount(user: { id: string; display_name: string }) {
 async function queueAccountStatus(
   client: pg.PoolClient,
   userId: string,
-  status: 'active' | 'frozen' | 'deletion_pending',
+  status: AccountStatus,
 ) {
   await client.query(
     `INSERT INTO identity_outbox_events(aggregate_type,aggregate_id,event_type,payload)
@@ -1139,8 +1140,8 @@ app.post('/v1/auth/account/freeze', async (request, reply) => {
 
 // Hesabi silme talebi. Satir hemen silinmiyor: otuz gunluk bir bekleme var,
 // hem vazgecme hakki icin hem de baska uyelerin sohbetlerinde duran isim gibi
-// baglarin duzgun cozulmesi icin.
-const ACCOUNT_DELETION_GRACE_DAYS = 30;
+// baglarin duzgun cozulmesi icin. Sure dolunca kimligi silen is
+// account_purge.ts'de; asagida donen purgeAt ile ayni sayidan hesapliyor.
 app.post('/v1/auth/account/delete', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
   let user: { id: string; email: string; display_name: string };
   try {
@@ -1233,8 +1234,13 @@ app.get('/v1/auth/gatework/members', { config: { rateLimit: { max: 60, timeWindo
   try {
     const { user, roles } = await requireGateworkRole(request, ['owner', 'security_admin', 'operations_admin', 'auditor']);
     const input = gateworkMembersQuery.parse(request.query);
-    const rows = await db.query<{ id: string; email: string; display_name: string; email_verified_at: Date | null; created_at: Date; roles: string[] }>(
-      `SELECT u.id,u.email,u.display_name,u.email_verified_at,u.created_at,COALESCE(array_remove(array_agg(r.role) FILTER (WHERE r.revoked_at IS NULL), NULL), '{}') roles
+    const rows = await db.query<{ id: string; email: string; display_name: string; email_verified_at: Date | null; created_at: Date; deactivated_at: Date | null; deletion_requested_at: Date | null; purged_at: Date | null; roles: string[] }>(
+      // Hesabin durumu da geliyor: bu liste olmadan bir operator donmus hesabi,
+      // silinmeyi bekleyeni ve kimligi silinmis kabugu birbirinden ayirt
+      // edemiyordu - ucu de sadece bir satir olarak duruyordu.
+      `SELECT u.id,u.email,u.display_name,u.email_verified_at,u.created_at,
+              u.deactivated_at,u.deletion_requested_at,u.purged_at,
+              COALESCE(array_remove(array_agg(r.role) FILTER (WHERE r.revoked_at IS NULL), NULL), '{}') roles
        FROM users u LEFT JOIN admin_roles r ON r.user_id=u.id
        WHERE ($1::uuid IS NULL OR u.id > $1)
          AND ($3::text IS NULL OR u.email ILIKE '%'||$3||'%' OR u.display_name ILIKE '%'||$3||'%')
@@ -1246,7 +1252,24 @@ app.get('/v1/auth/gatework/members', { config: { rateLimit: { max: 60, timeWindo
        ORDER BY u.id ASC LIMIT $2`, [input.cursor ?? null, input.limit, input.query ?? null, input.role ?? null, input.ids ?? null],
     );
     await auditGatework({ actorId: user.id, roles, action: 'members.list', targetType: 'member_query', targetId: input.cursor ?? 'initial', requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
-    return { data: rows.rows.map((row) => ({ id: row.id, email: row.email, displayName: row.display_name, emailVerified: Boolean(row.email_verified_at), createdAt: row.created_at.toISOString(), roles: row.roles })), nextCursor: rows.rows.length === input.limit ? rows.rows.at(-1)?.id : null };
+    return {
+      data: rows.rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        displayName: row.display_name,
+        emailVerified: Boolean(row.email_verified_at),
+        createdAt: row.created_at.toISOString(),
+        roles: row.roles,
+        accountStatus: accountStatusOf(row),
+        // Yalnizca silinmeyi bekleyen hesapta dolu: "ne zaman" sorusunun cevabi
+        // yoksa alan bos kaliyor, hesaplanmis bir tarih uydurulmuyor.
+        purgeAt: row.deletion_requested_at && !row.purged_at
+          ? new Date(row.deletion_requested_at.getTime() + ACCOUNT_DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000).toISOString()
+          : null,
+        purgedAt: row.purged_at?.toISOString() ?? null,
+      })),
+      nextCursor: rows.rows.length === input.limit ? rows.rows.at(-1)?.id : null,
+    };
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_FORBIDDEN' } });
   }
@@ -1474,6 +1497,46 @@ if (OUTBOX_ROUTES.some((route) => isQueueConfigured(route.queue))) {
   const outboxTimer = setInterval(() => void publishAllOutboxes(), 5000);
   outboxTimer.unref();
 }
+
+// Suresi dolan hesaplarin silinmesi. Ayri bir zamanlayici hizmete ya da cron
+// tanimina baglanmadi: is zaten bu servisin verisi uzerinde ve tek bir SELECT
+// ile basliyor. Kopyalar ayni anda calissa bile FOR UPDATE SKIP LOCKED ayni
+// hesabi ikinci kez ellemelerini engelliyor.
+//
+// Alti saatte bir: silme talebi otuz gunluk: birkac saatlik gecikme kimseyi
+// etkilemiyor, ama gunde bir kez calisan bir is ancak yeniden baslatmayla
+// birlikte gecikirdi.
+const ACCOUNT_PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let purgeRunning = false;
+const runPurgeSweep = async () => {
+  if (purgeRunning) return;
+  purgeRunning = true;
+  try {
+    const report = await purgeDueAccounts({
+      db,
+      hashPassword,
+      queueAccountStatus,
+      queueMessagingUserUpsert,
+      log: app.log,
+    });
+    // Sessiz kalmak, hicbir sey silinmedigi ile isin hic calismadigini ayirt
+    // edilemez kilardi. Kimlikler kayda gecmiyor, yalnizca sayilari.
+    if (report.purged.length || report.failed.length) {
+      app.log.info(
+        { purged: report.purged.length, failed: report.failed.length, graceDays: ACCOUNT_DELETION_GRACE_DAYS },
+        'Account purge sweep finished',
+      );
+    }
+  } catch (error) {
+    app.log.warn({ err: error }, 'Account purge sweep could not run');
+  } finally {
+    purgeRunning = false;
+  }
+};
+
+void runPurgeSweep();
+const purgeTimer = setInterval(() => void runPurgeSweep(), ACCOUNT_PURGE_INTERVAL_MS);
+purgeTimer.unref();
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'Identity service stopping');
