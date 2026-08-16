@@ -2,6 +2,7 @@ import 'package:america_hub/core/storage/in_memory_session_store.dart';
 import 'package:america_hub/core/storage/in_memory_token_store.dart';
 import 'package:america_hub/features/auth/application/auth_controller.dart';
 import 'package:america_hub/features/auth/data/repositories/mock_auth_repository.dart';
+import 'package:america_hub/features/legal/domain/entities/legal_document.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
 import 'package:america_hub/features/profile/domain/entities/user_profile.dart';
 import 'package:america_hub/features/profile/domain/repositories/profile_repository.dart';
@@ -116,7 +117,14 @@ class _FakeAuth extends MockAuthRepository {
   }
 }
 
-Future<({_FakeProfiles profiles, _FakeAuth auth, List<String> signOuts})>
+Future<
+  ({
+    _FakeProfiles profiles,
+    _FakeAuth auth,
+    List<String> signOuts,
+    List<LegalDocumentKind> legal,
+  })
+>
 _pumpSettings(WidgetTester tester, {List<ProfilePost> archived = const []}) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 3;
@@ -126,6 +134,7 @@ _pumpSettings(WidgetTester tester, {List<ProfilePost> archived = const []}) asyn
   final profiles = _FakeProfiles(archived: archived);
   final auth = _FakeAuth();
   final signOuts = <String>[];
+  final legal = <LegalDocumentKind>[];
   final profileController = ProfileController(repository: profiles);
   await profileController.load();
 
@@ -139,11 +148,12 @@ _pumpSettings(WidgetTester tester, {List<ProfilePost> archived = const []}) asyn
           tokenStore: InMemoryTokenStore(),
         ),
         onSignOut: () async => signOuts.add('out'),
+        onOpenLegal: legal.add,
       ),
     ),
   );
   await tester.pump();
-  return (profiles: profiles, auth: auth, signOuts: signOuts);
+  return (profiles: profiles, auth: auth, signOuts: signOuts, legal: legal);
 }
 
 void main() {
@@ -287,5 +297,26 @@ void main() {
 
     expect(harness.profiles.profile.visibility, ProfileVisibility.public);
     expect(find.text('Profilin herkese açık.'), findsOneWidget);
+  });
+
+  // Kayit olurken kabul edilen iki metin, kabul edildikten sonra uygulamanin
+  // hicbir yerinden okunamiyordu. Kabul ettigi seyi sonradan okuyamamak,
+  // kabul etmemisle ayni sey.
+  testWidgets('yasal metinler hesap ayarlarindan acilabiliyor', (tester) async {
+    final harness = await _pumpSettings(tester);
+
+    final kosullar = find.text('Kullanım Koşulları');
+    await tester.scrollUntilVisible(kosullar, 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    await tester.tap(kosullar);
+    await tester.pumpAndSettle();
+
+    final gizlilik = find.text('Gizlilik Politikası');
+    await tester.scrollUntilVisible(gizlilik, 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    await tester.tap(gizlilik);
+    await tester.pumpAndSettle();
+
+    expect(harness.legal, [LegalDocumentKind.terms, LegalDocumentKind.privacy]);
   });
 }
