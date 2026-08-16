@@ -73,6 +73,46 @@ class _StreakOnlyRepository implements JourneyRepository {
   }) async => const [];
 }
 
+/// İki kazanılmış rozet: biri kuralla, biri bir yetkilinin kararıyla.
+class _GrantedBadgesRepository implements JourneyRepository {
+  const _GrantedBadgesRepository();
+
+  static const badges = [
+    JourneyBadge(
+      code: 'solidarity_medal',
+      title: 'Dayanışma Madalyası',
+      description: 'Acil bir durumda topluluğu organize ettin.',
+      tier: BadgeTier.legendary,
+      category: BadgeCategory.legendary,
+      earned: true,
+      grantedReason: 'Paterson selinde üç gün boyunca yemek dağıttın.',
+    ),
+    JourneyBadge(
+      code: 'first_spark',
+      title: 'İlk Kıvılcım',
+      description: 'İlk hikayeni paylaştın.',
+      tier: BadgeTier.bronze,
+      category: BadgeCategory.onboarding,
+      earned: true,
+    ),
+  ];
+
+  @override
+  Future<JourneySnapshot> getJourney() => const MockJourneyRepository().getJourney();
+
+  @override
+  Future<List<JourneyBadge>> getBadges() async => badges;
+
+  @override
+  Future<List<JourneyBadge>> getBadgesOf(String userId) async => badges;
+
+  @override
+  Future<List<LeaderboardEntry>> getLeaderboard({
+    LeaderboardScope scope = LeaderboardScope.city,
+    LeaderboardWindow window = LeaderboardWindow.week,
+  }) async => const [];
+}
+
 Future<void> _pumpJourney(
   WidgetTester tester,
   JourneyRepository repository, {
@@ -205,6 +245,39 @@ void main() {
 
     expect(find.text('Gizli rozet'), findsOneWidget);
     expect(find.textContaining('02:00'), findsNothing);
+  });
+
+  testWidgets('elle verilen rozet, kendisi için yazılan gerekçeyi gösterir', (tester) async {
+    // Yetkili gerekçeyi tam da bu üye için yazıyor ve panelde duruyordu. Üyeye
+    // yalnızca herkeste aynı olan katalog cümlesini göstermek, madalyayı verip
+    // beratını cekmecede bırakmak olurdu.
+    await _pumpJourney(
+      tester,
+      const _GrantedBadgesRepository(),
+      initialTab: JourneyTab.badges,
+      viewHeight: 4800,
+    );
+
+    await tester.tap(find.text('Dayanışma Madalyası'));
+    await _settle(tester);
+
+    expect(find.text('Bu rozet sana özel olarak verildi'), findsOneWidget);
+    expect(find.text('Paterson selinde üç gün boyunca yemek dağıttın.'), findsOneWidget);
+  });
+
+  testWidgets('kuralla kazanılan rozet özel bir gerekçe uydurmaz', (tester) async {
+    await _pumpJourney(
+      tester,
+      const _GrantedBadgesRepository(),
+      initialTab: JourneyTab.badges,
+      viewHeight: 4800,
+    );
+
+    await tester.tap(find.text('İlk Kıvılcım'));
+    await _settle(tester);
+
+    expect(find.text('İlk hikayeni paylaştın.'), findsOneWidget);
+    expect(find.text('Bu rozet sana özel olarak verildi'), findsNothing);
   });
 
   testWidgets('the badge tab says where the member stands and what is next', (

@@ -29,6 +29,7 @@ class JourneyBadge {
     this.isSecret = false,
     this.earned = false,
     this.earnedAt,
+    this.grantedReason,
     this.current = 0,
     this.target,
     this.rarityPercent = 0,
@@ -44,6 +45,12 @@ class JourneyBadge {
   final bool isSecret;
   final bool earned;
   final DateTime? earnedAt;
+
+  /// Elle verilmiş bir rozette, onu veren yetkilinin bu üye için yazdığı
+  /// gerekçe. Kuralla kazanılanlarda null: orada gerekçe zaten kriterin
+  /// kendisi ve [description] onu söylüyor.
+  final String? grantedReason;
+
   final int current;
   final int? target;
 
@@ -69,6 +76,9 @@ class JourneyBadge {
     isSecret: json['isSecret'] as bool? ?? false,
     earned: json['earned'] as bool? ?? false,
     earnedAt: DateTime.tryParse(json['earnedAt'] as String? ?? ''),
+    grantedReason: (json['grantedReason'] as String?)?.trim().isNotEmpty == true
+        ? (json['grantedReason'] as String).trim()
+        : null,
     current: (json['current'] as num?)?.toInt() ?? 0,
     target: (json['target'] as num?)?.toInt(),
     rarityPercent: (json['rarityPercent'] as num?)?.toDouble() ?? 0,

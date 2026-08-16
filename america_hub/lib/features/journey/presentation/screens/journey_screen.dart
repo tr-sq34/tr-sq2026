@@ -755,6 +755,7 @@ class _BadgeSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = badgeTierStyle(badge.tier);
     final earnedAt = badge.earnedAt;
+    final reason = badge.grantedReason;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
@@ -793,6 +794,44 @@ class _BadgeSheet extends StatelessWidget {
               badge.description,
               style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
+            // Elle verilmiş rozetin gerekçesi. Katalog cümlesi herkes için aynı
+            // ("Acil bir durumda topluluğu organize ettin"); bu cümleyi ise bir
+            // yetkili tam da bu üye için yazdı. Rozetin taşıdığı asıl anlam o
+            // olduğu için katalog metninin altında değil, ayrı bir kutuda ve
+            // vurgulu duruyor.
+            if (reason != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: style.fill,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bu rozet sana özel olarak verildi',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: style.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      reason,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.35,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (earnedAt != null) ...[
               const SizedBox(height: 10),
               Text(

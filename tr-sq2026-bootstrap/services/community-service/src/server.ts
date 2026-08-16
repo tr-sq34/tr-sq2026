@@ -2951,8 +2951,12 @@ app.get('/v1/notifications', async (request, reply) => {
            THEN (SELECT left(m.body,200) FROM support_messages m WHERE m.request_id=n.subject_id AND m.author_kind='staff' ORDER BY m.created_at DESC LIMIT 1)
            -- Rozetin kriteri zilde yaziyor: uyeye "bir rozet kazandin" deyip
            -- nedenini Yolculuk ekranina saklamak, haberi yarim vermek olurdu.
+           -- Elle verilmisse okunan sey katalog cumlesi degil, operatorun tam
+           -- da bu uye icin yazdigi gerekce: "Acil bir durumda toplulugu
+           -- organize ettin" ile "Paterson selinde uc gun yemek dagittin"
+           -- arasindaki fark, rozetin butun anlami.
            WHEN n.kind='badge_earned'
-           THEN (SELECT d.description FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code WHERE b.id=n.subject_id)
+           THEN (SELECT COALESCE(b.granted_reason, d.description) FROM member_badges b JOIN badge_definitions d ON d.code=b.badge_code WHERE b.id=n.subject_id)
          END subject_body,
          CASE WHEN n.kind='announcement'
            THEN (SELECT a.title FROM member_announcements a WHERE a.id=n.subject_id)
@@ -3564,10 +3568,10 @@ app.get('/v1/community/badges', async (request, reply) => {
     const userId = await viewer(request.headers);
     const rows = await db.query<{
       code: string; title: string; description: string; icon: string; category: string; tier: string;
-      points: number; is_secret: boolean; earned_at: Date | null; current: number | null; target: number | null; holders: string; members: string;
+      points: number; is_secret: boolean; earned_at: Date | null; granted_reason: string | null; current: number | null; target: number | null; holders: string; members: string;
     }>(
       `SELECT d.code,d.title,d.description,d.icon,d.category,d.tier,d.points,d.is_secret,
-              b.earned_at,pr.current,pr.target,
+              b.earned_at,b.granted_reason,pr.current,pr.target,
               (SELECT count(*) FROM member_badges mb WHERE mb.badge_code=d.code) holders,
               (SELECT count(*) FROM community_profile_projection) members
          FROM badge_definitions d
@@ -3592,6 +3596,11 @@ app.get('/v1/community/badges', async (request, reply) => {
           isSecret: badge.is_secret,
           earned,
           earnedAt: badge.earned_at?.toISOString() ?? null,
+          // Elle verilen rozetin gerekcesi. Bir operator bunu tam da bu uye
+          // icin yazdi; panelde durup uyeye gosterilmemesi, madalyayi verip
+          // beratini cekmecede birakmak olurdu. Kuralla kazanilanlarda null -
+          // orada gerekce zaten katalogdaki kriterin kendisi.
+          grantedReason: badge.granted_reason,
           current: hidden ? 0 : badge.current ?? 0,
           target: hidden ? null : badge.target,
           // "Uyelerin %3'u aldi" - the number that makes a badge worth chasing.
