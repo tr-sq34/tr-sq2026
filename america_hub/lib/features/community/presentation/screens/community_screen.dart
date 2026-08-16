@@ -811,7 +811,7 @@ class _StoryRail extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 2),
         scrollDirection: Axis.horizontal,
         itemCount: railItems.length + 1,
-        separatorBuilder: (_, __) => const SizedBox(width: 9),
+        separatorBuilder: (_, _) => const SizedBox(width: 9),
         itemBuilder: (_, index) {
           if (index == 0) {
             return InkWell(
@@ -1231,7 +1231,7 @@ class _PostCard extends StatelessWidget {
                   // Was a snackbar that promised a review nobody was doing. It
                   // now files a real report against the post id, which is what
                   // the moderation queue and the 24-hour deadline hang off.
-                  if (value == 'report')
+                  if (value == 'report') {
                     showContentReportSheet(
                       context,
                       repository: moderationRepository,
@@ -1239,6 +1239,7 @@ class _PostCard extends StatelessWidget {
                       targetId: post.id,
                       subjectLabel: post.authorName,
                     );
+                  }
                 },
                 itemBuilder: (_) => [
                   if (onDelete != null)

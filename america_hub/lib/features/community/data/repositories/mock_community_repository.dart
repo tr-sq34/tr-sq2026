@@ -281,12 +281,15 @@ class MockCommunityRepository
   }) async {
     final post = _posts.firstWhere((item) => item.id == postId);
     final poll = post.poll;
-    if (poll == null || poll.id != pollId || poll.isClosed)
+    if (poll == null || poll.id != pollId || poll.isClosed) {
       throw StateError('Anket oylamaya açık değil.');
-    if (poll.selectionMode == PollSelectionMode.single && optionIds.length != 1)
+    }
+    if (poll.selectionMode == PollSelectionMode.single && optionIds.length != 1) {
       throw ArgumentError('Bu ankette tek seçenek seçilebilir.');
-    if (!optionIds.every((id) => poll.options.any((option) => option.id == id)))
+    }
+    if (!optionIds.every((id) => poll.options.any((option) => option.id == id))) {
       throw ArgumentError('Geçersiz anket seçeneği.');
+    }
     final updated = CommunityPoll(
       id: poll.id,
       question: poll.question,
@@ -324,8 +327,9 @@ class MockCommunityRepository
 
   @override
   Future<StoryItem> createStory(CreateStoryDraft draft) async {
-    if (draft.validationError case final error?)
+    if (draft.validationError case final error?) {
       throw ArgumentError.value(draft, 'draft', error);
+    }
     final story = StoryItem(
       id: 'story-${DateTime.now().microsecondsSinceEpoch}',
       authorId: viewerId,
@@ -389,8 +393,9 @@ class MockCommunityRepository
     required String storyId,
     required String message,
   }) async {
-    if (message.trim().isEmpty || message.length > 1000)
+    if (message.trim().isEmpty || message.length > 1000) {
       throw ArgumentError('Geçerli bir story yanıtı yazın.');
+    }
   }
 
   CommunityPost _updatePost(

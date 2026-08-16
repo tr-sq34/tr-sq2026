@@ -143,10 +143,8 @@ class ApiCommunityRepository
         // Boş alanlar hiç gönderilmiyor: sunucudaki şema bunları "optional"
         // sayıyor, ama `null` optional demek değil — konumsuz bir paylaşım
         // `locationLabel: null` yüzünden 400 alıyordu.
-        if (draft.location?.displayName case final label?)
-          'locationLabel': label,
-        if (draft.marketplaceListingId case final listingId?)
-          'marketplaceListingId': listingId,
+        'locationLabel': ?draft.location?.displayName,
+        'marketplaceListingId': ?draft.marketplaceListingId,
         // Fotoğraflar kimlikleriyle gidiyor, adresleriyle değil: adres her
         // yanıtta yeniden imzalanan süreli bir izin, kalıcı bir alan değil.
         // Yalnızca yükleme servisinden dönmüş kimlikler gönderiliyor; besteci
@@ -186,8 +184,7 @@ class ApiCommunityRepository
             'to': trip.to,
             'travelAt': trip.travelAt.toUtc().toIso8601String(),
             'packageDetails': trip.packageDetails,
-            if (trip.note case final note? when note.trim().isNotEmpty)
-              'note': note,
+            'note': ?trip.note,
           },
         'idempotencyKey': _key(),
       },

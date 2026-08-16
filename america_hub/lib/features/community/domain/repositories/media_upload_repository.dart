@@ -1,4 +1,3 @@
-import '../entities/community_post.dart';
 import '../entities/post_media_upload.dart';
 
 abstract interface class MediaUploadRepository {

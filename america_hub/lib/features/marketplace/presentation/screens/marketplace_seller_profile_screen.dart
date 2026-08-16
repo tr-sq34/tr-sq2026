@@ -647,21 +647,17 @@ class _HeaderBtn extends StatelessWidget {
     required this.icon,
     required this.onTap,
     this.primary = true,
-    this.active = false,
   });
   final String label;
   final IconData icon;
   final VoidCallback onTap;
   final bool primary;
-  final bool active;
 
   @override
   Widget build(BuildContext context) {
-    final bgColor = primary
-        ? Colors.white
-        : (active
-              ? const Color(0xFF10B981)
-              : Colors.white.withValues(alpha: 0.15));
+    // Yesil "acik" hali, kaldirilan "Takip Et" dugmesiyle birlikte gitti:
+    // hicbir yerden gelmeyen bir durumun rengini tasimanin anlami yok.
+    final bgColor = primary ? Colors.white : Colors.white.withValues(alpha: 0.15);
     final textColor = primary ? const Color(0xFF1E1A47) : Colors.white;
     final iconColor = primary ? const Color(0xFF6355D8) : Colors.white;
 

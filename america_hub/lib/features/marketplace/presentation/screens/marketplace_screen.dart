@@ -897,11 +897,12 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
         ),
       ),
     );
-    if (selection != null)
+    if (selection != null) {
       setState(
         () => _fields.putIfAbsent(key, TextEditingController.new).text =
             selection,
       );
+    }
   }
 
   Future<void> _save({bool publish = false}) async {
@@ -920,10 +921,11 @@ class _ListingComposerScreenState extends State<ListingComposerScreen> {
     if (!publish) return;
     final error = widget.controller.validateDraft();
     if (error != null) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error)));
+      }
       return;
     }
     final listing = await widget.controller.publishDraft();
