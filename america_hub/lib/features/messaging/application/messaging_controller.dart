@@ -91,7 +91,130 @@ class MessagingController extends ChangeNotifier {
     return true;
   }
 
-  Future<bool> createGroup({required String name, required String city, required GroupPrivacy privacy, String? imageUrl}) async { errorMessage=null; if(name.trim().length<3||city.trim().isEmpty)return false; final CommunityGroup group; try { group=await _repository.createGroup(name:name.trim(),city:city.trim(),privacy:privacy,imageUrl:imageUrl); } on ApiException catch (error) { errorMessage=error.message; notifyListeners(); return false; } catch (_) { errorMessage='Grup oluşturulamadı. Lütfen tekrar deneyin.'; notifyListeners(); return false; } groups=[group,...groups]; notifyListeners(); return true; }
+  Future<bool> createGroup({
+    required String name,
+    required String city,
+    required GroupPrivacy privacy,
+    String? imageUrl,
+    String? description,
+  }) async {
+    errorMessage = null;
+    if (name.trim().length < 3 || city.trim().isEmpty) return false;
+    final CommunityGroup group;
+    try {
+      group = await _repository.createGroup(
+        name: name.trim(),
+        city: city.trim(),
+        privacy: privacy,
+        imageUrl: imageUrl,
+        description: description?.trim().isEmpty ?? true
+            ? null
+            : description!.trim(),
+      );
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      errorMessage = 'Grup oluşturulamadı. Lütfen tekrar deneyin.';
+      notifyListeners();
+      return false;
+    }
+    groups = [group, ...groups];
+    notifyListeners();
+    return true;
+  }
+
+  /// Kurucunun grup künyesini düzenlemesi. Değişen kaydı listeye yazıyor ki
+  /// ayarlar kapandığında kart yeni adı göstersin.
+  Future<bool> updateGroup(
+    String groupId, {
+    String? name,
+    String? city,
+    Object? description = CommunityGroup.unchanged,
+    Object? imageUrl = CommunityGroup.unchanged,
+  }) async {
+    errorMessage = null;
+    final CommunityGroup group;
+    try {
+      group = await _repository.updateGroup(
+        groupId,
+        name: name,
+        city: city,
+        description: description,
+        imageUrl: imageUrl,
+      );
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      errorMessage = 'Grup bilgileri kaydedilemedi. Lütfen tekrar deneyin.';
+      notifyListeners();
+      return false;
+    }
+    groups = [
+      for (final item in groups)
+        if (item.id == groupId) group else item,
+    ];
+    notifyListeners();
+    return true;
+  }
+
+  Future<List<GroupMember>> groupMembers(String groupId) =>
+      _repository.getGroupMembers(groupId);
+
+  /// Davet gönderildi mi, gönderildiyse hangi durumda kaldı. `null` dönmesi
+  /// gönderilemediği anlamına geliyor; sebebi [errorMessage] içinde.
+  Future<GroupMembershipStatus?> inviteMember(
+    String groupId,
+    String userId,
+  ) async {
+    errorMessage = null;
+    try {
+      return await _repository.inviteGroupMember(groupId, userId);
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return null;
+    } catch (_) {
+      errorMessage = 'Davet gönderilemedi. Lütfen tekrar deneyin.';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// [wasJoined] false ise geri alınan şey bir davet: o kişi hiç üye
+  /// olmadığından sayaç da yerinde kalıyor.
+  Future<bool> removeMember(
+    String groupId,
+    String userId, {
+    required bool wasJoined,
+  }) async {
+    errorMessage = null;
+    try {
+      await _repository.removeGroupMember(groupId, userId);
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      errorMessage = 'Üye çıkarılamadı. Lütfen tekrar deneyin.';
+      notifyListeners();
+      return false;
+    }
+    if (wasJoined) {
+      groups = [
+        for (final item in groups)
+          if (item.id == groupId && item.members > 1)
+            item.copyWith(members: item.members - 1)
+          else
+            item,
+      ];
+    }
+    notifyListeners();
+    return true;
+  }
   Future<Conversation?> respondToRequest(String id, RequestDecision decision) async {
     final index = inbox.indexWhere((item) => item.id == id);
     if (index < 0) return null;

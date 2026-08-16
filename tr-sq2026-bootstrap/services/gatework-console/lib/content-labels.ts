@@ -36,6 +36,23 @@ export type NewsSummary = {
   imageUrl: string | null;
   commentCount: number;
   reactionCount: number;
+  /** Haber akışta da bir paylaşım olarak duruyor mu. Beğeni ve yorum iki
+      ekranda da aynı haberin sayacı; akıştaki kart haberin bir izdüşümü. */
+  inFeed: boolean;
+};
+
+// Yayında olan bir panel Story'si. Story 24 saatte kendiliğinden düştüğü için
+// bu liste "yayınlananlar" değil "hâlâ yayında olanlar"; kalan süreyi gösteren
+// başka bir ekran yok.
+export type OfficialStory = {
+  id: string;
+  authorId: string;
+  authorName: string;
+  createdAt: string;
+  expiresAt: string;
+  imageUrl: string | null;
+  viewCount: number;
+  likeCount: number;
 };
 
 export const NEWS_CATEGORIES = [

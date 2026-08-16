@@ -1,8 +1,9 @@
-import Fastify, { type FastifyError } from 'fastify';
+import Fastify, { type FastifyError, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
 import { importJWK, jwtVerify } from 'jose';
 import { z } from 'zod';
 import type pg from 'pg';
@@ -93,13 +94,46 @@ const auctionBody=z.object({startingPrice:z.coerce.number().nonnegative(),minimu
 const bidBody=z.object({amount:z.coerce.number().positive()});
 const gateworkSystemAccountBody=z.object({principalId:z.string().uuid(),displayName:z.string().trim().min(2).max(100),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
 const gateworkPostBody=z.object({authorId:z.string().uuid(),body:z.string().trim().min(1).max(2200),visibility:z.enum(['public','friends_only']).default('public'),regionCode:z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
+// Panelden Story. Gorunurluk sorulmuyor: resmi hesabin Story'si herkese acik
+// olmak icin var, `network` secilseydi hicbir uyenin arkadasi olmadigi icin
+// kimseye gorunmezdi. Sure 24 saatle sinirli, cunku stories tablosunun kendi
+// kisiti bu - "surekli duran Story" diye bir sey yok.
+const gateworkStoryBody=z.object({authorId:z.string().uuid(),mediaId:z.string().uuid(),ttlHours:z.coerce.number().int().min(1).max(24).default(24),reason:z.string().trim().min(5).max(500),idempotencyKey:z.string().uuid()});
 const decodeCursor = (cursor?: string) => { if (!cursor) return null; try { const [createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|'); if (!createdAt || !id) throw Error(); return { createdAt, id }; } catch { throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 }); } };
 const encodeCursor = (row: { created_at: Date; id: string }) => Buffer.from(`${row.created_at.toISOString()}|${row.id}`).toString('base64url');
-const sha256Base64 = (hex: string) => Buffer.from(hex, 'hex').toString('base64');
+/**
+ * Acilis kartlarinin gorselleri.
+ *
+ * Bunlar bir uyenin yukledigi medya degil, depoya islenmis dort JPEG: Story
+ * seridi hic kart olmadiginda cizilmedigi icin uygulama ilk gun bos aciliyordu.
+ * Blob'a konulmadilar, cunku onlari yerlestiren `035` gecisi yalnizca SQL
+ * calistirabiliyor - gecis isinde depolama kimlik bilgisi yok. Dosyalar
+ * acilista bellege okunuyor; boylece istekte disk yok ve isim listesi kapali,
+ * yani yol asimi diye bir sey kalmiyor.
+ */
+const LAUNCH_ASSET_DIR = new URL('../assets/launch/', import.meta.url);
+const launchAssets = new Map<string, Buffer>();
+try {
+  for (const name of await readdir(LAUNCH_ASSET_DIR)) {
+    if (!/^[a-z0-9-]+\.jpg$/.test(name)) continue;
+    launchAssets.set(name, await readFile(new URL(name, LAUNCH_ASSET_DIR)));
+  }
+} catch (error) {
+  // Sessizce gecmiyor: kartlar yerinde durur ama gorselleri 404 doner, ve bunun
+  // sebebi imajda assets/ klasorunun olmamasidir.
+  app.log.error({ err: error }, 'acilis kartlarinin gorselleri okunamadi');
+}
+
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? 'https://community-api.turksquare.com').replace(/\/$/, '');
 const mediaObjectUrl = async (safeUrlOrKey: string) => {
   if (/^https:\/\//.test(safeUrlOrKey)) return safeUrlOrKey;
+  // `launch/...` bir blob anahtari degil, servisin kendi sunduğu dosya. Imzali
+  // bir SAS uretilmeye calisilsaydi var olmayan bir blob icin gecerli gorunen
+  // ama 404 donen bir baglanti cikardi.
+  if (safeUrlOrKey.startsWith('launch/')) return `${PUBLIC_BASE_URL}/v1/public/${safeUrlOrKey}`;
   return generateMediaReadSasUrl(safeUrlOrKey, 300);
 };
+
 
 async function viewer(headers: { authorization?: string }) { const token = headers.authorization?.replace(/^Bearer\s+/i, ''); if (!token) throw Error('UNAUTHORIZED'); const verified = await jwtVerify(token, identityVerificationKey, { issuer: required('JWT_ISSUER'), audience: required('JWT_AUDIENCE'), algorithms: ['RS256'] }); if (!verified.payload.sub) throw Error('UNAUTHORIZED'); return verified.payload.sub; }
 /// Six read routes used to answer `statusCode ?? 401`, which meant a SQL error,
@@ -134,6 +168,19 @@ await app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
   maxAge: 600,
+});
+
+/// Kimlik istemeyen tek okuma yolu. Icerigi depodan gelen sabit dort dosya;
+/// uye verisi degil, bu yuzden imzali baglantiya gerek yok. Uygulama bu
+/// baglantiyi zaten kimlikli bir yanitin icinde aliyor ve gorseli baslıksiz
+/// cekiyor - blob SAS baglantilarinin calistigi bicimin aynisi.
+app.get('/v1/public/launch/:name', async (request, reply) => {
+  const body = launchAssets.get((request.params as { name: string }).name);
+  if (!body) return reply.code(404).send({ error: { code: 'ASSET_NOT_FOUND', message: 'Gorsel bulunamadi.' } });
+  return reply
+    .header('content-type', 'image/jpeg')
+    .header('cache-control', 'public, max-age=86400, immutable')
+    .send(body);
 });
 
 app.get('/health', { config: { rateLimit: false } }, async (_request, reply) => {
@@ -432,54 +479,245 @@ app.post('/v1/internal/gatework/posts', { config: { rateLimit: { max: 20, timeWi
   }
 });
 
-// A client can upload only a declared image to a private quarantine prefix.
-// The final safe object is created by a separate media processor after scan
-// and EXIF stripping; it is never the object addressed by this presigned URL.
+/* --- Panelden Story --------------------------------------------------------
+ *
+ * Story serisi ana sayfanin en ustunde duruyor ve yeni bir uyenin agi bos
+ * oldugu icin ilk gun tamamen bos kaliyor. Sponsorlu yuvalar (`promotions`,
+ * placement='story_slot') zaten panelden yerlestirilebiliyordu; platformun
+ * kendi Story'si icin bir yol yoktu.
+ *
+ * Resmi hesabin Story'si herkese gorunur: `storyAccessWhere` aktif resmi
+ * hesaplari bolgeye ve arkadaslik iliskisine bakmadan geciriyor. Bu yuzden
+ * burada bolge secilmiyor - yazilsaydi sadece o eyalettekilere gorunurdu.
+ */
+app.post('/v1/internal/gatework/stories', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const input = gateworkStoryBody.parse(request.body);
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const prior = await client.query<{ result_id: string | null }>("SELECT result_id FROM gatework_command_dedup WHERE actor_id=$1 AND idempotency_key=$2 AND command_type='official_story.create' FOR UPDATE", [actor.actorId, input.idempotencyKey]);
+      if (prior.rows[0]?.result_id) {
+        await client.query('COMMIT');
+        return reply.code(200).send({ data: { id: prior.rows[0].result_id } });
+      }
+      const official = await client.query("SELECT 1 FROM community_system_accounts WHERE user_id=$1 AND role='official' AND active", [input.authorId]);
+      if (!official.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+      // Medya, saklanmadan once dogrulaniyor: taranmamis bir kimlikle acilan
+      // Story okuma tarafinda `m.status='ready'` suzgecine takilir ve panelde
+      // "yayinlandi" yazarken uygulamada hic gorunmezdi.
+      const media = await client.query("SELECT 1 FROM media_assets WHERE id=$1 AND owner_id=$2 AND status='ready'", [input.mediaId, input.authorId]);
+      if (!media.rows[0]) throw Error('MEDIA_NOT_READY');
+      const story = await client.query<{ id: string }>(
+        "INSERT INTO stories(author_id,media_id,visibility,region_code,expires_at) VALUES($1,$2,'public',NULL,now()+($3::text||' hours')::interval) RETURNING id",
+        [input.authorId, input.mediaId, input.ttlHours],
+      );
+      await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'official_story.create',$3)", [actor.actorId, input.idempotencyKey, story.rows[0]!.id]);
+      await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'official_story.publish', targetType: 'story', targetId: story.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+      await client.query('COMMIT');
+      return reply.code(201).send({ data: story.rows[0] });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  } catch (error) {
+    const known = error instanceof Error ? error.message : '';
+    return reply.code(known === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_REJECTED', message: known === 'MEDIA_NOT_READY' ? 'Gorsel taramasi bitmeden Story yayinlanamaz.' : known === 'OFFICIAL_NOT_ACTIVE' ? 'Secilen resmi hesap aktif degil.' : 'Story yayinlanamadi.' } });
+  }
+});
+
+/// Panelden acilan Story'ler ve sureleri. Story 24 saatte kendiliginden
+/// dusuyor, bu yuzden liste "yayinda olanlar" degil "hala yayinda olanlar":
+/// bir editorun ekledigi Story'nin ne kadar omru kaldigini baska yerden
+/// gorebilecegi bir ekran yok.
+app.get('/v1/internal/gatework/stories', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor', 'moderator', 'auditor']);
+    const rows = await db.query<{ id: string; author_id: string; author_name: string; created_at: Date; expires_at: Date; safe_url: string | null; thumbnail_url: string | null; view_count: string; like_count: string }>(
+      `SELECT s.id,s.author_id,COALESCE(p.display_name,'TurkSquare') author_name,s.created_at,s.expires_at,m.safe_url,m.thumbnail_url,
+              (SELECT count(*) FROM story_views v WHERE v.story_id=s.id) view_count,
+              (SELECT count(*) FROM story_likes l WHERE l.story_id=s.id) like_count
+         FROM stories s
+         JOIN media_assets m ON m.id=s.media_id
+         JOIN community_system_accounts o ON o.user_id=s.author_id AND o.role='official'
+         LEFT JOIN community_profile_projection p ON p.user_id=s.author_id
+        WHERE s.expires_at>now()
+        ORDER BY s.created_at DESC LIMIT 50`,
+    );
+    return {
+      data: await Promise.all(rows.rows.map(async (row) => ({
+        id: row.id,
+        authorId: row.author_id,
+        authorName: row.author_name,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+        imageUrl: row.thumbnail_url ? await mediaObjectUrl(row.thumbnail_url) : row.safe_url ? await mediaObjectUrl(row.safe_url) : null,
+        viewCount: Number(row.view_count),
+        likeCount: Number(row.like_count),
+      }))),
+    };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORIES_UNAVAILABLE', message: 'Panelden acilan Storyler okunamadi.' } });
+  }
+});
+
+/// Geri cekme. Satir silinmiyor, suresi simdiye cekiliyor: goruntulenmeler ve
+/// begeniler o Story'ye bagli duruyor ve bir sikayet acilmissa hedefi hala
+/// cozulebilir olmali.
+app.delete('/v1/internal/gatework/stories/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = z.object({ reason: z.string().trim().min(5).max(500) }).parse(request.body);
+    const removed = await db.query("UPDATE stories SET expires_at=now() WHERE id=$1 AND expires_at>now() AND EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=stories.author_id AND o.role='official') RETURNING id", [id]);
+    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'STORY_NOT_FOUND', message: 'Yayinda olan bir panel Storysi bulunamadi.' } });
+    await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'official_story.retract', targetType: 'story', targetId: id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({ error: { code: 'GATEWORK_STORY_RETRACT_FAILED', message: 'Story geri cekilemedi.' } });
+  }
+});
+
+/* --- Medya yükleme akışı ---------------------------------------------------
+ *
+ * İstemci yalnızca beyan ettiği görseli, özel bir karantina ön ekine
+ * yükleyebilir. Okunabilir nesneyi bu bağlantı değil, taramadan ve EXIF
+ * temizliğinden sonra medya işleyici üretir.
+ *
+ * Üç adım da iki ayrı yerden kullanılıyor: üyenin kendi yüklemesi ve panelin
+ * resmî hesap adına yüklediği haber görseli. Aradaki tek fark dosyanın kimin
+ * adına yazıldığı - onu söyleyen taraf rotalar, ne yapıldığını söyleyen taraf
+ * bu üç işlev. İkinci bir kopya çıkarmak, güvenlik kontrolü olan bir akışı iki
+ * yerde ayrı ayrı doğru tutmayı gerektirirdi.
+ */
+async function openMediaUpload(ownerId: string, input: z.infer<typeof mediaPresignBody>) {
+  const mediaId = randomUUID();
+  const uploadId = randomUUID();
+  const quarantineKey = `uploads/quarantine/${ownerId}/${mediaId}`;
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      "INSERT INTO media_assets(id,owner_id,status,kind) VALUES($1,$2,'quarantined',$3)",
+      [mediaId, ownerId, input.kind],
+    );
+    await client.query(
+      "INSERT INTO media_upload_sessions(id,media_id,owner_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')",
+      [uploadId, mediaId, ownerId, quarantineKey, Buffer.from(input.sha256, 'hex'), input.sizeBytes, input.contentType],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return {
+    uploadId,
+    mediaId,
+    uploadUrl: await generateMediaUploadSasUrl(quarantineKey, 300),
+    expiresInSeconds: 300,
+    // İstemci bu başlıkları olduğu gibi gönderiyor, içeriklerini yorumlamıyor.
+    // Burada eskiden `x-amz-checksum-sha256` yazıyordu: S3 döneminden kalan,
+    // Azure'un tanımadığı bir başlık. Asıl sorun eksik olandı - Azure'a
+    // doğrudan PUT ile blob yazarken `x-ms-blob-type` zorunlu, yoksa depolama
+    // isteği daha gövdeye bakmadan MissingRequiredHeader ile reddediyor.
+    // Yükleme adımı bu yüzden hiç tutmadı ve hiçbir medya taramaya bile
+    // ulaşamadı.
+    //
+    // İçerik türü hem istek başlığı hem de `x-ms-blob-content-type` olarak
+    // gidiyor: ikincisi blobun kalıcı türünü açıkça yazar, tamamlama adımı o
+    // türü beyan edilenle karşılaştırır.
+    requiredHeaders: {
+      'x-ms-blob-type': 'BlockBlob',
+      'content-type': input.contentType,
+      'x-ms-blob-content-type': input.contentType,
+    },
+  };
+}
+
+type MediaCompletion =
+  | { ok: true; mediaId: string }
+  | { ok: false; httpStatus: number; code: string; message: string };
+
+async function completeMediaUpload(ownerId: string, uploadId: string): Promise<MediaCompletion> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const session = await client.query<{
+      media_id: string; quarantine_key: string; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
+    }>(
+      'SELECT media_id,quarantine_key,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+      [uploadId, ownerId],
+    );
+    const row = session.rows[0];
+    if (!row || row.expires_at <= new Date()) {
+      await client.query('ROLLBACK');
+      return { ok: false, httpStatus: 410, code: 'UPLOAD_EXPIRED', message: 'Yükleme süresi doldu.' };
+    }
+    if (row.completed_at) {
+      await client.query('COMMIT');
+      return { ok: true, mediaId: row.media_id };
+    }
+    // Blobun kendi özellikleri, beyan edilen boyut ve türle karşılaştırılıyor.
+    // Buraya üçüncü bir koşul olarak SHA-256 karşılaştırması da yazılmıştı ama
+    // karşıya konan değer Azure'un MD5'iydi; hiçbir koşulda tutmayan bir koşul
+    // olduğu için sağlam gelen dosyalar da reddediliyordu. Özet doğrulaması
+    // artık medya işleyicide, indirilen baytların üzerinde yapılıyor - taramayı
+    // yapan taraf, güvenli nesneyi üretmeden önce baytların beyan edilenle aynı
+    // olduğunu görmüş oluyor.
+    const head = await headMediaBlob(row.quarantine_key);
+    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type) {
+      await client.query('ROLLBACK');
+      return { ok: false, httpStatus: 400, code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' };
+    }
+    await client.query('UPDATE media_upload_sessions SET completed_at=now() WHERE id=$1 AND completed_at IS NULL', [uploadId]);
+    await client.query("UPDATE media_assets SET status='scanning' WHERE id=$1 AND owner_id=$2 AND status='quarantined'", [row.media_id, ownerId]);
+    await client.query("INSERT INTO media_processing_jobs(media_id,job_type,status) VALUES($1,'scan','queued') ON CONFLICT DO NOTHING", [row.media_id]);
+    await client.query('COMMIT');
+    return { ok: true, mediaId: row.media_id };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Medya kimliği bir paylaşım aracı değil. Sahibi tarama sürerken durumu
+// sorabilir; başka herkes medyayı, zaten yetkisi olan bir Topluluk nesnesi
+// üzerinden alır - görünür bir Story gibi.
+async function readMediaAsset(ownerId: string, mediaId: string) {
+  const media = await db.query<{
+    id: string;
+    status: 'quarantined' | 'scanning' | 'ready' | 'rejected';
+    kind: 'image' | 'video';
+    safe_url: string | null;
+    thumbnail_url: string | null;
+  }>(
+    'SELECT id,status,kind,safe_url,thumbnail_url FROM media_assets WHERE id=$1 AND owner_id=$2',
+    [mediaId, ownerId],
+  );
+  const row = media.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    kind: row.kind,
+    url: row.status === 'ready' && row.safe_url ? await mediaObjectUrl(row.safe_url) : null,
+    thumbnailUrl: row.status === 'ready' && row.thumbnail_url ? await mediaObjectUrl(row.thumbnail_url) : null,
+  };
+}
+
 app.post('/v1/media/uploads/presign', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const input = mediaPresignBody.parse(request.body);
-    const mediaId = randomUUID();
-    const uploadId = randomUUID();
-    const quarantineKey = `uploads/quarantine/${userId}/${mediaId}`;
-    const checksum = sha256Base64(input.sha256.toLowerCase());
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        "INSERT INTO media_assets(id,owner_id,status,kind) VALUES($1,$2,'quarantined',$3)",
-        [mediaId, userId, input.kind],
-      );
-      await client.query(
-        "INSERT INTO media_upload_sessions(id,media_id,owner_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')",
-        [uploadId, mediaId, userId, quarantineKey, Buffer.from(input.sha256, 'hex'), input.sizeBytes, input.contentType],
-      );
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-        const uploadUrl = await generateMediaUploadSasUrl(
-      quarantineKey,
-      input.contentType,
-      input.sizeBytes,
-      checksum,
-      300
-    );
-    return reply.code(201).send({
-      data: {
-        uploadId,
-        mediaId,
-        uploadUrl,
-        expiresInSeconds: 300,
-        requiredHeaders: {
-          'content-type': input.contentType,
-          'x-amz-checksum-sha256': checksum,
-        },
-      },
-    });
+    return reply.code(201).send({ data: await openMediaUpload(userId, input) });
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_UPLOAD_NOT_ACCEPTED', message: 'Medya yükleme isteği kabul edilemedi.' },
@@ -491,43 +729,9 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
   try {
     const userId = await viewer(request.headers);
     const { uploadId } = mediaCompleteBody.parse(request.body);
-    const client = await db.connect();
-    let row: {
-      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
-    } | undefined;
-    try {
-    await client.query('BEGIN');
-    const session = await client.query<{
-      media_id: string; quarantine_key: string; expected_sha256: Buffer; expected_size_bytes: string; content_type: string; expires_at: Date; completed_at: Date | null;
-    }>(
-      'SELECT media_id,quarantine_key,expected_sha256,expected_size_bytes,content_type,expires_at,completed_at FROM media_upload_sessions WHERE id=$1 AND owner_id=$2 FOR UPDATE',
-      [uploadId, userId],
-    );
-    row = session.rows[0];
-    if (!row || row.expires_at <= new Date()) {
-      await client.query('ROLLBACK');
-      return reply.code(410).send({ error: { code: 'UPLOAD_EXPIRED', message: 'Yükleme süresi doldu.' } });
-    }
-    if (row.completed_at) {
-      await client.query('COMMIT');
-      return { data: { mediaId: row.media_id, status: 'scanning' } };
-    }
-        const head = await headMediaBlob(row.quarantine_key);
-    if (head.contentLength !== Number(row.expected_size_bytes) || head.contentType !== row.content_type || head.checksumSha256 !== row.expected_sha256.toString('base64')) {
-      await client.query('ROLLBACK');
-      return reply.code(400).send({ error: { code: 'UPLOAD_VALIDATION_FAILED', message: 'Yüklenen dosya doğrulanamadı.' } });
-    }
-    await client.query("UPDATE media_upload_sessions SET completed_at=now() WHERE id=$1 AND completed_at IS NULL", [uploadId]);
-    await client.query("UPDATE media_assets SET status='scanning' WHERE id=$1 AND owner_id=$2 AND status='quarantined'", [row.media_id, userId]);
-    await client.query("INSERT INTO media_processing_jobs(media_id,job_type,status) VALUES($1,'scan','queued') ON CONFLICT DO NOTHING", [row.media_id]);
-    await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-    return reply.code(202).send({ data: { mediaId: row!.media_id, status: 'scanning' } });
+    const result = await completeMediaUpload(userId, uploadId);
+    if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
+    return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_COMPLETE_FAILED', message: 'Medya doğrulama kuyruğa alınamadı.' },
@@ -535,45 +739,85 @@ app.post('/v1/media/uploads/complete', { config: { rateLimit: { max: 12, timeWin
   }
 });
 
-// Media IDs are not a sharing mechanism. The owner can poll this endpoint
-// while an upload is processed; everyone else receives media through an
-// already-authorized Community object such as a visible Story.
 app.get('/v1/media/:id', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const mediaId = z.string().uuid().parse((request.params as { id: string }).id);
-    const media = await db.query<{
-      id: string;
-      status: 'quarantined' | 'scanning' | 'ready' | 'rejected';
-      kind: 'image' | 'video';
-      safe_url: string | null;
-      thumbnail_url: string | null;
-    }>(
-      'SELECT id,status,kind,safe_url,thumbnail_url FROM media_assets WHERE id=$1 AND owner_id=$2',
-      [mediaId, userId],
-    );
-    const row = media.rows[0];
-    if (!row) {
-      return reply.code(404).send({
-        error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' },
-      });
-    }
-    return {
-      data: {
-        id: row.id,
-        status: row.status,
-        kind: row.kind,
-        url: row.status === 'ready' && row.safe_url
-            ? await mediaObjectUrl(row.safe_url)
-            : null,
-        thumbnailUrl: row.status === 'ready' && row.thumbnail_url
-            ? await mediaObjectUrl(row.thumbnail_url)
-            : null,
-      },
-    };
+    const data = await readMediaAsset(userId, mediaId);
+    if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Medya bulunamadı.' } });
+    return { data };
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? 400).send({
       error: { code: 'MEDIA_STATUS_FAILED', message: 'Medya durumu okunamadı.' },
+    });
+  }
+});
+
+/* --- Panelin resmî hesap adına yüklediği görsel -----------------------------
+ *
+ * Haber görseli için panelde yükleme yoktu; alanın adı "görsel medya kimliği"
+ * idi ve ipucu "medya kimliği medya hattından gelir" diyordu. Böyle bir hat
+ * yoktu: kimliği elle üretebilecek tek yol uygulamadan bir görsel yükleyip
+ * kimliğini kopyalamaktı, o da resmî hesabın değil o üyenin medyası olurdu -
+ * haber yayınlarken `MEDIA_NOT_READY` ile geri dönerdi.
+ *
+ * Aynı üç adım, aynı tarama, aynı işleyici; değişen tek şey dosyanın kimin
+ * adına yazıldığı. Sahip, haberi yayınlayacak resmî hesabın kendisi: haber
+ * yayınlanırken medyanın hazır olup olmadığına bakan sorgu da, medyayı
+ * sonradan okuyan sorgu da o hesabı görüyor.
+ */
+const gateworkMediaPresignBody = mediaPresignBody.extend({ ownerId: z.string().uuid() });
+const gateworkMediaCompleteBody = mediaCompleteBody.extend({ ownerId: z.string().uuid() });
+
+async function requireOfficialOwner(ownerId: string) {
+  const account = await db.query(
+    "SELECT 1 FROM community_system_accounts WHERE user_id=$1 AND role='official' AND active",
+    [ownerId],
+  );
+  if (!account.rows[0]) throw Error('OFFICIAL_NOT_ACTIVE');
+}
+
+app.post('/v1/internal/gatework/media/uploads/presign', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const { ownerId, ...input } = gateworkMediaPresignBody.parse(request.body);
+    await requireOfficialOwner(ownerId);
+    return reply.code(201).send({ data: await openMediaUpload(ownerId, input) });
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_NOT_ACCEPTED', message: 'Görsel yükleme isteği kabul edilemedi.' },
+    });
+  }
+});
+
+app.post('/v1/internal/gatework/media/uploads/complete', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const { ownerId, uploadId } = gateworkMediaCompleteBody.parse(request.body);
+    const result = await completeMediaUpload(ownerId, uploadId);
+    if (!result.ok) return reply.code(result.httpStatus).send({ error: { code: result.code, message: result.message } });
+    return reply.code(202).send({ data: { mediaId: result.mediaId, status: 'scanning' } });
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_COMPLETE_FAILED', message: 'Görsel doğrulama kuyruğa alınamadı.' },
+    });
+  }
+});
+
+app.get('/v1/internal/gatework/media/:id', async (request, reply) => {
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const mediaId = z.string().uuid().parse((request.params as { id: string }).id);
+    const ownerId = z.string().uuid().parse((request.query as { ownerId?: string }).ownerId);
+    const data = await readMediaAsset(ownerId, mediaId);
+    if (!data) return reply.code(404).send({ error: { code: 'MEDIA_NOT_FOUND', message: 'Görsel bulunamadı.' } });
+    return { data };
+  } catch (error) {
+    return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 400).send({
+      error: { code: 'GATEWORK_MEDIA_STATUS_FAILED', message: 'Görselin durumu okunamadı.' },
     });
   }
 });
@@ -587,7 +831,9 @@ app.get('/v1/community/home/summary', async (request, reply) => {
     const [profile, connections, localPosts, stories] = await Promise.all([
       db.query<{ city: string; region_code: string; interests: string[] }>('SELECT city,region_code,interests FROM community_profile_projection WHERE user_id=$1', [userId]),
       db.query<{ count: string }>('SELECT count(*) FROM relationship_projection WHERE viewer_id=$1 AND active', [userId]),
-      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND p.region_code=v.region_code`, [userId]),
+      // Haber kartları bu sayının dışında: "çevrendeki 12 paylaşım" cümlesi
+      // insanları sayıyor, bültenin kendi haberlerini değil.
+      db.query<{ count: string }>(`SELECT count(*) FROM community_posts p JOIN community_profile_projection v ON v.user_id=$1 WHERE p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND p.news_article_id IS NULL AND p.region_code=v.region_code`, [userId]),
       db.query<{ count: string }>(`SELECT count(*) FROM stories s JOIN relationship_projection r ON r.subject_id=s.author_id WHERE r.viewer_id=$1 AND r.active AND s.expires_at>now()`, [userId]),
     ]);
     const locality = profile.rows[0];
@@ -667,7 +913,8 @@ const feedPoll = (viewerParam: string) => `(SELECT json_build_object(
 type FeedMediaRow = { id: string; kind: 'image' | 'video'; safeUrl: string | null; thumbnailUrl: string | null };
 type FeedPollRow = { id: string; selectionMode: string; closesAt: string | null; options: Array<{ id: string; label: string; votes: string | number; selected: boolean }> | null };
 type FeedTravelerRow = { from: string; to: string; travelAt: string; packageDetails: string; note: string | null };
-type FeedRow = { id: string; created_at: Date; body: string; location_label: string | null; author_id: string; author_name: string; likes: string; comments: string; is_liked: boolean; media: FeedMediaRow[] | null; poll: FeedPollRow | null; purpose: string; is_author: boolean; traveler: FeedTravelerRow | null };
+type FeedNewsRow = { id: string; title: string; category: string };
+type FeedRow = { id: string; created_at: Date; body: string; location_label: string | null; author_id: string; author_name: string; likes: string; comments: string; is_liked: boolean; media: FeedMediaRow[] | null; poll: FeedPollRow | null; purpose: string; is_author: boolean; traveler: FeedTravelerRow | null; news: FeedNewsRow | null };
 
 // The trip travels as one object rather than five columns so that "no trip" is
 // a single null instead of five of them.
@@ -675,16 +922,46 @@ const FEED_TRAVELER = `(SELECT json_build_object('from',t.from_place,'to',t.to_p
 
 const FEED_PURPOSE: Record<string, string> = { imece_help: 'imeceHelp', traveler_match: 'travelerMatch' };
 
+/* --- Haber Bülteni ---------------------------------------------------------
+ *
+ * Yayınlanan bir haber, editör isterse akışta da bir kart oluyor (036). O kartın
+ * kendi beğeni ve yorum sayacı yok: ikisini de haberin kendi tablolarından
+ * okuyor, çünkü "akıştaki paylaşımla haber aynı şey" demek ancak tek bir sayı
+ * varsa doğru olur. Aynı sebeple kart, haberin görünürlüğüne bağlı - geri
+ * çekilen haber akıştan da düşer, ileri tarihli olan akışta erken çıkmaz.
+ */
+const NEWS_POST_LIVE = `EXISTS(SELECT 1 FROM news_articles na WHERE na.id=p.news_article_id AND na.deleted_at IS NULL AND na.published_at IS NOT NULL AND na.published_at<=now())`;
+const FEED_NEWS_VISIBLE = `(p.news_article_id IS NULL OR ${NEWS_POST_LIVE})`;
+
+/// Yazarin hesabi acik mi.
+///
+/// Hesabini donduran ya da silmek isteyen uyenin paylasimlari akista durmaya
+/// devam ediyordu: Identity oturumu kesiyor, Community ise bunu hic duymuyordu.
+/// Paylasimlar silinmiyor - dondurma geri alinabilir bir karar ve geri donen
+/// uye kendi gecmisini bulmali - yalnizca baskalarina gorunmuyor.
+/// Uyenin kendi paylasimi bu kuralin disinda: silmeden once ne yazdigini
+/// gormesi gerekebilir.
+const AUTHOR_ACCOUNT_OPEN = (viewerParam: string) =>
+  `(p.author_id=${viewerParam} OR NOT EXISTS(SELECT 1 FROM community_profile_projection ap WHERE ap.user_id=p.author_id AND ap.closed_at IS NOT NULL))`;
+
+const FEED_NEWS = `(SELECT json_build_object('id',na.id,'title',na.title,'category',na.category) FROM news_articles na WHERE na.id=p.news_article_id) news`;
+
 /// The feed's columns and the feed's JSON, named so that a single post can be
 /// read with exactly the shape the feed hands back. A card fetched from a
 /// notification that differed from the same card in the list - one with a poll,
 /// one without - would be a second definition of what a post is.
-const feedColumns = (viewerParam: string) => `p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,(SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,(SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=${viewerParam} AND x.kind='like') is_liked,p.purpose,(p.author_id=${viewerParam}) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll(viewerParam)}`;
+const feedColumns = (viewerParam: string) => `p.id,p.created_at,p.body,p.location_label,p.author_id,COALESCE(cp.display_name,'TurkSquare üyesi') author_name,CASE WHEN p.news_article_id IS NULL THEN (SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') ELSE (SELECT count(*) FROM news_reactions r WHERE r.article_id=p.news_article_id AND r.value='like') END likes,CASE WHEN p.news_article_id IS NULL THEN (SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') ELSE (SELECT count(*) FROM news_comments c WHERE c.article_id=p.news_article_id AND c.deleted_at IS NULL AND c.moderation_state='active') END comments,CASE WHEN p.news_article_id IS NULL THEN EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=${viewerParam} AND x.kind='like') ELSE EXISTS(SELECT 1 FROM news_reactions r WHERE r.article_id=p.news_article_id AND r.user_id=${viewerParam} AND r.value='like') END is_liked,p.purpose,(p.author_id=${viewerParam} AND p.news_article_id IS NULL) is_author,${FEED_TRAVELER},${FEED_MEDIA},${feedPoll(viewerParam)},${FEED_NEWS}`;
+
+/// Haberin akıştaki imzası. Yayınlayan resmî hesabın adı değil, tek bir isim:
+/// haberi yazan kişi değil bülten paylaşıyor. Profil de açılmıyor - kart bir
+/// üyeye değil habere götürüyor, uygulama bunu `news` alanının doluluğundan
+/// anlıyor.
+const NEWS_BYLINE = 'Haber Bülteni';
 
 const feedPostJson = async (p: FeedRow) => ({
   id: p.id,
   authorId: p.author_id,
-  authorName: p.author_name,
+  authorName: p.news ? NEWS_BYLINE : p.author_name,
   location: p.location_label ?? '',
   createdAtLabel: p.created_at.toISOString(),
   message: p.body,
@@ -696,6 +973,7 @@ const feedPostJson = async (p: FeedRow) => ({
   travelerMatch: p.traveler ? { ...p.traveler, travelAt: new Date(p.traveler.travelAt).toISOString() } : null,
   media: await feedMediaJson(p.media),
   poll: feedPollJson(p.poll),
+  news: p.news,
 });
 
 const feedMediaJson = async (media: FeedMediaRow[] | null) => Promise.all(
@@ -719,7 +997,7 @@ const feedPollJson = (poll: FeedPollRow | null) => poll && poll.options?.length
 app.get('/v1/community/feed', async (request, reply) => {
   try {
     const userId = await viewer(request.headers); const input = feedQuery.parse(request.query); const cursor = decodeCursor(input.cursor);
-    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+    const params: unknown[] = [userId]; let where = `p.deleted_at IS NULL AND p.archived_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND ${AUTHOR_ACCOUNT_OPEN('$1')} AND (p.visibility='public' OR EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
     if (input.mode === 'following') where += ` AND EXISTS (SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=p.author_id AND r.active)`;
     // "Nearby" is the chosen state, not a radius. The original predicate asked
     // for posts within 50km of viewer_location_projection.approximate_cell, and
@@ -732,7 +1010,17 @@ app.get('/v1/community/feed', async (request, reply) => {
     if (input.mode === 'nearby') where += ` AND viewer_profile.region_code IS NOT NULL AND COALESCE(p.region_code,cp.region_code)=viewer_profile.region_code`;
     if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const result = await db.query<FeedRow>(`SELECT ${feedColumns('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY (EXTRACT(EPOCH FROM p.created_at) + CASE WHEN p.region_code IS NOT NULL AND p.region_code=viewer_profile.region_code THEN 1800 ELSE 0 END + CASE WHEN cp.interests && viewer_profile.interests THEN 600 ELSE 0 END) DESC,p.id DESC LIMIT $${params.length}`, params);
+    // Sıra tam olarak yeniden eskiye. Burada bir zamanlar puan vardı: üyenin
+    // eyaletinden gelen paylaşım 1800, ortak ilgi alanı olan yazarınki 600
+    // saniye ileri alınıyordu. İki sonucu oldu. Akış kronolojik olmaktan
+    // çıkıyordu - üstteki kart alttakinden eski olabiliyordu ve okuyan kişi
+    // bunu sıralamanın bozukluğu olarak görüyordu. İkincisi daha kötüsü:
+    // imleç `(created_at,id)` karşılaştırmasıyla ilerliyor, sıralama ise
+    // puana bakıyordu. Sayfanın son kartı 30 dakika ileri taşınmış bir
+    // paylaşımsa, sonraki sayfa onun gerçek saatinden geriye soruyor ve
+    // aradaki paylaşımlar hiç görünmüyordu. Kime yakın olduğu artık sekmenin
+    // işi: "Yakınındakiler" eyalete, "Takip ettiklerin" ilişkiye bakıyor.
+    const result = await db.query<FeedRow>(`SELECT ${feedColumns('$1')} FROM community_posts p LEFT JOIN community_profile_projection cp ON cp.user_id=p.author_id LEFT JOIN community_profile_projection viewer_profile ON viewer_profile.user_id=$1 WHERE ${where} ORDER BY p.created_at DESC,p.id DESC LIMIT $${params.length}`, params);
     const page = result.rows.slice(0, input.limit); const next = result.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null;
     // authorId travels with the card. Without it the app had nothing to compare
     // the viewer against, so it fell back to a hardcoded 'local-user' and every
@@ -745,6 +1033,26 @@ app.get('/v1/community/feed', async (request, reply) => {
 
 app.put('/v1/community/posts/:id/reactions/:kind', async (request, reply) => {
   try { const userId = await viewer(request.headers); const postId = z.string().uuid().parse((request.params as { id: string }).id); const kind = z.enum(['like','save']).parse((request.params as { kind: string }).kind); const input = interactionBody.parse(request.body);
+    // Akıştaki haber kartının kalbi haberin kendi tablosuna yazılıyor (036).
+    // İki tabloya birden yazmak, iki farklı doğru üretirdi: haber ekranında 12,
+    // akışta 3. "Kaydet" bunun dışında - o kişisel bir yer imi, haberin sayacı
+    // değil, dolayısıyla eskisi gibi `post_reactions` içinde kalıyor.
+    const linked = await db.query<{ news_article_id: string | null }>('SELECT news_article_id FROM community_posts WHERE id=$1 AND deleted_at IS NULL', [postId]);
+    const articleId = linked.rows[0]?.news_article_id ?? null;
+    if (articleId && kind === 'like') {
+      if (input.enabled) {
+        await db.query(
+          `INSERT INTO news_reactions(article_id,user_id,value) SELECT a.id,$2,'like' FROM news_articles a WHERE a.id=$1 AND a.deleted_at IS NULL
+           ON CONFLICT(article_id,user_id) DO UPDATE SET value='like',created_at=now()`,
+          [articleId, userId],
+        );
+      } else {
+        // Yalnızca beğeni siliniyor: aynı satır haber ekranında "beğenmedim"
+        // olarak işaretlenmiş olabilir ve akıştaki kalbin sönmesi onu silmemeli.
+        await db.query("DELETE FROM news_reactions WHERE article_id=$1 AND user_id=$2 AND value='like'", [articleId, userId]);
+      }
+      return reply.code(204).send();
+    }
     if (input.enabled) await db.query('INSERT INTO post_reactions(post_id,actor_id,kind) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL) ON CONFLICT DO NOTHING', [postId,userId,kind]);
     else await db.query('DELETE FROM post_reactions WHERE post_id=$1 AND actor_id=$2 AND kind=$3', [postId,userId,kind]);
     // A save is private - the member is filing the post away for themselves, not
@@ -819,7 +1127,11 @@ app.post('/v1/community/posts', async (request, reply) => {
 app.post('/v1/community/posts/:postId/poll/votes', async (request, reply) => {
   try {const userId=await viewer(request.headers);const postId=z.string().uuid().parse((request.params as {postId:string}).postId);const input=z.object({optionIds:z.array(z.string().uuid()).min(1).max(4)}).parse(request.body);const client=await db.connect();try{await client.query('BEGIN');const poll=await client.query<{selection_mode:string;closes_at:Date|null}>('SELECT selection_mode,closes_at FROM post_polls WHERE post_id=$1 FOR UPDATE',[postId]);if(!poll.rows[0]||(poll.rows[0].closes_at&&poll.rows[0].closes_at<=new Date())||(poll.rows[0].selection_mode==='single'&&input.optionIds.length!==1))throw Error();const valid=await client.query('SELECT id FROM post_poll_options WHERE post_id=$1 AND id=ANY($2::uuid[])',[postId,input.optionIds]);if(valid.rows.length!==input.optionIds.length)throw Error();await client.query('DELETE FROM post_poll_votes WHERE voter_id=$1 AND option_id IN (SELECT id FROM post_poll_options WHERE post_id=$2)',[userId,postId]);for(const id of input.optionIds)await client.query('INSERT INTO post_poll_votes(option_id,voter_id) VALUES($1,$2)',[id,userId]);await client.query('COMMIT');return reply.code(204).send();}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}catch{return reply.code(400).send({error:{code:'POLL_VOTE_FAILED',message:'Anket oyu kaydedilemedi.'}});}
 });
-const storyAccessWhere = (storyAlias: string, viewerParam: string) => `(${storyAlias}.author_id=${viewerParam} OR (NOT EXISTS(SELECT 1 FROM story_audience_exclusions x WHERE x.story_id=${storyAlias}.id AND x.excluded_user_id=${viewerParam}) AND (EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=${storyAlias}.author_id AND r.active) OR EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=${storyAlias}.author_id AND o.role='official' AND o.active) OR (${storyAlias}.visibility='public' AND ${storyAlias}.region_code=(SELECT region_code FROM community_profile_projection WHERE user_id=${viewerParam}))))`;
+// Bir kapanmamis parantez yuzunden bu kosulu kullanan her sorgu
+// `syntax error at or near "ORDER"` ile duserdi: Story listesi, Story
+// goruntulenme kaydi ve Story begenisi. Uygulamada karsiligi "Story'ler su
+// anda yuklenemedi" satiriydi ve bos bir Story serididi.
+const storyAccessWhere = (storyAlias: string, viewerParam: string) => `(${storyAlias}.author_id=${viewerParam} OR (NOT EXISTS(SELECT 1 FROM story_audience_exclusions x WHERE x.story_id=${storyAlias}.id AND x.excluded_user_id=${viewerParam}) AND (EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=${storyAlias}.author_id AND r.active) OR EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=${storyAlias}.author_id AND o.role='official' AND o.active) OR (${storyAlias}.visibility='public' AND ${storyAlias}.region_code=(SELECT region_code FROM community_profile_projection WHERE user_id=${viewerParam})))))`;
 app.get('/v1/community/stories', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
@@ -934,7 +1246,7 @@ const postCommentJson = (row: PostCommentRow) => ({
  * the author, who can always read under their own post.
  */
 const postReadableWhere = (postParam: string, viewerParam: string) =>
-  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
+  `p.id=${postParam} AND p.deleted_at IS NULL AND p.moderation_state='active' AND ${FEED_NEWS_VISIBLE} AND ${AUTHOR_ACCOUNT_OPEN(viewerParam)} AND (p.visibility='public' OR p.author_id=${viewerParam} OR EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=${viewerParam} AND r.subject_id=p.author_id AND r.relationship='friend' AND r.active))`;
 
 /**
  * One post, by id.
@@ -969,8 +1281,18 @@ app.get('/v1/community/posts/:id/comments', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const postId = z.string().uuid().parse((request.params as { id: string }).id);
-    const post = await db.query(`SELECT 1 FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    const post = await db.query<{ news_article_id: string | null }>(`SELECT p.news_article_id FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
     if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Haber kartının altındaki başlık, haberin kendi yorum listesi (036). Aynı
+    // iş parçacığı iki ekranda da okunuyor; ayrı bir liste tutulsaydı akışta
+    // yazılan yorum haber ekranında görünmezdi.
+    if (post.rows[0].news_article_id) {
+      const newsRows = await db.query<NewsCommentRow>(
+        `${newsCommentSelect('$2')} WHERE c.article_id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' ORDER BY c.created_at ASC LIMIT 100`,
+        [post.rows[0].news_article_id, userId],
+      );
+      return { data: newsRows.rows.map(newsCommentJson) };
+    }
     // Oldest first: a thread reads top to bottom, and the app appends a comment
     // it has just written to the end of the list it is already holding.
     const rows = await db.query<PostCommentRow>(
@@ -990,9 +1312,26 @@ app.post('/v1/community/posts/:id/comments', { config: { rateLimit: { max: 20, t
     if (restricted) return reply.code(403).send(restrictionError(restricted));
     const postId = z.string().uuid().parse((request.params as { id: string }).id);
     const input = commentBody.parse(request.body);
-    const post = await db.query(`SELECT p.comments_enabled FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
+    const post = await db.query<{ comments_enabled: boolean; news_article_id: string | null }>(`SELECT p.comments_enabled,p.news_article_id FROM community_posts p WHERE ${postReadableWhere('$1', '$2')}`, [postId, userId]);
     if (!post.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
-    if (!(post.rows[0] as { comments_enabled: boolean }).comments_enabled) {
+    // Haber kartına yazılan yorum haberin altına yazılıyor. Yorumlara kapalı
+    // olup olmadığına da haber karar veriyor: editör haberi kapattığında akıştan
+    // yazılabilmesi, kapatma düğmesini işlevsiz bırakırdı.
+    if (post.rows[0].news_article_id) {
+      const articleId = post.rows[0].news_article_id;
+      const article = await db.query(`SELECT 1 FROM news_articles a WHERE a.id=$1 AND ${NEWS_VISIBLE} AND a.comments_enabled`, [articleId]);
+      if (!article.rows[0]) return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Bu haber yorumlara kapalı.' } });
+      const written = await db.query<{ id: string }>(
+        'INSERT INTO news_comments(article_id,author_id,parent_id,body) VALUES($1,$2,$3,$4) RETURNING id',
+        [articleId, userId, input.parentId ?? null, input.body],
+      );
+      const newsRow = await db.query<NewsCommentRow>(`${newsCommentSelect('$2')} WHERE c.id=$1`, [written.rows[0]!.id, userId]);
+      // Haber ekranındaki yorumla aynı ödül: seri devam eder, `vocalist` akışta
+      // yazılan yorumları sayar ve haber yorumu onu ilerletmez.
+      void grantInBackground('news_comment', async (journey) => { await touchStreak(journey, userId); });
+      return reply.code(201).send({ data: newsCommentJson(newsRow.rows[0]!) });
+    }
+    if (!post.rows[0].comments_enabled) {
       return reply.code(403).send({ error: { code: 'COMMENTS_DISABLED', message: 'Yorumlar kapalı.' } });
     }
     const inserted = await db.query<{ id: string }>(
@@ -1024,7 +1363,16 @@ app.delete('/v1/community/comments/:id', async (request, reply) => {
         RETURNING c.id`,
       [id, userId],
     );
-    if (!removed.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (!removed.rows[0]) {
+      // Akıştaki haber kartının yorumları başka bir tabloda duruyor (036), ama
+      // uygulamaya aynı listeden geliyor. Kimliği burada bulunamayan bir yorumu
+      // "yok" saymak, üyenin akıştan yazdığı yorumu silememesi demekti.
+      const newsRemoved = await db.query(
+        "UPDATE news_comments SET deleted_at=now(),moderation_state='removed' WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL RETURNING id",
+        [id, userId],
+      );
+      if (!newsRemoved.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    }
     return reply.code(204).send();
   } catch (error) {
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'COMMENT_DELETE_FAILED', message: 'Yorum silinemedi.' } });
@@ -1055,7 +1403,21 @@ app.put('/v1/community/comments/:id/likes', { config: { rateLimit: { max: 60, ti
         WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active'`,
       [id, userId],
     );
-    if (!readable.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+    if (!readable.rows[0]) {
+      // Aynı liste, başka tablo: haber kartının altındaki yorumlar (036). Kalp
+      // haberin tarafına yazılmazsa akıştan beğenilen yorum haber ekranında
+      // beğenilmemiş görünür.
+      const newsComment = await db.query(
+        `SELECT 1 FROM news_comments c JOIN news_articles a ON a.id=c.article_id
+          WHERE c.id=$1 AND c.deleted_at IS NULL AND c.moderation_state='active' AND ${NEWS_VISIBLE}`,
+        [id],
+      );
+      if (!newsComment.rows[0]) return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Yorum bulunamadı.' } });
+      if (input.enabled) await db.query('INSERT INTO news_comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
+      else await db.query('DELETE FROM news_comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
+      const newsTally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM news_comment_reactions WHERE comment_id=$1', [id]);
+      return { data: { likes: Number(newsTally.rows[0]!.like_count), isLiked: input.enabled } };
+    }
     if (input.enabled) await db.query('INSERT INTO comment_reactions(comment_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, userId]);
     else await db.query('DELETE FROM comment_reactions WHERE comment_id=$1 AND actor_id=$2', [id, userId]);
     const tally = await db.query<{ like_count: string }>('SELECT count(*) like_count FROM comment_reactions WHERE comment_id=$1', [id]);
@@ -1781,6 +2143,161 @@ app.get('/v1/community/friends/status/:userId', async (request, reply) => {
   }
 });
 
+/**
+ * Takip.
+ *
+ * Arkadaşlıktan farkı rızanın yönü: takip etmek için karşı tarafa sormuyorsun,
+ * arkadaş olmak için soruyorsun. Bu yüzden istek kuyruğu yok, tek bir INSERT
+ * var. Takip, arkadaşa özel paylaşımları açmıyor - onu yalnızca 'friend'
+ * satırları açıyor; takip yalnızca akıştaki "Takip ettiklerin" sekmesini ve
+ * Story şeridini besliyor.
+ *
+ * Satırlar 002'den beri şemada duran relationship_projection'a yazılıyor.
+ */
+// DISTINCT şart: bir kişi hem 'following' hem 'friend' satırı taşıyabiliyor
+// (önce takip etmiş, sonra arkadaş olmuşlar) ve o kişi listede iki kez çıkardı.
+const FOLLOW_LIST_SELECT = `
+  SELECT DISTINCT p.user_id,COALESCE(p.display_name,'TurkSquare üyesi') display_name,mp.username,p.city,p.region_code,
+         (SELECT m.safe_url FROM media_assets m WHERE m.id=mp.avatar_media_id AND m.status='ready') avatar_url,
+         EXISTS(SELECT 1 FROM relationship_projection vr WHERE vr.viewer_id=$2 AND vr.subject_id=p.user_id AND vr.active) viewer_follows
+    FROM relationship_projection r
+    JOIN community_profile_projection p ON p.user_id=`;
+
+type FollowRow = {
+  user_id: string; display_name: string; username: string | null; city: string | null;
+  region_code: string | null; avatar_url: string | null; viewer_follows: boolean;
+};
+
+async function toFollowDto(row: FollowRow) {
+  return {
+    userId: row.user_id,
+    displayName: row.display_name,
+    username: row.username,
+    city: row.city,
+    regionCode: row.region_code,
+    avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
+    viewerFollows: row.viewer_follows,
+  };
+}
+
+/// Kilitli bir profilin takipçi listesi de kilitli. Boş dizi ile kilit ayrı ayrı
+/// dönüyor: uygulama "kimse takip etmiyor" ile "göremiyorsun" arasındaki farkı
+/// ekranda söylemek zorunda.
+async function followList(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  direction: 'followers' | 'following',
+) {
+  const viewerId = await viewer(request.headers);
+  const ownerId = z.string().uuid().parse((request.params as { userId: string }).userId);
+  const access = await profileAccess(viewerId, ownerId);
+  if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+  if (!access.full) return { data: [], meta: { locked: true } };
+  const joinColumn = direction === 'followers' ? 'r.viewer_id' : 'r.subject_id';
+  const matchColumn = direction === 'followers' ? 'r.subject_id' : 'r.viewer_id';
+  const rows = await db.query<FollowRow>(
+    `${FOLLOW_LIST_SELECT}${joinColumn}
+     LEFT JOIN member_profiles mp ON mp.user_id=p.user_id
+     WHERE ${matchColumn}=$1 AND r.active
+     ORDER BY p.display_name
+     LIMIT 500`,
+    [ownerId, viewerId],
+  );
+  return { data: await Promise.all(rows.rows.map(toFollowDto)), meta: { locked: false } };
+}
+
+app.get('/v1/community/profiles/:userId/followers', async (request, reply) => {
+  try {
+    return await followList(request, reply, 'followers');
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWERS_UNAVAILABLE', message: 'Takipçi listesi yüklenemedi.' } });
+  }
+});
+
+app.get('/v1/community/profiles/:userId/following', async (request, reply) => {
+  try {
+    return await followList(request, reply, 'following');
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWING_UNAVAILABLE', message: 'Takip listesi yüklenemedi.' } });
+  }
+});
+
+app.post('/v1/community/members/:userId/follow', { config: { rateLimit: { max: 120, timeWindow: '1 hour' } } }, async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const restricted = await activeRestriction(viewerId);
+    if (restricted) return reply.code(403).send(restrictionError(restricted));
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    if (targetId === viewerId) return reply.code(400).send({ error: { code: 'CANNOT_FOLLOW_SELF', message: 'Kendini takip edemezsin.' } });
+    const blocked = await db.query(
+      'SELECT 1 FROM user_blocks WHERE (blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1)',
+      [viewerId, targetId],
+    );
+    // Engellenen profil 404 veriyor; takip de aynısını vermeli, yoksa engel bir
+    // "bu hesap var mı" sorgusuna dönüşür.
+    if (blocked.rowCount) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    const exists = await db.query('SELECT 1 FROM community_profile_projection WHERE user_id=$1', [targetId]);
+    if (!exists.rowCount) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
+    await db.query(
+      `INSERT INTO relationship_projection(viewer_id,subject_id,relationship,active)
+       VALUES($1,$2,'following',true)
+       ON CONFLICT (viewer_id,subject_id,relationship) DO UPDATE SET active=true,updated_at=now()`,
+      [viewerId, targetId],
+    );
+    return { data: { following: true } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOW_FAILED', message: 'Takip edilemedi.' } });
+  }
+});
+
+app.delete('/v1/community/members/:userId/follow', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    // Yalnızca 'following' satırı kalkıyor. Arkadaşlık simetrik ve karşılıklı
+    // onaylı: onu tek taraflı bir "takipten çık" dokunuşuyla bozmak, üyenin
+    // istemediği bir şeyi yapmak olurdu. Arkadaşlıktan çıkmanın kendi yolu var.
+    await db.query(
+      "UPDATE relationship_projection SET active=false,updated_at=now() WHERE viewer_id=$1 AND subject_id=$2 AND relationship='following' AND active",
+      [viewerId, targetId],
+    );
+    const stillFriends = await db.query(
+      "SELECT 1 FROM relationship_projection WHERE viewer_id=$1 AND subject_id=$2 AND relationship='friend' AND active",
+      [viewerId, targetId],
+    );
+    // Arkadaşlık devam ediyorsa kişi hâlâ takip edilenler arasında. Uygulamaya
+    // "takipten çıktın" dedirtip listede bırakmak, ekranın kendi kendisiyle
+    // çelişmesi olurdu; `keptByFriendship` bunun nedenini söylüyor.
+    const keptByFriendship = (stillFriends.rowCount ?? 0) > 0;
+    return { data: { following: keptByFriendship, keptByFriendship } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'UNFOLLOW_FAILED', message: 'Takipten çıkılamadı.' } });
+  }
+});
+
+/// Kendi takipçini listeden çıkarmak. Takipten çıkmanın aynası: bu sefer silinen
+/// satır karşı tarafın satırı, o yüzden yalnızca kendi profilinde çalışıyor.
+app.delete('/v1/community/members/:userId/follower', async (request, reply) => {
+  try {
+    const viewerId = await viewer(request.headers);
+    const targetId = z.string().uuid().parse((request.params as { userId: string }).userId);
+    const friends = await db.query(
+      "SELECT 1 FROM relationship_projection WHERE viewer_id=$1 AND subject_id=$2 AND relationship='friend' AND active",
+      [targetId, viewerId],
+    );
+    if (friends.rowCount) {
+      return reply.code(409).send({ error: { code: 'FOLLOWER_IS_FRIEND', message: 'Bu kişi arkadaşın. Listeden çıkarmak için önce arkadaşlıktan çıkarman gerekiyor.' } });
+    }
+    await db.query(
+      "UPDATE relationship_projection SET active=false,updated_at=now() WHERE viewer_id=$1 AND subject_id=$2 AND relationship='following' AND active",
+      [targetId, viewerId],
+    );
+    return reply.code(204).send();
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'FOLLOWER_REMOVE_FAILED', message: 'Takipçi çıkarılamadı.' } });
+  }
+});
+
 // --- Content moderation -------------------------------------------------
 // Reporting for feed content. The app had a "Raporla" menu item that only
 // showed a snackbar, so a report reached nobody. Categories, priorities and the
@@ -2292,11 +2809,35 @@ app.delete('/v1/internal/gatework/community/restrictions/:userId', async (reques
 // the onboarding answers arrive as a projection and are never edited here, so
 // there is exactly one writer for each fact.
 
+/// Aynı kural üç yerde geçerli: burada, müsaitlik ucunda ve göç 037'deki CHECK
+/// içinde. Üçü ayrışırsa uygulama "müsait" deyip sunucu reddeder.
+const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_.]{1,22}[a-z0-9]$/;
+
+/// Kimsenin alamayacağı adlar. Bunlar bir kişiyi değil kurumu ya da bir ekranı
+/// işaret ediyor; "@destek" adlı bir üye, uygulamanın kendisi sanılabilir.
+const RESERVED_USERNAMES = new Set([
+  'admin', 'admins', 'administrator', 'destek', 'support', 'yardim', 'help',
+  'turksquare', 'turk_square', 'official', 'resmi', 'moderator', 'mod',
+  'guvenlik', 'security', 'sistem', 'system', 'root', 'me', 'ben', 'profil',
+  'profile', 'ayarlar', 'settings', 'null', 'undefined',
+]);
+
+const usernameField = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(USERNAME_PATTERN)
+  .refine((value) => !value.includes('..'))
+  .refine((value) => !RESERVED_USERNAMES.has(value));
+
 const profilePatchBody = z.object({
   bio: z.string().trim().max(280).nullable().optional(),
   avatarMediaId: z.string().uuid().nullable().optional(),
   visibility: z.enum(['public', 'friends_only']).optional(),
   showcasedBadges: z.array(z.string().regex(/^[a-z0-9_]{3,60}$/)).max(3).optional(),
+  // Bir kez boşaltılabiliyor ama boş dize ile değil: null "kullanıcı adım
+  // olmasın" demek, '' ise doğrulamadan geçmiş bir kaza olurdu.
+  username: usernameField.nullable().optional(),
 });
 const profilePostsQuery = z.object({
   state: z.enum(['active', 'archived']).default('active'),
@@ -2483,35 +3024,54 @@ async function grantInBackground(label: string, work: (client: pg.PoolClient) =>
 /// data and choose to hide it. A block in either direction closes the profile
 /// regardless of visibility - the point of a block is not to be seen.
 async function profileAccess(viewerId: string, ownerId: string) {
-  if (viewerId === ownerId) return { self: true, blocked: false, full: true };
-  const row = await db.query<{ blocked: boolean; friend: boolean; visibility: string }>(
+  if (viewerId === ownerId) {
+    return { self: true, blocked: false, full: true, viewerFollows: false, followsViewer: false };
+  }
+  const row = await db.query<{ blocked: boolean; friend: boolean; visibility: string; viewer_follows: boolean; follows_viewer: boolean }>(
     `SELECT
        EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=$2) OR (b.blocker_id=$2 AND b.blocked_id=$1)) blocked,
        EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.relationship='friend' AND r.active) friend,
-       COALESCE((SELECT visibility FROM member_profiles WHERE user_id=$2),'friends_only') visibility`,
+       COALESCE((SELECT visibility FROM member_profiles WHERE user_id=$2),'friends_only') visibility,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$1 AND r.subject_id=$2 AND r.active) viewer_follows,
+       EXISTS(SELECT 1 FROM relationship_projection r WHERE r.viewer_id=$2 AND r.subject_id=$1 AND r.active) follows_viewer`,
     [viewerId, ownerId],
   );
   const access = row.rows[0]!;
-  return { self: false, blocked: access.blocked, full: !access.blocked && (access.visibility === 'public' || access.friend) };
+  return {
+    self: false,
+    blocked: access.blocked,
+    full: !access.blocked && (access.visibility === 'public' || access.friend),
+    viewerFollows: access.viewer_follows,
+    followsViewer: access.follows_viewer,
+  };
 }
 
 type ProfileRow = {
-  user_id: string; display_name: string; city: string | null; region_code: string | null; interests: string[];
+  user_id: string; display_name: string; username: string | null; city: string | null; region_code: string | null; interests: string[];
   born_in_us: boolean; arrived_month: number | null; arrived_year: number | null; origin_country: string | null;
   origin_city: string | null; primary_intent: string | null; bio: string | null; visibility: string | null;
   showcased_badges: string[] | null; avatar_url: string | null; identity_verified: boolean;
-  post_count: string; friend_count: string; points: number | null; level: number | null; badge_count: number | null;
+  post_count: string; friend_count: string; follower_count: string; following_count: string;
+  points: number | null; level: number | null; badge_count: number | null;
   streak_days: number | null; level_title: string | null; next_level_points: number | null;
 };
 
 const PROFILE_SELECT = `
   SELECT p.user_id,p.display_name,p.city,p.region_code,p.interests,
          p.born_in_us,p.arrived_month,p.arrived_year,p.origin_country,p.origin_city,p.primary_intent,
-         mp.bio,mp.visibility,mp.showcased_badges,
+         mp.bio,mp.visibility,mp.showcased_badges,mp.username,
          (SELECT m.safe_url FROM media_assets m WHERE m.id=mp.avatar_media_id AND m.status='ready') avatar_url,
          COALESCE(mc.identity_verified,false) identity_verified,
          (SELECT count(*) FROM community_posts cp WHERE cp.author_id=p.user_id AND cp.deleted_at IS NULL AND cp.archived_at IS NULL AND cp.moderation_state='active') post_count,
          (SELECT count(*) FROM relationship_projection r WHERE r.viewer_id=p.user_id AND r.relationship='friend' AND r.active) friend_count,
+         -- Arkadaşlık iki yönlü yazılıyor, yani her arkadaş aynı zamanda hem
+         -- takipçi hem takip edilen. Sayaçlar bu yüzden ilişki tipine göre
+         -- ayrılmıyor: "beni takip edenler" listesinde arkadaşının çıkmaması
+         -- üyeye yanlış bir sayı gösterirdi.
+         -- count(DISTINCT ...): aynı kişinin hem 'following' hem 'friend'
+         -- satırı olabiliyor ve düz bir count onu iki kişi sayardı.
+         (SELECT count(DISTINCT r.viewer_id) FROM relationship_projection r WHERE r.subject_id=p.user_id AND r.active) follower_count,
+         (SELECT count(DISTINCT r.subject_id) FROM relationship_projection r WHERE r.viewer_id=p.user_id AND r.active) following_count,
          ms.points,ms.level,ms.badge_count,ms.streak_days,
          (SELECT l.title FROM journey_levels l WHERE l.level=COALESCE(ms.level,1)) level_title,
          (SELECT min(l.min_points) FROM journey_levels l WHERE l.min_points>COALESCE(ms.points,0)) next_level_points
@@ -2520,7 +3080,10 @@ const PROFILE_SELECT = `
     LEFT JOIN member_capabilities mc ON mc.user_id=p.user_id
     LEFT JOIN member_scores ms ON ms.user_id=p.user_id`;
 
-async function toProfileDto(row: ProfileRow, access: { self: boolean; full: boolean }) {
+async function toProfileDto(
+  row: ProfileRow,
+  access: { self: boolean; full: boolean; viewerFollows?: boolean; followsViewer?: boolean },
+) {
   const showcased = row.showcased_badges ?? [];
   const badges = showcased.length
     ? await db.query<{ code: string; title: string; icon: string; tier: string }>(
@@ -2531,6 +3094,9 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
   return {
     id: row.user_id,
     displayName: row.display_name,
+    // Handle, kilitli profilde de duruyor. Zaten bir adres: gizlemek profilin
+    // paylaşılabilir olmasını engeller, kimseyi korumaz.
+    username: row.username,
     city: row.city,
     regionCode: row.region_code,
     // Everything below the fold is withheld from a viewer the member has not
@@ -2543,7 +3109,12 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
     originCountry: access.full ? row.origin_country : null,
     originCity: access.full ? row.origin_city : null,
     primaryIntent: access.full ? row.primary_intent : null,
-    bio: access.full ? row.bio ?? '' : '',
+    // Kilitli profil bir duvar değil bir kapı: üyenin kendini anlattığı iki
+    // satır ve vitrine koyduğu rozetler herkese açık kalıyor, çünkü karşıdaki
+    // kişi arkadaşlık isteği göndermeden önce kime istek gönderdiğini
+    // bilebilmeli. Nereden geldiği, ne zaman geldiği ve neyle ilgilendiği
+    // kapalı kalmaya devam ediyor.
+    bio: row.bio ?? '',
     avatarUrl: row.avatar_url ? await mediaObjectUrl(row.avatar_url) : null,
     visibility: row.visibility ?? 'friends_only',
     identityVerified: row.identity_verified,
@@ -2551,8 +3122,12 @@ async function toProfileDto(row: ProfileRow, access: { self: boolean; full: bool
     counts: {
       posts: Number(row.post_count),
       friends: Number(row.friend_count),
+      followers: Number(row.follower_count),
+      following: Number(row.following_count),
       badges: row.badge_count ?? 0,
     },
+    viewerFollows: access.viewerFollows ?? false,
+    followsViewer: access.followsViewer ?? false,
     journey: {
       points: row.points ?? 0,
       level: row.level ?? 1,
@@ -2584,7 +3159,13 @@ app.get('/v1/community/profiles/:userId', async (request, reply) => {
     // A blocked profile answers 404, not 403: confirming the account exists
     // would make the block a discovery tool.
     if (access.blocked) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
-    const row = await db.query<ProfileRow>(`${PROFILE_SELECT} WHERE p.user_id=$1`, [ownerId]);
+    // Kapali hesap da 404: "bu hesap donduruldu" demek, kimin ara verdigini
+    // herkese duyurmak olurdu. Uyenin kendisi kendi profilini gormeye devam
+    // ediyor - silmeden once ne biraktigina bakabilmeli.
+    const row = await db.query<ProfileRow>(
+      `${PROFILE_SELECT} WHERE p.user_id=$1 AND (p.user_id=$2 OR p.closed_at IS NULL)`,
+      [ownerId, viewerId],
+    );
     if (!row.rows[0]) return reply.code(404).send({ error: { code: 'PROFILE_NOT_FOUND', message: 'Profil bulunamadı.' } });
     return { data: await toProfileDto(row.rows[0], access) };
   } catch (error) {
@@ -2620,13 +3201,14 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
     }
 
     await client.query(
-      `INSERT INTO member_profiles(user_id,bio,avatar_media_id,visibility,showcased_badges)
-       VALUES($1,$2,$3,COALESCE($4,'friends_only'),COALESCE($5::text[],'{}'))
+      `INSERT INTO member_profiles(user_id,bio,avatar_media_id,visibility,showcased_badges,username)
+       VALUES($1,$2,$3,COALESCE($4,'friends_only'),COALESCE($5::text[],'{}'),$8)
        ON CONFLICT(user_id) DO UPDATE SET
          bio=CASE WHEN $6::boolean THEN $2 ELSE member_profiles.bio END,
          avatar_media_id=CASE WHEN $7::boolean THEN $3 ELSE member_profiles.avatar_media_id END,
          visibility=COALESCE($4,member_profiles.visibility),
          showcased_badges=COALESCE($5::text[],member_profiles.showcased_badges),
+         username=CASE WHEN $9::boolean THEN $8 ELSE member_profiles.username END,
          updated_at=now()`,
       [
         userId,
@@ -2638,6 +3220,8 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
         // the stored value, an explicit null wipes it.
         Object.prototype.hasOwnProperty.call(request.body ?? {}, 'bio'),
         Object.prototype.hasOwnProperty.call(request.body ?? {}, 'avatarMediaId'),
+        input.username ?? null,
+        Object.prototype.hasOwnProperty.call(request.body ?? {}, 'username'),
       ],
     );
 
@@ -2656,15 +3240,127 @@ app.patch('/v1/community/profiles/me', { config: { rateLimit: { max: 20, timeWin
     return { data: await toProfileDto(row.rows[0], { self: true, full: true }) };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
+    // Müsaitlik denetimi ile bu INSERT arasında saniyeler var; o aralıkta aynı
+    // adı başkası alabilir. Son sözü indeks söylüyor ve üye "bu ad az önce
+    // alındı" cevabını alıyor, "profil güncellenemedi" değil.
+    if ((error as { code?: string }).code === '23505') {
+      return reply.code(409).send({ error: { code: 'USERNAME_TAKEN', message: 'Bu kullanıcı adı alınmış. Başka bir tane dene.' } });
+    }
     return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'PROFILE_UPDATE_FAILED', message: 'Profil güncellenemedi.' } });
   } finally {
     client.release();
   }
 });
 
+/// "Bu kullanıcı adı boşta mı?" - üye yazarken cevap veren uç.
+///
+/// Nihai karar değil, nezaket. Kaydetme anında indeks yeniden karar veriyor;
+/// burada verilen "müsait" cevabı yalnızca o andaki durumu anlatıyor. Kural
+/// ihlali ile doluluk ayrı ayrı dönüyor: "kısa" ile "alınmış" aynı ekranda aynı
+/// kırmızıyı gösterirse üye neyi düzelteceğini bilemez.
+app.get('/v1/community/profiles/username-available', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const raw = z.string().trim().max(40).parse((request.query as { username?: string }).username ?? '').toLowerCase();
+    if (raw.length < 3 || raw.length > 24) {
+      return { data: { available: false, reason: 'length', message: 'Kullanıcı adı 3-24 karakter olmalı.' } };
+    }
+    if (!USERNAME_PATTERN.test(raw) || raw.includes('..')) {
+      return { data: { available: false, reason: 'format', message: 'Yalnızca küçük harf, rakam, alt çizgi ve nokta kullanabilirsin.' } };
+    }
+    if (RESERVED_USERNAMES.has(raw)) {
+      return { data: { available: false, reason: 'reserved', message: 'Bu ad kullanıma kapalı.' } };
+    }
+    const taken = await db.query('SELECT 1 FROM member_profiles WHERE username=$1 AND user_id<>$2', [raw, userId]);
+    return taken.rowCount
+      ? { data: { available: false, reason: 'taken', message: 'Bu kullanıcı adı alınmış.' } }
+      : { data: { available: true, reason: null, message: 'Bu kullanıcı adı senin olabilir.' } };
+  } catch (error) {
+    return reply.code((error as Error).message === 'UNAUTHORIZED' ? 401 : 400).send({ error: { code: 'USERNAME_CHECK_FAILED', message: 'Kullanıcı adı denetlenemedi.' } });
+  }
+});
+
 // The grid behind the "Paylasimlar" tab. Archived posts are visible to their
 // author and to nobody else, which is the difference between archiving and
 // deleting: the member keeps them, the app stops showing them.
+/// Profil ızgarasının imleci. Akışınkinden ayrı, çünkü bu liste önce
+/// sabitlenmişleri sıralıyor ve devam edilecek yer bunu da bilmek zorunda.
+const profileCursorEncode = (row: { pinned_at: Date | null; created_at: Date; id: string }) =>
+  Buffer.from(`${row.pinned_at ? 1 : 0}|${row.created_at.toISOString()}|${row.id}`).toString('base64url');
+
+const profileCursorDecode = (cursor?: string) => {
+  if (!cursor) return null;
+  try {
+    const [pinned, createdAt, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    if (pinned === undefined || !createdAt || !id) throw Error();
+    return { pinned: pinned === '1', createdAt, id };
+  } catch {
+    throw Object.assign(new Error('Invalid cursor'), { statusCode: 400 });
+  }
+};
+
+/// Aynı anda kaç paylaşım sabitlenebilir. Instagram'da üç; buradaki sebep de
+/// aynı: ızgaranın ilk satırı bir seçki, ikinci bir akış değil.
+const MAX_PINNED_POSTS = 3;
+
+const postSettingsBody = z.object({
+  pinned: z.boolean().optional(),
+  commentsEnabled: z.boolean().optional(),
+}).refine((value) => value.pinned !== undefined || value.commentsEnabled !== undefined, {
+  message: 'Değiştirilecek bir ayar yok.',
+});
+
+/// Sabitleme ve yorumlara kapatma tek uçta: ikisi de paylaşımın sahibine ait
+/// ayarlar ve ikisi de aynı sahiplik denetiminden geçiyor.
+app.patch('/v1/community/posts/:id/settings', async (request, reply) => {
+  try {
+    const userId = await viewer(request.headers);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = postSettingsBody.parse(request.body);
+
+    const owned = await db.query<{ pinned_at: Date | null; comments_enabled: boolean }>(
+      'SELECT pinned_at,comments_enabled FROM community_posts WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL',
+      [id, userId],
+    );
+    if (!owned.rows[0]) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+
+    if (input.pinned === true && owned.rows[0].pinned_at === null) {
+      const pinned = await db.query<{ count: string }>(
+        'SELECT count(*) FROM community_posts WHERE author_id=$1 AND pinned_at IS NOT NULL AND deleted_at IS NULL',
+        [userId],
+      );
+      // Sessizce en eskisini düşürmek yerine hayır deniyor: üye hangisinden
+      // vazgeçtiğini kendi seçmeli.
+      if (Number(pinned.rows[0]?.count ?? 0) >= MAX_PINNED_POSTS) {
+        return reply.code(409).send({
+          error: {
+            code: 'PIN_LIMIT_REACHED',
+            message: `En fazla ${MAX_PINNED_POSTS} paylaşım sabitlenebilir. Önce birinin sabitini kaldır.`,
+          },
+        });
+      }
+    }
+
+    const updated = await db.query<{ pinned_at: Date | null; comments_enabled: boolean }>(
+      `UPDATE community_posts
+          SET pinned_at=CASE WHEN $3::boolean IS NULL THEN pinned_at WHEN $3::boolean THEN COALESCE(pinned_at,now()) ELSE NULL END,
+              comments_enabled=COALESCE($4::boolean,comments_enabled)
+        WHERE id=$1 AND author_id=$2 AND deleted_at IS NULL
+        RETURNING pinned_at,comments_enabled`,
+      [id, userId, input.pinned ?? null, input.commentsEnabled ?? null],
+    );
+    const row = updated.rows[0];
+    if (!row) return reply.code(404).send({ error: { code: 'POST_NOT_FOUND', message: 'Paylaşım bulunamadı.' } });
+    // Arşivlenmiş bir paylaşım sabitlenmiş kalabilir; ızgarada görünmediği için
+    // bir zararı yok, arşivden çıktığında yine başa gelir.
+    return { data: { pinned: row.pinned_at !== null, commentsEnabled: row.comments_enabled } };
+  } catch (error) {
+    return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({
+      error: { code: 'POST_SETTINGS_FAILED', message: 'Paylaşım ayarı değiştirilemedi.' },
+    });
+  }
+});
+
 app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
   try {
     const viewerId = await viewer(request.headers);
@@ -2675,14 +3371,16 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
     if (input.state === 'archived' && !access.self) return reply.code(403).send({ error: { code: 'ARCHIVE_IS_PRIVATE', message: 'Arşiv yalnızca sahibine açıktır.' } });
     if (!access.full) return { data: [], meta: { nextCursor: null, locked: true } };
 
-    const cursor = decodeCursor(input.cursor);
+    const cursor = profileCursorDecode(input.cursor);
     const params: unknown[] = [ownerId, viewerId];
     let where = `p.author_id=$1 AND p.deleted_at IS NULL AND p.moderation_state='active' AND p.archived_at IS ${input.state === 'archived' ? 'NOT NULL' : 'NULL'}`;
     if (!access.self) where += " AND p.visibility='public'";
-    if (cursor) { params.push(cursor.createdAt, cursor.id); where += ` AND (p.created_at,p.id) < ($${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
+    // İmleç sabitlik bayrağını da taşıyor: sıralama ondan başladığı için,
+    // taşımasaydı sabitlenmiş paylaşım ikinci sayfanın da başında çıkardı.
+    if (cursor) { params.push(cursor.pinned, cursor.createdAt, cursor.id); where += ` AND (p.pinned_at IS NOT NULL,p.created_at,p.id) < ($${params.length - 2}::boolean,$${params.length - 1}::timestamptz,$${params.length}::uuid)`; }
     params.push(input.limit + 1);
-    const rows = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; visibility: string; likes: string; comments: string; is_liked: boolean; thumbnail_url: string | null; safe_url: string | null }>(
-      `SELECT p.id,p.created_at,p.body,p.location_label,p.visibility,
+    const rows = await db.query<{ id: string; created_at: Date; body: string; location_label: string | null; visibility: string; likes: string; comments: string; is_liked: boolean; thumbnail_url: string | null; safe_url: string | null; pinned_at: Date | null; comments_enabled: boolean }>(
+      `SELECT p.id,p.created_at,p.body,p.location_label,p.visibility,p.pinned_at,p.comments_enabled,
               (SELECT count(*) FROM post_reactions x WHERE x.post_id=p.id AND x.kind='like') likes,
               (SELECT count(*) FROM community_comments c WHERE c.post_id=p.id AND c.deleted_at IS NULL AND c.moderation_state='active') comments,
               EXISTS(SELECT 1 FROM post_reactions x WHERE x.post_id=p.id AND x.actor_id=$2 AND x.kind='like') is_liked,
@@ -2690,7 +3388,7 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
               (SELECT m.safe_url FROM post_media_refs r JOIN media_assets m ON m.id=r.media_id WHERE r.post_id=p.id AND m.status='ready' ORDER BY r.ordinal LIMIT 1) safe_url
          FROM community_posts p
         WHERE ${where}
-        ORDER BY p.created_at DESC,p.id DESC
+        ORDER BY (p.pinned_at IS NOT NULL) DESC,p.created_at DESC,p.id DESC
         LIMIT $${params.length}`,
       params,
     );
@@ -2705,9 +3403,11 @@ app.get('/v1/community/profiles/:userId/posts', async (request, reply) => {
       comments: Number(post.comments),
       isLiked: post.is_liked,
       archived: input.state === 'archived',
+      pinned: post.pinned_at !== null,
+      commentsEnabled: post.comments_enabled,
       thumbnailUrl: post.thumbnail_url ? await mediaObjectUrl(post.thumbnail_url) : post.safe_url ? await mediaObjectUrl(post.safe_url) : null,
     })));
-    return { data, meta: { nextCursor: rows.rows.length > input.limit ? encodeCursor(page[page.length - 1]!) : null, locked: false } };
+    return { data, meta: { nextCursor: rows.rows.length > input.limit ? profileCursorEncode(page[page.length - 1]!) : null, locked: false } };
   } catch (error) {
     return reply.code((error as { statusCode?: number }).statusCode ?? ((error as Error).message === 'UNAUTHORIZED' ? 401 : 400)).send({ error: { code: 'PROFILE_POSTS_UNAVAILABLE', message: 'Paylaşımlar yüklenemedi.' } });
   }
@@ -2949,9 +3649,50 @@ const gateworkNewsBody = z.object({
   headlineRank: z.coerce.number().int().min(1).max(20).optional(),
   publishedAt: z.string().datetime().optional(),
   commentsEnabled: z.boolean().default(true),
+  // Haber akışta da paylaşılsın mı. Kararı editör veriyor: her haberin akışa
+  // düşmesi akışı bültene çevirirdi, hiçbirinin düşmemesi ise haberi yalnızca
+  // Haber Merkezi'ni açanın gördüğü bir yere hapsediyordu.
+  shareToFeed: z.boolean().default(false),
   reason: z.string().trim().min(5).max(500),
   idempotencyKey: z.string().uuid(),
 });
+
+/* --- Haber akışta -----------------------------------------------------------
+ *
+ * Akıştaki kart haberin bir izdüşümü (036): metni özet, görseli kapak, beğenisi
+ * ve yorumu haberin kendisi. Buradaki iki işlev de o izdüşümü kuruyor ya da
+ * kaldırıyor; hiçbiri haberin kendisine dokunmuyor.
+ */
+async function shareArticleToFeed(client: pg.PoolClient, articleId: string) {
+  // Tarih: geçmişte yayınlanmış bir haber bugün akışa çıkarıldığında akışın
+  // dibine değil başına düşmeli. İleri tarihli bir haber ise kendi tarihini
+  // koruyor - o güne kadar akışta zaten görünmüyor.
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO community_posts(author_id,body,visibility,comments_enabled,region_code,news_article_id,created_at)
+     SELECT a.author_id,a.summary,'public',a.comments_enabled,a.region_code,a.id,GREATEST(a.published_at,now())
+       FROM news_articles a WHERE a.id=$1 AND a.deleted_at IS NULL
+     ON CONFLICT (news_article_id) WHERE news_article_id IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [articleId],
+  );
+  const postId = inserted.rows[0]?.id;
+  if (!postId) return false;
+  await client.query(
+    `INSERT INTO post_media_refs(post_id,media_id,ordinal)
+     SELECT $1,a.hero_media_id,0 FROM news_articles a WHERE a.id=$2 AND a.hero_media_id IS NOT NULL
+     ON CONFLICT DO NOTHING`,
+    [postId, articleId],
+  );
+  return true;
+}
+
+/// Yumuşak silme değil, satırın kaldırılması. Kaldırılan şey bir üyenin yazdığı
+/// içerik değil, bir gösterim kararı; beğeniler ve yorumlar haberin kendi
+/// tablolarında duruyor ve haber ekranında olduğu gibi kalıyor.
+async function removeArticleFromFeed(client: pg.PoolClient, articleId: string) {
+  const removed = await client.query('DELETE FROM community_posts WHERE news_article_id=$1', [articleId]);
+  return (removed.rowCount ?? 0) > 0;
+}
 
 type NewsRow = {
   id: string; title: string; summary: string; body?: string; category: string; author_name: string;
@@ -3020,14 +3761,21 @@ app.get('/v1/community/news', async (request, reply) => {
   }
 });
 
-/// What the home screen's headline strip is: the same articles, ordered by the
-/// rank an editor gave them rather than by when they went out.
+/// Ana sayfadaki manşet şeridi: aynı haberler, çıktıkları saate göre değil
+/// editörün verdiği sıraya göre.
+///
+/// Sorgu eskiden `headline_rank IS NOT NULL` ile filtreliyordu. Sıra vermek
+/// isteğe bağlı olduğu için pratikte şu oluyordu: panelden haber yayınlanıyor,
+/// Haber Merkezi listesine düşüyor, ana sayfada hiçbir şey çıkmıyor ve aradaki
+/// farkın tek açıklaması formdaki küçük bir ipucu oluyordu. Filtre yerine
+/// sıralama: sıra verilmiş haberler önde, arkalarında en yeniler. Editörün
+/// seçimi hâlâ üstte duruyor ama yayında haber varken şerit boş kalmıyor.
 app.get('/v1/community/news/headlines', async (request, reply) => {
   try {
     const userId = await viewer(request.headers);
     const input = newsHeadlineQuery.parse(request.query);
     const rows = await db.query<NewsRow>(
-      `${newsSelect()} WHERE ${NEWS_VISIBLE} AND a.headline_rank IS NOT NULL ORDER BY a.headline_rank ASC,a.published_at DESC LIMIT $2`,
+      `${newsSelect()} WHERE ${NEWS_VISIBLE} ORDER BY (a.headline_rank IS NULL),a.headline_rank ASC,a.published_at DESC LIMIT $2`,
       [userId, input.limit],
     );
     return { data: await Promise.all(rows.rows.map(newsArticleJson)) };
@@ -3215,6 +3963,9 @@ app.post('/v1/internal/gatework/news', { config: { rateLimit: { max: 30, timeWin
         [input.title, input.summary, input.body, input.heroMediaId ?? null, input.category, input.authorId, author.rows[0].display_name,
           input.regionCode?.toUpperCase() ?? null, input.publishedAt ?? null, input.headlineRank ?? null, input.commentsEnabled, actor.actorId],
       );
+      // Aynı işlemin içinde: akışa çıkması istenen bir haberin yayınlanıp
+      // akışta görünmemesi diye bir ara durum olmamalı.
+      if (input.shareToFeed) await shareArticleToFeed(client, article.rows[0]!.id);
       await client.query("INSERT INTO gatework_command_dedup(actor_id,idempotency_key,command_type,result_id) VALUES($1,$2,'news_article.create',$3)", [actor.actorId, input.idempotencyKey, article.rows[0]!.id]);
       await auditGateworkOperation({ actorId: actor.actorId, roles: actor.roles, action: 'news_article.publish', targetType: 'news_article', targetId: article.rows[0]!.id, reason: input.reason, requestId: request.id, rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded' });
       await client.query('COMMIT');
@@ -3250,10 +4001,11 @@ app.get('/v1/internal/gatework/news', async (request, reply) => {
     const rows = await db.query<{
       id: string; title: string; summary: string; category: string; author_id: string; author_name: string;
       region_code: string | null; published_at: Date; headline_rank: number | null; comments_enabled: boolean;
-      hero_url: string | null; comment_count: string; reaction_count: string;
+      hero_url: string | null; comment_count: string; reaction_count: string; in_feed: boolean;
     }>(
       `SELECT a.id,a.title,a.summary,a.category,a.author_id,a.author_name,a.region_code,a.published_at,
               a.headline_rank,a.comments_enabled,m.safe_url hero_url,
+              EXISTS(SELECT 1 FROM community_posts p WHERE p.news_article_id=a.id) in_feed,
               (SELECT count(*) FROM news_comments c WHERE c.article_id=a.id AND c.deleted_at IS NULL AND c.moderation_state='active') comment_count,
               (SELECT count(*) FROM news_reactions r WHERE r.article_id=a.id) reaction_count
          FROM news_articles a
@@ -3280,10 +4032,59 @@ app.get('/v1/internal/gatework/news', async (request, reply) => {
         imageUrl: row.hero_url ? await mediaObjectUrl(row.hero_url) : null,
         commentCount: Number(row.comment_count),
         reactionCount: Number(row.reaction_count),
+        // Akışta da duruyor mu. Panelin bunu okuyamadığı bir dünyada düğme
+        // "aç/kapat" değil "bir şey yap" olurdu; editör hangi haberin akışta
+        // olduğunu ancak uygulamayı açarak görebilirdi.
+        inFeed: row.in_feed,
       }))),
     };
   } catch (error) {
     return reply.code(error instanceof Error && error.message === 'FORBIDDEN' ? 403 : 401).send({ error: { code: 'GATEWORK_NEWS_UNAVAILABLE', message: 'Haber listesi okunamadı.' } });
+  }
+});
+
+/// Hangi haberin akışta paylaşılacağı kararı.
+///
+/// Yayın anında da verilebiliyor (`shareToFeed`), ama karar sonradan da
+/// değişebilmeli: bir haber gün içinde önem kazanır, bir başkası akışta yer
+/// kaplamayı hak etmez. Kapatmak haberi geri çekmiyor - Haber Merkezi'nde
+/// okunmaya, beğenilmeye ve yorumlanmaya devam ediyor.
+const gateworkNewsFeedBody = z.object({
+  enabled: z.boolean(),
+  reason: z.string().trim().min(5).max(500),
+});
+
+app.put('/v1/internal/gatework/news/:id/feed', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const client = await db.connect();
+  try {
+    const actor = await gateworkActor(request.headers);
+    requireGateworkRole(actor, ['owner', 'operations_admin', 'content_editor']);
+    const id = z.string().uuid().parse((request.params as { id: string }).id);
+    const input = gateworkNewsFeedBody.parse(request.body);
+    await client.query('BEGIN');
+    const article = await client.query('SELECT 1 FROM news_articles WHERE id=$1 AND deleted_at IS NULL', [id]);
+    if (!article.rows[0]) {
+      await client.query('ROLLBACK');
+      return reply.code(404).send({ error: { code: 'NEWS_NOT_FOUND', message: 'Haber bulunamadı.' } });
+    }
+    const changed = input.enabled ? await shareArticleToFeed(client, id) : await removeArticleFromFeed(client, id);
+    await auditGateworkOperation({
+      actorId: actor.actorId, roles: actor.roles,
+      action: input.enabled ? 'news_article.feed_share' : 'news_article.feed_remove',
+      targetType: 'news_article', targetId: id, reason: input.reason, requestId: request.id,
+      rayId: request.headers['cf-ray'] as string | undefined, outcome: 'succeeded',
+    });
+    await client.query('COMMIT');
+    // `changed` false ise haber zaten istenen durumdaydı; panel iki sekmede
+    // açıksa ikinci tık hata değil, teyit.
+    return { data: { inFeed: input.enabled, changed } };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const message = (error as Error).message;
+    return reply.code(message === 'FORBIDDEN' ? 403 : message === 'UNAUTHORIZED' ? 401 : 400)
+      .send({ error: { code: 'GATEWORK_NEWS_FEED_REJECTED', message: 'Akış kararı kaydedilemedi.' } });
+  } finally {
+    client.release();
   }
 });
 
@@ -3388,13 +4189,18 @@ type PromotionRow = {
   media_url: string | null; target_kind: string | null; target_value: string | null;
   region_code: string | null; city: string | null; starts_at: Date; ends_at: Date;
   status: string; decision_reason: string | null; request_note?: string | null;
-  created_at: Date; display_order: number | null; owner_name?: string; impressions?: string; clicks?: string;
+  created_at: Date; display_order: number | null; official: boolean;
+  owner_name?: string; impressions?: string; clicks?: string;
 };
 
 const PROMOTION_SELECT = `
   SELECT p.id,p.owner_id,p.placement,p.title,p.subtitle,m.safe_url media_url,p.target_kind,p.target_value,
          p.region_code,p.city,p.starts_at,p.ends_at,p.status,p.decision_reason,p.request_note,p.created_at,
-         p.display_order
+         p.display_order,
+         -- Platformun kendi karti mi, birinin yerlestirdigi tanitim mi. Uygulama
+         -- ikisini ayni "Sponsorlu" etiketiyle gosteriyordu; kimsenin para
+         -- odemedigi bir karta reklam demek uyeye yanlis bilgi vermek.
+         EXISTS(SELECT 1 FROM community_system_accounts o WHERE o.user_id=p.owner_id AND o.role='official') official
     FROM promotions p
     LEFT JOIN media_assets m ON m.id=p.media_id AND m.status='ready'`;
 
@@ -3417,6 +4223,9 @@ const promotionJson = async (row: PromotionRow) => ({
   createdAt: row.created_at.toISOString(),
   // NULL is "not hand-ordered", which is a different thing from "first".
   displayOrder: row.display_order,
+  // True when the card belongs to the platform itself. The app labels those as
+  // TurkSquare's own rather than "Sponsorlu".
+  official: row.official === true,
 });
 
 /// What the home screen reads. "Live" is computed here rather than stored: an

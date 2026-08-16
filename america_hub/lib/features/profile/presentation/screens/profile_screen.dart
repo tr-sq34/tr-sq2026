@@ -4,22 +4,32 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/formatting/country_flag.dart';
 import '../../../../core/state/async_state.dart';
 import '../../../../core/widgets/app_image_source.dart';
+import '../../../community/application/community_comments_controller.dart';
 import '../../../community/application/media_upload_controller.dart';
 import '../../../community/application/story_controller.dart';
 import '../../../community/domain/entities/community_post.dart';
 import '../../../community/domain/entities/post_media_upload.dart';
 import '../../../community/domain/repositories/community_repository.dart';
+import '../../../community/domain/repositories/content_moderation_repository.dart';
+import '../../../community/presentation/widgets/post_comments.dart';
 import '../../../journey/application/journey_controller.dart';
 import '../../../journey/domain/entities/journey.dart';
+import '../../../journey/domain/entities/journey_action.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../verification/application/member_capabilities_controller.dart';
 import '../../application/friendship_controller.dart';
 import '../../application/profile_controller.dart';
 import '../../domain/entities/friendship.dart';
 import '../../domain/entities/user_profile.dart';
+import '../widgets/follow_list_sheet.dart';
 import '../widgets/profile_badge_chip.dart';
+import '../widgets/profile_post_tile.dart';
+import '../widgets/username_sheet.dart';
+import 'member_profile_screen.dart';
+import 'profile_post_screen.dart';
 
 /// The member's identity in America.
 ///
@@ -39,6 +49,9 @@ class ProfileScreen extends StatefulWidget {
     required this.mediaUploadController,
     required this.postCommands,
     this.tabRequests,
+    this.commentsController,
+    this.contentModerationRepository,
+    this.onJourneyAction,
   });
 
   final ProfileController controller;
@@ -54,6 +67,17 @@ class ProfileScreen extends StatefulWidget {
   /// değil, isteğin durduğu Arkadaşlar sekmesine gelmeli.
   final ValueListenable<int>? tabRequests;
 
+  /// Yorum tabakası akıştakiyle aynı denetleyiciden açılıyor; ikisi ayrı olsaydı
+  /// aynı paylaşımın yorum sayısı iki ekranda farklı görünebilirdi. İkisi de
+  /// verilmediyse paylaşım ekranı yorum sayısını düz bir bilgi olarak yazıyor.
+  final CommunityCommentsController? commentsController;
+  final ContentModerationRepository? contentModerationRepository;
+
+  /// Yolculuk ekranındaki bir göreve dokunulduğunda o işin yapıldığı ekranı
+  /// açan kabuk. Sekme değiştirmek ya da düzenleyici açmak profilin işi değil,
+  /// bu yüzden karar yukarıda veriliyor.
+  final void Function(JourneyDestination destination)? onJourneyAction;
+
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
@@ -68,7 +92,6 @@ class _ProfileScreenState extends State<ProfileScreen>
     _tabs.animateTo(index);
   }
   final _picker = ImagePicker();
-  bool _showArchive = false;
   bool _uploadingAvatar = false;
 
   @override
@@ -109,14 +132,17 @@ class _ProfileScreenState extends State<ProfileScreen>
         backgroundColor: AppColors.background,
         body: NestedScrollView(
           headerSliverBuilder: (context, _) => [
-            SliverToBoxAdapter(child: _Header(
+            SliverToBoxAdapter(child: ProfileHeader(
               profile: profile,
               journeyController: widget.journeyController,
               uploadingAvatar: _uploadingAvatar,
               onTapAvatar: profile.isSelf ? _changeAvatar : null,
               onEditBio: profile.isSelf ? () => _editBio(profile) : null,
+              onEditUsername: profile.isSelf ? () => _editUsername(profile) : null,
               onOpenJourney: () => _openJourney(),
               onOpenBadges: () => _openJourney(tab: JourneyTab.badges),
+              onOpenFollowers: () => _openFollows(profile, FollowListTab.followers),
+              onOpenFollowing: () => _openFollows(profile, FollowListTab.following),
               onSignOut: profile.isSelf ? _confirmSignOut : null,
             )),
             SliverPersistentHeader(
@@ -135,12 +161,12 @@ class _ProfileScreenState extends State<ProfileScreen>
               _PostsTab(
                 controller: widget.controller,
                 profile: profile,
-                showArchive: _showArchive,
-                onToggleArchive: (value) {
-                  setState(() => _showArchive = value);
-                  if (value) widget.controller.loadArchived(profile.id);
-                },
                 onDelete: _deletePost,
+                onOpenComments:
+                    widget.commentsController == null ||
+                        widget.contentModerationRepository == null
+                    ? null
+                    : (post) => _openComments(profile, post),
               ),
               _FriendsTab(
                 profile: profile,
@@ -156,12 +182,44 @@ class _ProfileScreenState extends State<ProfileScreen>
     },
   );
 
+  /// Izgaradaki paylaşımın yorumları. Yorum tabakası akıştaki kartın tipini
+  /// bekliyor; profil ızgarasının kaydı daha dar olduğu için buradaki alanlardan
+  /// bir karşılığı kuruluyor. Uydurulan tek şey yok: silme yetkisi `isAuthor`
+  /// ile, yazma yetkisi de paylaşımın kendi yorum ayarıyla belirleniyor.
+  Future<void> _openComments(UserProfile profile, ProfilePost post) {
+    final controller = widget.commentsController;
+    final moderation = widget.contentModerationRepository;
+    if (controller == null || moderation == null) return Future<void>.value();
+    return openPostComments(
+      context: context,
+      controller: controller,
+      moderationRepository: moderation,
+      viewerId: profile.id,
+      post: CommunityPost(
+        id: post.id,
+        authorName: profile.displayName,
+        location: '',
+        timeLabel: '',
+        message: post.message,
+        likes: post.likes,
+        comments: post.comments,
+        ownerId: profile.id,
+        isAuthor: profile.isSelf,
+        createdAt: post.createdAt,
+        commentsPolicy: post.commentsEnabled
+            ? CommentsPolicy.everyone
+            : CommentsPolicy.disabled,
+      ),
+    );
+  }
+
   void _openJourney({JourneyTab tab = JourneyTab.tasks}) =>
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => JourneyScreen(
             controller: widget.journeyController,
             initialTab: tab,
+            onTaskAction: widget.onJourneyAction,
           ),
         ),
       );
@@ -205,6 +263,35 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
     if (saved != null) await widget.controller.updateBio(saved);
   }
+
+  Future<void> _editUsername(UserProfile profile) => showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (_) => UsernameSheet(controller: widget.controller, profile: profile),
+  );
+
+  void _openFollows(UserProfile profile, FollowListTab tab) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: AppColors.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (_) => FollowListSheet(
+          controller: widget.controller,
+          profile: profile,
+          initialTab: tab,
+          onOpenMember: (userId) {
+            Navigator.of(context).pop();
+            openMemberProfile(context, userId: userId, controller: widget.controller);
+          },
+        ),
+      );
 
   /// Tap the avatar to change it. The image travels the same quarantine-and-scan
   /// path as every other upload; the profile only stores the id once the media
@@ -314,16 +401,21 @@ class _ProfileScreenState extends State<ProfileScreen>
 /// It is deliberately short. Everything that used to sit here in its own padded
 /// card now lives as a single row further down: the header's job is to say who
 /// this is, not to fill a screen.
-class _Header extends StatelessWidget {
-  const _Header({
+class ProfileHeader extends StatelessWidget {
+  const ProfileHeader({
+    super.key,
     required this.profile,
     required this.journeyController,
     required this.onOpenJourney,
     required this.onOpenBadges,
+    required this.onOpenFollowers,
+    required this.onOpenFollowing,
     this.uploadingAvatar = false,
     this.onTapAvatar,
     this.onEditBio,
+    this.onEditUsername,
     this.onSignOut,
+    this.trailing,
   });
 
   final UserProfile profile;
@@ -331,9 +423,16 @@ class _Header extends StatelessWidget {
   final bool uploadingAvatar;
   final VoidCallback onOpenJourney;
   final VoidCallback onOpenBadges;
+  final VoidCallback onOpenFollowers;
+  final VoidCallback onOpenFollowing;
   final VoidCallback? onTapAvatar;
   final VoidCallback? onEditBio;
+  final VoidCallback? onEditUsername;
   final VoidCallback? onSignOut;
+
+  /// Başkasının profilinde çıkış düğmesinin yerini takip ve mesaj düğmeleri
+  /// alıyor; ikisi aynı köşede olamayacağı için tek bir yuva.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -356,7 +455,24 @@ class _Header extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(child: _Stat(value: profile.postCount, label: 'Paylaşım')),
-                  Expanded(child: _Stat(value: profile.friendCount, label: 'Arkadaş')),
+                  // Arkadaş sayacının yerini takip aldı. Arkadaşlık hâlâ var ve
+                  // kendi sekmesinde duruyor; başlıkta ise bir profili anlatan
+                  // sayı, karşılıklı onay verilmiş kişi sayısı değil, kaç
+                  // kişinin onu izlediği.
+                  Expanded(
+                    child: _Stat(
+                      value: profile.followerCount,
+                      label: 'Takipçi',
+                      onTap: onOpenFollowers,
+                    ),
+                  ),
+                  Expanded(
+                    child: _Stat(
+                      value: profile.followingCount,
+                      label: 'Takip',
+                      onTap: onOpenFollowing,
+                    ),
+                  ),
                   // The badge cabinet lives on the journey screen, so the
                   // counter that names it is the way in.
                   Expanded(
@@ -369,7 +485,9 @@ class _Header extends StatelessWidget {
                 ],
               ),
             ),
-            if (onSignOut != null)
+            if (trailing != null)
+              trailing!
+            else if (onSignOut != null)
               IconButton(
                 tooltip: 'Güvenli çıkış',
                 icon: const Icon(Icons.logout_rounded, color: AppColors.profileAccent),
@@ -394,15 +512,11 @@ class _Header extends StatelessWidget {
             ],
           ],
         ),
-        if (profile.journeyLine != null) ...[
-          const SizedBox(height: 2),
-          Text(
-            profile.journeyLine!,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
-          ),
-        ],
+        // Adresin yerini kullanıcı adı aldı. "İzmir, TR ➜ Paterson, NJ" satırı
+        // adın hemen altında bir adres gibi duruyordu; nereden gelip nereye
+        // yerleştiği Profil sekmesinde zaten yazıyor ve orada bir cümle, burada
+        // bir etiket olması gerekiyordu.
+        _UsernameLine(profile: profile, onEdit: onEditUsername),
         const SizedBox(height: 6),
         _Bio(profile: profile, onEdit: onEditBio),
         const SizedBox(height: 12),
@@ -505,6 +619,50 @@ class _Avatar extends StatelessWidget {
     if (parts.isEmpty) return '?';
     if (parts.length == 1) return parts.first.characters.first.toUpperCase();
     return (parts.first.characters.first + parts.last.characters.first).toUpperCase();
+  }
+}
+
+/// `@kullaniciadi`, ya da henüz seçmemiş olan üye için onu seçmeye çağıran tek
+/// satır. Başkasının profilinde kullanıcı adı yoksa satır hiç çizilmiyor:
+/// olmayan bir şeyin boşluğunu göstermenin kimseye faydası yok.
+class _UsernameLine extends StatelessWidget {
+  const _UsernameLine({required this.profile, this.onEdit});
+
+  final UserProfile profile;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final username = profile.username;
+    if (username != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: GestureDetector(
+          onTap: onEdit,
+          child: Text(
+            '@$username',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.profileAccent,
+            ),
+          ),
+        ),
+      );
+    }
+    if (onEdit == null) return const SizedBox.shrink();
+    return TextButton.icon(
+      onPressed: onEdit,
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        alignment: Alignment.centerLeft,
+        visualDensity: VisualDensity.compact,
+      ),
+      icon: const Icon(Icons.alternate_email_rounded, size: 17),
+      label: const Text('Kullanıcı adı seç'),
+    );
   }
 }
 
@@ -700,52 +858,110 @@ class _AboutTab extends StatelessWidget {
   final MemberCapabilitiesController capabilities;
   final StoryController story;
 
+  /// İlgi alanlarından en fazla kaç tanesi çiziliyor. Onbeş tanesi olan üyede
+  /// pastiller profilin yarısını yiyordu; gerisi "+N" olarak duruyor, silinmiş
+  /// gibi değil.
+  static const _maxInterestPills = 5;
+
   @override
-  Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-    children: [
-      // One line per fact, separated by a hairline. Each of these used to be a
-      // padded card of its own, which turned "Nereden geldin" — three words of
-      // answer — into a sixth of the screen.
-      _InfoGroup(
-        rows: [
-          _InfoRow(
-            icon: Icons.place_outlined,
-            label: 'Nerelisin',
-            value: profile.originCity != null
-                ? profile.journeyLine!
-                : profile.bornInUs
-                    ? 'Amerika doğumlu'
-                    // The prompt only appears for the member themselves, and it
-                    // sends them to onboarding rather than editing here: the
-                    // answer belongs to identity, and two writers would fight
-                    // over it.
-                    : profile.isSelf
-                        ? 'Eklenmedi · kurulum ekranından ekleyebilirsin'
-                        : 'Belirtilmemiş',
-            muted: profile.originCity == null && !profile.bornInUs,
+  Widget build(BuildContext context) {
+    final origin = _origin(profile);
+    final here = [profile.city, profile.state]
+        .where((part) => (part ?? '').isNotEmpty)
+        .join(', ');
+    final extraInterests = profile.interests.length - _maxInterestPills;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+      children: [
+        // Memleket ile şimdi yaşanan yer iki ayrı cevap; tek satırda "İzmir ➜
+        // Paterson" diye birleştirildiklerinde hangisinin ne olduğu okuyucunun
+        // tahminine kalıyordu.
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _PlaceBadge(
+              label: 'Memleket',
+              value: origin.value,
+              flag: origin.flag,
+              muted: origin.muted,
+            ),
+            _PlaceBadge(
+              label: 'Konum',
+              value: here.isEmpty
+                  ? (profile.isSelf ? 'Eklenmedi' : 'Belirtilmemiş')
+                  : here,
+              flag: here.isEmpty ? null : countryFlag('US'),
+              muted: here.isEmpty,
+            ),
+          ],
+        ),
+        // Rozetin içine sığmayacak kadar uzun olduğu için ayrı satırda: cevap
+        // kimliğin malı, buradan değil kurulum ekranından yazılıyor. Yalnızca
+        // üyenin kendisine gösteriliyor - başkasının eksiğini ona hatırlatmanın
+        // bir karşılığı yok.
+        if (origin.muted && profile.isSelf) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Memleketini kurulum ekranından ekleyebilirsin.',
+            style: TextStyle(fontSize: 12, color: AppColors.textMuted),
           ),
-          if (profile.arrivedYear != null)
-            _InfoRow(
-              icon: Icons.flight_land_outlined,
-              label: 'Geliş',
-              value: _arrival(profile),
-            ),
-          if (profile.interests.isNotEmpty)
-            _InfoRow(
-              icon: Icons.interests_outlined,
-              label: 'İlgi alanları',
-              // A chip pile wrapped onto three rows for six words. The same
-              // words on one line say exactly as much.
-              value: profile.interests.join(', '),
-            ),
         ],
-      ),
-      const SizedBox(height: 12),
-      _VerifiedAccountRow(controller: capabilities),
-      _StoryHighlights(controller: story),
-    ],
-  );
+        if (profile.interests.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          const Text(
+            'İlgi alanları',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final interest
+                  in profile.interests.take(_maxInterestPills))
+                _InterestPill(label: interest),
+              if (extraInterests > 0) _InterestPill(label: '+$extraInterests'),
+            ],
+          ),
+        ],
+        if (profile.arrivedYear != null) ...[
+          const SizedBox(height: 14),
+          _InfoGroup(
+            rows: [
+              _InfoRow(
+                icon: Icons.flight_land_outlined,
+                label: 'Geliş',
+                value: _arrival(profile),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 12),
+        _VerifiedAccountRow(controller: capabilities),
+        _StoryHighlights(controller: story),
+      ],
+    );
+  }
+
+  /// Memleket rozetinin içeriği. Cevap kimliğin (kurulum ekranının) malı, o
+  /// yüzden burada düzenlenmiyor; eksikse üye kendi profilinde nereye
+  /// bakacağını okuyor, başkasının profilinde ise yalnızca "Belirtilmemiş"
+  /// yazıyor - başkasının eksiğini ona hatırlatmanın anlamı yok.
+  static ({String value, String? flag, bool muted}) _origin(UserProfile profile) {
+    final city = profile.originCity;
+    if (city != null && city.isNotEmpty) {
+      return (value: city, flag: countryFlag(profile.originCountry), muted: false);
+    }
+    if (profile.bornInUs) {
+      return (value: 'Amerika doğumlu', flag: countryFlag('US'), muted: false);
+    }
+    return (
+      value: profile.isSelf ? 'Eklenmedi' : 'Belirtilmemiş',
+      flag: null,
+      muted: true,
+    );
+  }
 
   static String _arrival(UserProfile profile) {
     const months = [
@@ -760,6 +976,81 @@ class _AboutTab extends StatelessWidget {
     final years = DateTime.now().year - year;
     return years <= 0 ? '$label\'dan beri burada' : '$label · $years yıldır burada';
   }
+}
+
+/// "Memleket: İstanbul 🇹🇷" gibi tek bir rozet.
+///
+/// Bayrak varsa çiziliyor, yoksa rozet kısalıyor: tanınmayan bir ülke kodu için
+/// soru işaretli bir kutu koymak, cevabı olan bir alanı bozuk göstermek olurdu.
+class _PlaceBadge extends StatelessWidget {
+  const _PlaceBadge({
+    required this.label,
+    required this.value,
+    this.flag,
+    this.muted = false,
+  });
+
+  final String label;
+  final String value;
+  final String? flag;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.profileBorder),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+        ),
+        Flexible(
+          child: Text(
+            value,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: muted ? FontWeight.w400 : FontWeight.w700,
+              color: muted ? AppColors.textMuted : null,
+            ),
+          ),
+        ),
+        if (flag != null) ...[
+          const SizedBox(width: 5),
+          Text(flag!, style: const TextStyle(fontSize: 13)),
+        ],
+      ],
+    ),
+  );
+}
+
+class _InterestPill extends StatelessWidget {
+  const _InterestPill({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+    decoration: BoxDecoration(
+      color: AppColors.profileTint,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w600,
+        color: AppColors.profileAccent,
+      ),
+    ),
+  );
 }
 
 /// One surface holding the facts, hairline-separated. A single border around
@@ -793,16 +1084,11 @@ class _InfoRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
-    this.muted = false,
   });
 
   final IconData icon;
   final String label;
   final String value;
-
-  /// Set when the value is an absence rather than an answer, so a missing fact
-  /// does not read with the same weight as a given one.
-  final bool muted;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -822,11 +1108,10 @@ class _InfoRow extends StatelessWidget {
         Expanded(
           child: Text(
             value,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 13,
               height: 1.3,
-              fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
-              color: muted ? AppColors.textMuted : null,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
@@ -839,66 +1124,111 @@ class _PostsTab extends StatelessWidget {
   const _PostsTab({
     required this.controller,
     required this.profile,
-    required this.showArchive,
-    required this.onToggleArchive,
     required this.onDelete,
+    this.onOpenComments,
   });
 
   final ProfileController controller;
   final UserProfile profile;
-  final bool showArchive;
-  final ValueChanged<bool> onToggleArchive;
   final Future<void> Function(ProfilePost) onDelete;
+
+  /// Null ise paylaşım ekranında yorum tabakası açılmıyor ve sayı bir düğme
+  /// gibi durmuyor: açılmayan bir düğme, kırık bir düğmedir.
+  final void Function(ProfilePost)? onOpenComments;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) {
-      final state = showArchive ? controller.archived : controller.posts;
-      return Column(
-        children: [
-          if (profile.isSelf)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
-              child: _ArchiveSwitch(
-                showArchive: showArchive,
-                onChanged: onToggleArchive,
-              ),
-            ),
-          Expanded(
-            child: switch (state) {
-              AsyncFailure<List<ProfilePost>>(:final message) => Center(child: Text(message)),
-              AsyncData<List<ProfilePost>>(:final value) when value.isEmpty => Center(
-                child: Text(
-                  showArchive
-                      ? 'Arşivde bir şey yok.'
-                      : profile.isSelf
-                          ? 'İlk paylaşımını yap.'
-                          : 'Henüz bir paylaşım yok.',
-                  style: const TextStyle(color: AppColors.textSecondary),
-                ),
-              ),
-              AsyncData<List<ProfilePost>>(:final value) => GridView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 4,
-                  crossAxisSpacing: 4,
-                ),
-                itemCount: value.length,
-                itemBuilder: (context, index) => _PostTile(
-                  post: value[index],
-                  enabled: profile.isSelf,
-                  onLongPress: () => _showActions(context, value[index]),
-                ),
-              ),
-              _ => const Center(child: CircularProgressIndicator()),
-            },
+      return switch (controller.posts) {
+        AsyncFailure<List<ProfilePost>>(:final message) => Center(
+          child: Text(message),
+        ),
+        AsyncData<List<ProfilePost>>(:final value) when value.isEmpty => Center(
+          child: Text(
+            profile.isSelf ? 'İlk paylaşımını yap.' : 'Henüz bir paylaşım yok.',
+            style: const TextStyle(color: AppColors.textSecondary),
           ),
-        ],
-      );
+        ),
+        AsyncData<List<ProfilePost>>(:final value) => GridView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            mainAxisSpacing: 4,
+            crossAxisSpacing: 4,
+          ),
+          itemCount: value.length,
+          itemBuilder: (context, index) => ProfilePostTile(
+            post: value[index],
+            enabled: profile.isSelf,
+            onOpen: () => _openPost(context, value[index]),
+            onMenu: () => _showActions(context, value[index]),
+          ),
+        ),
+        _ => const Center(child: CircularProgressIndicator()),
+      };
     },
   );
+
+  /// Kareye dokunmak paylaşımın kendisini açıyor. Üç nokta menüsü de orada
+  /// duruyor; aynı dört işlem iki yerde de aynı isimlerle.
+  void _openPost(BuildContext context, ProfilePost post) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ProfilePostScreen(
+            post: post,
+            authorName: profile.displayName,
+            username: profile.username,
+            avatarUrl: profile.avatarUrl,
+            isOwner: profile.isSelf,
+            onOpenComments: onOpenComments == null
+                ? null
+                : () => onOpenComments!(post),
+            onTogglePin: profile.isSelf ? () => _togglePin(context, post) : null,
+            onToggleComments:
+                profile.isSelf ? () => _toggleComments(context, post) : null,
+            onToggleArchive: profile.isSelf ? () => _toggleArchive(post) : null,
+            onDelete: profile.isSelf ? () => onDelete(post) : null,
+          ),
+        ),
+      );
+
+  Future<void> _togglePin(BuildContext context, ProfilePost post) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await controller.setPinned(post.id, !post.pinned);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          error ??
+              (post.pinned
+                  ? 'Sabit kaldırıldı.'
+                  : 'Paylaşım profilinin başına sabitlendi.'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleComments(BuildContext context, ProfilePost post) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await controller.setCommentsEnabled(
+      post.id,
+      !post.commentsEnabled,
+    );
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          error ??
+              (post.commentsEnabled
+                  ? 'Yorumlar kapatıldı. Yazılmış yorumlar duruyor.'
+                  : 'Yorumlar yeniden açıldı.'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleArchive(ProfilePost post) => post.archived
+      ? controller.unarchivePost(post.id)
+      : controller.archivePost(post.id);
 
   Future<void> _showActions(BuildContext context, ProfilePost post) async {
     if (!profile.isSelf) return;
@@ -910,6 +1240,40 @@ class _PostsTab extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: Icon(
+                post.pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+              ),
+              title: Text(post.pinned ? 'Sabiti kaldır' : 'Başa sabitle'),
+              subtitle: Text(
+                post.pinned
+                    ? 'Paylaşım yeniden tarih sırasına döner.'
+                    : 'Izgaranın ilk sırasında durur; en fazla 3 tane.',
+              ),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _togglePin(context, post);
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                post.commentsEnabled
+                    ? Icons.comments_disabled_outlined
+                    : Icons.mode_comment_outlined,
+              ),
+              title: Text(
+                post.commentsEnabled ? 'Yorumlara kapat' : 'Yorumlara aç',
+              ),
+              subtitle: Text(
+                post.commentsEnabled
+                    ? 'Yeni yorum yazılamaz; yazılmış olanlar kalır.'
+                    : 'Yeniden yorum yazılabilir.',
+              ),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _toggleComments(context, post);
+              },
+            ),
+            ListTile(
               leading: Icon(post.archived ? Icons.unarchive_outlined : Icons.archive_outlined),
               title: Text(post.archived ? 'Arşivden çıkar' : 'Arşivle'),
               subtitle: Text(post.archived
@@ -917,9 +1281,7 @@ class _PostsTab extends StatelessWidget {
                   : 'Akıştan ve ızgaradan kalkar; yorumlar ve beğeniler korunur.'),
               onTap: () {
                 Navigator.pop(sheetContext);
-                post.archived
-                    ? controller.unarchivePost(post.id)
-                    : controller.archivePost(post.id);
+                _toggleArchive(post);
               },
             ),
             ListTile(
@@ -937,98 +1299,6 @@ class _PostsTab extends StatelessWidget {
   }
 }
 
-/// Izgaranın üstündeki iki kelime.
-///
-/// Yerinde duran `SegmentedButton` her iki kutuyu da çerçeveleyip seçiliye tik
-/// koyuyordu: ekranın en sessiz denetimi, sayfadaki en gürültülü öge olmuştu.
-/// Burada yalnızca seçili olan doluyor, çerçeve yok, tik yok.
-class _ArchiveSwitch extends StatelessWidget {
-  const _ArchiveSwitch({required this.showArchive, required this.onChanged});
-
-  final bool showArchive;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.centerLeft,
-    child: Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: AppColors.profileTint,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _segment('Paylaşımlar', selected: !showArchive, value: false),
-          _segment('Arşiv', selected: showArchive, value: true),
-        ],
-      ),
-    ),
-  );
-
-  Widget _segment(String label, {required bool selected, required bool value}) =>
-      Material(
-        color: selected ? Colors.white : Colors.transparent,
-        borderRadius: BorderRadius.circular(17),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(17),
-          onTap: selected ? null : () => onChanged(value),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected
-                    ? AppColors.profileAccent
-                    : AppColors.textSecondary,
-              ),
-            ),
-          ),
-        ),
-      );
-}
-
-class _PostTile extends StatelessWidget {
-  const _PostTile({required this.post, required this.enabled, required this.onLongPress});
-
-  final ProfilePost post;
-  final bool enabled;
-  final VoidCallback onLongPress;
-
-  @override
-  Widget build(BuildContext context) {
-    final thumbnail = appImageProvider(post.thumbnailUrl);
-    return GestureDetector(
-      onLongPress: enabled ? onLongPress : null,
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.profileTint,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.profileBorder),
-          image: thumbnail == null
-              ? null
-              : DecorationImage(image: thumbnail, fit: BoxFit.cover),
-        ),
-        padding: const EdgeInsets.all(8),
-        alignment: Alignment.center,
-        // A text-only post still needs a tile. Rendering the opening words as a
-        // typographic card keeps the grid from turning into a row of grey boxes.
-        child: thumbnail != null
-            ? null
-            : Text(
-                post.message,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 11, height: 1.3, color: AppColors.textSecondary),
-              ),
-      ),
-    );
-  }
-}
 
 /// Gelen kutusu ve arkadaş listesi.
 ///

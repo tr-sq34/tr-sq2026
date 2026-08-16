@@ -221,6 +221,24 @@ class AuthController extends ChangeNotifier {
     }
   }
 
+  /// Hesabı dondurur. Sunucu bütün oturumları iptal ettiği için buradaki jeton
+  /// da artık geçersiz: yerel kopyayı temizlemezsek uygulama, hiçbir isteği
+  /// kabul edilmeyen bir oturumla açık kalırdı.
+  Future<void> freezeAccount() async {
+    await _repository.freezeAccount();
+    await expireSession();
+  }
+
+  /// Hesabın silinmesini ister. Dönen tarih, vazgeçme süresinin son günü -
+  /// o güne kadar tekrar giriş yapmak talebi geri alıyor.
+  Future<DateTime> requestAccountDeletion(String password) async {
+    final purgeAt = await _repository.requestAccountDeletion(
+      password: password,
+    );
+    await expireSession();
+    return purgeAt;
+  }
+
   /// Used after a failed refresh. It intentionally makes no network call: the
   /// server may be unavailable and local credentials must still be removed.
   Future<void> expireSession() async {

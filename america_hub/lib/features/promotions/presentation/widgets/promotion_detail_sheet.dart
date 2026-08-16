@@ -49,9 +49,11 @@ class PromotionDetailSheet extends StatelessWidget {
               color: const Color(0xFFF5F3FF),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: const Text(
-              'SPONSORLU',
-              style: TextStyle(
+            // Parayı kim ödedi sorusunun cevabı. Platformun kendi kartına
+            // "sponsorlu" demek, olmayan bir reklam ilişkisi uydurmak olur.
+            child: Text(
+              promotion.official ? 'TURKSQUARE' : 'SPONSORLU',
+              style: const TextStyle(
                 color: AppColors.primary,
                 fontSize: 9,
                 fontWeight: FontWeight.w900,

@@ -2,7 +2,7 @@ import '../../domain/entities/community_post.dart';
 import '../../domain/entities/feed_extensions.dart';
 
 class CommunityPostDto {
-  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.authorId = '', this.isAuthor = false, this.purpose = CommunityPostPurpose.standard, this.travelerMatch, this.media = const [], this.poll});
+  const CommunityPostDto({required this.id, required this.authorName, required this.location, required this.createdAtLabel, required this.message, required this.likes, required this.comments, required this.isLiked, this.authorId = '', this.isAuthor = false, this.purpose = CommunityPostPurpose.standard, this.travelerMatch, this.media = const [], this.poll, this.newsReference});
   final String id;
   final String authorName;
   final String location;
@@ -41,6 +41,10 @@ class CommunityPostDto {
   /// paylaşımın kendi metni, o yüzden [message] anketin de sorusu.
   final CommunityPoll? poll;
 
+  /// Panelden akışa çıkarılmış bir haberde dolu. Kartın imzası, dokunulduğunda
+  /// gideceği yer ve profilinin açılmaması buna bağlı.
+  final NewsPostReference? newsReference;
+
   factory CommunityPostDto.fromJson(Map<String, dynamic> json) {
     final author = json['author'];
     final authorName = author is Map<String, dynamic> ? author['name'] as String? : null;
@@ -60,7 +64,19 @@ class CommunityPostDto {
         travelerMatch: _travelerFromJson(json['travelerMatch']),
         media: _mediaFromJson(json['media']),
         poll: _pollFromJson(json['poll'], message),
+        newsReference: _newsFromJson(json['news']),
       );
+  }
+
+  static NewsPostReference? _newsFromJson(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final id = raw['id'] as String?;
+    if (id == null || id.isEmpty) return null;
+    return NewsPostReference(
+      articleId: id,
+      title: raw['title'] as String? ?? '',
+      category: raw['category'] as String?,
+    );
   }
 
   static CommunityPostPurpose _purposeFromJson(Object? raw) => switch (raw) {
@@ -124,5 +140,11 @@ class CommunityPostDto {
     );
   }
 
-  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, ownerId: authorId.isEmpty ? 'local-user' : authorId, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll);
+  /// Sunucunun gönderdiği damga: `createdAtLabel` bir etiket değil, ISO 8601
+  /// bir an. Okunur hale getirmek uygulamanın işi - kart "3dk" yazacaksa o
+  /// hesabı okuyucunun saatiyle yapmak gerekiyor. Çözümlenemezse null kalıyor
+  /// ve kart elindeki metni gösteriyor; uydurma bir tarih üretmiyoruz.
+  DateTime? get createdAt => DateTime.tryParse(createdAtLabel)?.toLocal();
+
+  CommunityPost toDomain() => CommunityPost(id: id, authorName: authorName, location: location, timeLabel: createdAtLabel, message: message, likes: likes, comments: comments, isLiked: isLiked, ownerId: authorId.isEmpty ? 'local-user' : authorId, isAuthor: isAuthor, purpose: purpose, travelerMatch: travelerMatch, media: media, poll: poll, newsReference: newsReference, createdAt: createdAt);
 }

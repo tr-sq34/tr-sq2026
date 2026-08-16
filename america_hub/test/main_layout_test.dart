@@ -1,3 +1,4 @@
+import 'package:america_hub/features/community/presentation/screens/post_composer_screen.dart';
 import 'package:america_hub/features/home/presentation/widgets/app_top_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -101,6 +102,26 @@ void main() {
 
     expect(find.text('Gurbet Yolculuğu'), findsOneWidget);
     expect(find.widgetWithText(Tab, 'Rozetler'), findsOneWidget);
+  });
+
+  // Görev listesi düz metindi: "Toplulukta ilk gönderini paylaş" yazıyordu ama
+  // düzenleyiciyi üye kendi bulmak zorundaydı.
+  testWidgets('a journey task opens the screen that finishes it', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+
+    await tester.tap(find.text('Topluluk Rozetini Al!'));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(Tab, 'Görevler'));
+    await settle(tester);
+    await tester.tap(find.text('İlk Selam'));
+    await settle(tester);
+
+    // Yolculuk sayfası kapanıyor: kapanmasaydı düzenleyici arkada açılır, üye
+    // hâlâ görev listesine bakıyor olurdu.
+    expect(find.text('Gurbet Yolculuğu'), findsNothing);
+    expect(find.byType(PostComposerScreen), findsOneWidget);
   });
 
   // The composer used to introduce every member as "Ahmet Yılmaz", the demo

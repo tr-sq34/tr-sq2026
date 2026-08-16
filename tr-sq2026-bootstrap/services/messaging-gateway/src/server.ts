@@ -88,7 +88,23 @@ const groupBody = z.object({
   city: z.string().trim().min(2).max(80),
   privacy: z.enum(['public', 'private']),
   imageUrl: z.string().url().max(512).optional(),
+  description: z.string().trim().max(300).optional(),
 });
+/**
+ * Everything an owner may change afterwards, and nothing else.
+ *
+ * `privacy` is deliberately absent. It is a Matrix `join_rule` and a history
+ * visibility setting as much as a database column, and flipping a public group
+ * to private would leave the backlog readable to everyone who already joined
+ * while implying to the owner that it is now sealed.
+ */
+const groupUpdateBody = z.object({
+  name: z.string().trim().min(3).max(80).optional(),
+  city: z.string().trim().min(2).max(80).optional(),
+  description: z.string().trim().max(300).nullable().optional(),
+  imageUrl: z.string().url().max(512).nullable().optional(),
+});
+const groupMemberBody = z.object({ userId: z.string().uuid() });
 const groupRequestParams = z.object({ id: z.string().uuid(), userId: z.string().uuid() });
 const groupRequestBody = z.object({ decision: z.enum(['accepted', 'declined']) });
 
@@ -172,14 +188,17 @@ type GroupRow = {
   city: string;
   privacy: 'public' | 'private';
   image_url: string | null;
+  description: string | null;
   created_by: string;
   created_at: Date;
   last_message_at: Date;
 };
 
+type GroupMembershipStatus = 'joined' | 'requested' | 'invited';
+
 type GroupListRow = GroupRow & {
   member_count: string | number;
-  membership_status: 'joined' | 'requested' | null;
+  membership_status: GroupMembershipStatus | null;
   membership_role: 'owner' | 'member' | null;
 };
 
@@ -271,6 +290,14 @@ async function matrixRequest<T>(path: string, init: RequestInit = {}, impersonat
 /**
  * Registers the Matrix identity that shadows a TurkSquare user.
  *
+ * `type` is a top-level field, not `auth.type`. That is what the application
+ * service registration in the spec asks for, and it is also the only thing
+ * Synapse looks at: it branches on `body.type` and, for anything else carrying
+ * an access token, answers 400 "An access token should not be provided on
+ * requests to /register". Sending the user-interactive shape instead meant
+ * every identity failed to provision, so no room — group or direct — could be
+ * created at all.
+ *
  * Only `M_USER_IN_USE` means "already provisioned". Every other 4xx — most
  * importantly `M_EXCLUSIVE`, which is what a server-name or namespace
  * misconfiguration produces — must surface instead of being swallowed, or the
@@ -281,9 +308,9 @@ async function ensureMatrixUser(userId: string): Promise<void> {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${matrixToken}` },
     body: JSON.stringify({
+      type: 'm.login.application_service',
       username: matrixLocalpart(userId),
       inhibit_login: true,
-      auth: { type: 'm.login.application_service' },
     }),
     signal: AbortSignal.timeout(8_000),
   });
@@ -291,7 +318,13 @@ async function ensureMatrixUser(userId: string): Promise<void> {
 
   const detail = await response.json().catch(() => ({})) as MatrixError;
   if (detail.errcode === 'M_USER_IN_USE') return;
-  app.log.error({ status: response.status, errcode: detail.errcode }, 'Unable to provision Matrix user');
+  // The message matters as much as the code: M_UNKNOWN covers half of
+  // Synapse's registration errors, and telling them apart from the outside
+  // took a homeserver log dive that the next reader should not have to repeat.
+  app.log.error(
+    { status: response.status, errcode: detail.errcode, detail: detail.error?.slice(0, 200) },
+    'Unable to provision Matrix user',
+  );
   throw new HttpError(503, 'MESSAGING_UNAVAILABLE');
 }
 
@@ -677,6 +710,7 @@ const toGroupDto = (row: GroupListRow | GroupRow) => ({
   city: row.city,
   privacy: row.privacy,
   imageUrl: row.image_url,
+  description: row.description,
   memberCount: 'member_count' in row ? Number(row.member_count) : 1,
   membershipStatus: 'membership_status' in row ? (row.membership_status ?? 'none') : 'joined',
   role: 'membership_role' in row ? row.membership_role : 'owner',
@@ -688,7 +722,7 @@ await app.register(helmet);
 await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute' });
 await app.register(cors, {
   origin: (origin, callback) => callback(null, !origin || origin === 'https://turksquare.com' || origin === 'https://www.turksquare.com' || /^http:\/\/localhost:\d+$/.test(origin)),
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
   maxAge: 600,
 });
@@ -795,7 +829,7 @@ app.get('/v1/messages/groups', async (request, reply) => {
 app.post('/v1/messages/groups', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   try {
     const actorId = await currentUser(request.headers.authorization);
-    const { name, city, privacy, imageUrl } = groupBody.parse(request.body);
+    const { name, city, privacy, imageUrl, description } = groupBody.parse(request.body);
     await assertActiveMember(actorId);
     await assertNotRestricted(actorId);
 
@@ -804,9 +838,9 @@ app.post('/v1/messages/groups', { config: { rateLimit: { max: 5, timeWindow: '1 
     try {
       await client.query('BEGIN');
       const inserted = await client.query<GroupRow>(
-        `INSERT INTO messaging_groups(matrix_room_id,name,city,privacy,image_url,created_by)
-         VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [roomId, name, city, privacy, imageUrl ?? null, actorId],
+        `INSERT INTO messaging_groups(matrix_room_id,name,city,privacy,image_url,description,created_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [roomId, name, city, privacy, imageUrl ?? null, description || null, actorId],
       );
       const group = inserted.rows[0]!;
       await client.query(
@@ -848,11 +882,26 @@ app.post('/v1/messages/groups/:id/join', async (request, reply) => {
     await assertActiveMember(viewerId);
     const group = await groupById(id);
 
-    const existing = await pool.query<{ status: 'joined' | 'requested' }>(
+    const existing = await pool.query<{ status: GroupMembershipStatus }>(
       'SELECT status FROM messaging_group_members WHERE group_id=$1 AND user_id=$2',
       [group.id, viewerId],
     );
-    if (existing.rowCount) return { data: { membershipStatus: existing.rows[0]!.status } };
+    if (existing.rowCount && existing.rows[0]!.status !== 'invited') {
+      return { data: { membershipStatus: existing.rows[0]!.status } };
+    }
+    // An invite from the owner is already waiting in the room: accepting it is
+    // this same call, and it is the only way into a private group that does not
+    // need a second approval.
+    if (existing.rowCount) {
+      await ensureMatrixUser(viewerId);
+      await matrixRequest(`/_matrix/client/v3/rooms/${encodeURIComponent(group.matrix_room_id)}/join`, { method: 'POST', body: '{}' }, viewerId);
+      await pool.query(`UPDATE messaging_group_members SET status='joined' WHERE group_id=$1 AND user_id=$2`, [group.id, viewerId]);
+      await pool.query(
+        'INSERT INTO messaging_audit_events(actor_id,group_id,event_type,metadata) VALUES($1,$2,$3,$4)',
+        [viewerId, group.id, 'group_invite_accepted', '{}'],
+      );
+      return { data: { membershipStatus: 'joined' } };
+    }
 
     if (group.privacy === 'public') {
       await ensureMatrixUser(viewerId);
@@ -886,14 +935,17 @@ app.post('/v1/messages/groups/:id/leave', async (request, reply) => {
     const viewerId = await currentUser(request.headers.authorization);
     const { id } = conversationIdParam.parse(request.params);
     const group = await groupById(id);
-    const membership = await pool.query<{ role: 'owner' | 'member'; status: 'joined' | 'requested' }>(
+    const membership = await pool.query<{ role: 'owner' | 'member'; status: GroupMembershipStatus }>(
       'SELECT role, status FROM messaging_group_members WHERE group_id=$1 AND user_id=$2',
       [group.id, viewerId],
     );
     if (!membership.rowCount) return { data: { membershipStatus: 'none' } };
     if (membership.rows[0]!.role === 'owner') throw new HttpError(409, 'GROUP_OWNER_CANNOT_LEAVE');
 
-    if (membership.rows[0]!.status === 'joined') {
+    // Leaving and turning down an invitation are the same Matrix call: a
+    // pending invite is a room membership too. Only a join request has nothing
+    // on the homeserver to undo.
+    if (membership.rows[0]!.status !== 'requested') {
       await matrixRequest(`/_matrix/client/v3/rooms/${encodeURIComponent(group.matrix_room_id)}/leave`, { method: 'POST', body: '{}' }, viewerId);
     }
     await pool.query('DELETE FROM messaging_group_members WHERE group_id=$1 AND user_id=$2', [group.id, viewerId]);
@@ -968,6 +1020,207 @@ app.post('/v1/messages/groups/:id/requests/:userId', async (request, reply) => {
       [viewerId, group.id, 'group_join_decided', JSON.stringify({ userId, decision })],
     );
     return { data: { membershipStatus: decision === 'accepted' ? 'joined' : 'none' } };
+  } catch (error) {
+    return sendError(reply, error);
+  }
+});
+
+/**
+ * Owner edits the group's profile.
+ *
+ * The name is the one field that also lives on the homeserver: it is what a
+ * member's Matrix client shows, and leaving the two out of step would mean the
+ * room says one thing and this service another. The rename goes first, so a
+ * homeserver refusal stops the write instead of leaving the row ahead of it.
+ */
+app.patch('/v1/messages/groups/:id', async (request, reply) => {
+  try {
+    const viewerId = await currentUser(request.headers.authorization);
+    const { id } = conversationIdParam.parse(request.params);
+    const patch = groupUpdateBody.parse(request.body);
+    const group = await assertGroupOwner(id, viewerId);
+
+    if (patch.name !== undefined && patch.name !== group.name) {
+      await matrixRequest(
+        `/_matrix/client/v3/rooms/${encodeURIComponent(group.matrix_room_id)}/state/m.room.name/`,
+        { method: 'PUT', body: JSON.stringify({ name: patch.name }) },
+        viewerId,
+      );
+    }
+
+    // COALESCE with a NULL parameter leaves the column alone, so an untouched
+    // field keeps its value. `description` and `imageUrl` need the extra flag
+    // because for them an explicit null means "clear it", which COALESCE alone
+    // cannot tell apart from "not sent".
+    const updated = await pool.query<GroupRow>(
+      `UPDATE messaging_groups
+          SET name = COALESCE($2, name),
+              city = COALESCE($3, city),
+              description = CASE WHEN $4 THEN $5 ELSE description END,
+              image_url = CASE WHEN $6 THEN $7 ELSE image_url END
+        WHERE id = $1 AND removed_at IS NULL
+      RETURNING *`,
+      [
+        group.id,
+        patch.name ?? null,
+        patch.city ?? null,
+        patch.description !== undefined,
+        patch.description || null,
+        patch.imageUrl !== undefined,
+        patch.imageUrl || null,
+      ],
+    );
+    if (!updated.rowCount) throw new HttpError(404, 'GROUP_NOT_FOUND');
+
+    await pool.query(
+      'INSERT INTO messaging_audit_events(actor_id,group_id,event_type,metadata) VALUES($1,$2,$3,$4)',
+      [viewerId, group.id, 'group_updated', JSON.stringify({ fields: Object.keys(patch) })],
+    );
+    return { data: toGroupDto(updated.rows[0]!) };
+  } catch (error) {
+    return sendError(reply, error);
+  }
+});
+
+/**
+ * The roster, readable by anyone already inside the group.
+ *
+ * Members are shown to members and not to outsiders: a private group's guest
+ * list is part of what makes it private, and a public group's is what lets a
+ * member recognise who they are talking to. Pending join requests stay out of
+ * this list — those belong to the owner-only requests route — but people the
+ * owner has invited are included, because the owner needs to see that the
+ * invitation is out and not send it twice.
+ */
+app.get('/v1/messages/groups/:id/members', async (request, reply) => {
+  try {
+    const viewerId = await currentUser(request.headers.authorization);
+    const { id } = conversationIdParam.parse(request.params);
+    const group = await groupById(id);
+    const viewer = await pool.query(
+      `SELECT 1 FROM messaging_group_members WHERE group_id=$1 AND user_id=$2 AND status='joined'`,
+      [group.id, viewerId],
+    );
+    if (!viewer.rowCount) throw new HttpError(403, 'GROUP_MEMBERSHIP_REQUIRED');
+
+    const result = await pool.query<{
+      user_id: string;
+      display_name: string | null;
+      role: 'owner' | 'member';
+      status: GroupMembershipStatus;
+      created_at: Date;
+    }>(
+      `SELECT m.user_id, p.display_name, m.role, m.status, m.created_at
+         FROM messaging_group_members m
+         LEFT JOIN messaging_user_projection p ON p.user_id = m.user_id
+        WHERE m.group_id = $1 AND m.status IN ('joined', 'invited')
+        ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.created_at ASC
+        LIMIT 500`,
+      [group.id],
+    );
+    return {
+      data: result.rows.map((row) => ({
+        userId: row.user_id,
+        displayName: row.display_name,
+        role: row.role,
+        status: row.status,
+        joinedAt: row.created_at.toISOString(),
+      })),
+    };
+  } catch (error) {
+    return sendError(reply, error);
+  }
+});
+
+/**
+ * Owner invites somebody into the group.
+ *
+ * The invite is a real Matrix invite, so the person can accept it from any
+ * client, and the row is written as `invited` rather than `joined`: the owner
+ * decides who is welcome, but only the invitee decides whether they are in. A
+ * standing request from that same person is upgraded instead of duplicated —
+ * being asked in is a stronger answer than being kept waiting.
+ */
+app.post('/v1/messages/groups/:id/members', async (request, reply) => {
+  try {
+    const viewerId = await currentUser(request.headers.authorization);
+    const { id } = conversationIdParam.parse(request.params);
+    const { userId } = groupMemberBody.parse(request.body);
+    const group = await assertGroupOwner(id, viewerId);
+    await assertActiveMember(userId);
+
+    const existing = await pool.query<{ status: GroupMembershipStatus }>(
+      'SELECT status FROM messaging_group_members WHERE group_id=$1 AND user_id=$2',
+      [group.id, userId],
+    );
+    // Repeating the call answers with the state that already holds instead of
+    // sending a second Matrix invite: Synapse rejects a duplicate invite with
+    // M_FORBIDDEN, which this service can only report as "messaging
+    // unavailable" — a misleading error for something that already worked.
+    if (existing.rowCount && existing.rows[0]!.status !== 'requested') {
+      return { data: { membershipStatus: existing.rows[0]!.status } };
+    }
+    // Somebody blocked by the owner should not be pulled into a room with them.
+    await assertNotBlocked(pool, viewerId, userId);
+
+    await ensureMatrixUser(userId);
+    await matrixRequest(
+      `/_matrix/client/v3/rooms/${encodeURIComponent(group.matrix_room_id)}/invite`,
+      { method: 'POST', body: JSON.stringify({ user_id: matrixUserId(userId) }) },
+      viewerId,
+    );
+
+    await pool.query(
+      `INSERT INTO messaging_group_members(group_id,user_id,role,status,invited_by)
+       VALUES($1,$2,'member','invited',$3)
+       ON CONFLICT (group_id,user_id)
+       DO UPDATE SET status='invited', invited_by=$3`,
+      [group.id, userId, viewerId],
+    );
+    await pool.query(
+      'INSERT INTO messaging_audit_events(actor_id,group_id,event_type,metadata) VALUES($1,$2,$3,$4)',
+      [viewerId, group.id, 'group_member_invited', JSON.stringify({ userId })],
+    );
+    return { data: { membershipStatus: 'invited' } };
+  } catch (error) {
+    return sendError(reply, error);
+  }
+});
+
+/**
+ * Owner removes a member, or withdraws an invitation.
+ *
+ * The kick is what actually ends the person's access; deleting the row only
+ * stops this service listing them. It is also why the owner cannot be removed:
+ * the room's only power-level 100 account would be gone and nobody could admit
+ * or remove anyone afterwards.
+ */
+app.delete('/v1/messages/groups/:id/members/:userId', async (request, reply) => {
+  try {
+    const viewerId = await currentUser(request.headers.authorization);
+    const { id, userId } = groupRequestParams.parse(request.params);
+    const group = await assertGroupOwner(id, viewerId);
+
+    const membership = await pool.query<{ role: 'owner' | 'member'; status: GroupMembershipStatus }>(
+      'SELECT role, status FROM messaging_group_members WHERE group_id=$1 AND user_id=$2',
+      [group.id, userId],
+    );
+    if (!membership.rowCount) return { data: { membershipStatus: 'none' } };
+    if (membership.rows[0]!.role === 'owner') throw new HttpError(409, 'GROUP_OWNER_CANNOT_LEAVE');
+
+    if (membership.rows[0]!.status !== 'requested') {
+      await matrixRequest(
+        `/_matrix/client/v3/rooms/${encodeURIComponent(group.matrix_room_id)}/kick`,
+        { method: 'POST', body: JSON.stringify({ user_id: matrixUserId(userId), reason: 'Removed by the group owner' }) },
+        viewerId,
+      );
+    }
+    await pool.query('DELETE FROM messaging_group_members WHERE group_id=$1 AND user_id=$2', [group.id, userId]);
+    await pool.query(
+      'INSERT INTO messaging_audit_events(actor_id,group_id,event_type,metadata) VALUES($1,$2,$3,$4)',
+      [viewerId, group.id, 'group_member_removed', JSON.stringify({ userId })],
+    );
+    return { data: { membershipStatus: 'none' } };
   } catch (error) {
     return sendError(reply, error);
   }
@@ -1616,6 +1869,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   GROUP_NOT_FOUND: 'Grup bulunamadı.',
   JOIN_REQUEST_NOT_FOUND: 'Bekleyen katılım isteği bulunamadı.',
   GROUP_OWNER_CANNOT_LEAVE: 'Grubun kurucusu gruptan ayrılamaz.',
+  GROUP_MEMBERSHIP_REQUIRED: 'Grubun üyelerini yalnızca gruptakiler görebilir.',
   SELF_REPORT_NOT_ALLOWED: 'Kendi mesajını şikâyet edemezsin.',
   MESSAGING_MUTED: 'Hesabın geçici olarak mesaj gönderemiyor.',
   MESSAGING_SUSPENDED: 'Mesajlaşma hesabın askıya alındı.',

@@ -24,7 +24,28 @@ abstract interface class ProfileRepository {
     ({String? value})? avatarMediaId,
     ProfileVisibility? visibility,
     List<String>? showcasedBadges,
+    ({String? value})? username,
   });
+
+  /// Üye yazarken verilen erken cevap. Son sözü kaydetme anı söylüyor: aradaki
+  /// saniyelerde aynı adı başkası alabilir.
+  Future<UsernameCheck> checkUsername(String username);
+
+  /// Takip listeleri. Kilitli bir profilde sunucu boş liste değil kilit
+  /// döndürüyor; [locked] true geldiğinde ekran "göremiyorsun" demeli, "kimse
+  /// yok" değil.
+  Future<({List<FollowSummary> items, bool locked})> getFollowers(String userId);
+  Future<({List<FollowSummary> items, bool locked})> getFollowing(String userId);
+
+  /// Takip et / takipten çık. Dönen değer, işlemden sonra kişinin takip
+  /// edilenler arasında olup olmadığı: arkadaşlık sürüyorsa takipten çıkmak
+  /// kişiyi listeden düşürmüyor.
+  Future<bool> follow(String userId);
+  Future<bool> unfollow(String userId);
+
+  /// Kendi takipçini listeden çıkarmak. Arkadaşını çıkarmaya çalışmak
+  /// reddediliyor; onun yolu arkadaşlıktan çıkarmak.
+  Future<void> removeFollower(String userId);
 
   Future<List<ProfilePost>> getPosts(
     String userId, {
@@ -36,4 +57,13 @@ abstract interface class ProfileRepository {
   /// whole difference between archiving and deleting.
   Future<void> archivePost(String postId);
   Future<void> unarchivePost(String postId);
+
+  /// Başa sabitleme ve yorumlara kapatma. İkisi de paylaşımın sahibine ait
+  /// ayarlar, o yüzden tek çağrıda; dönen değer sunucunun son sözü, çünkü
+  /// sabitleme sayısı dolduğunda istek reddedilebiliyor.
+  Future<({bool pinned, bool commentsEnabled})> setPostSettings(
+    String postId, {
+    bool? pinned,
+    bool? commentsEnabled,
+  });
 }

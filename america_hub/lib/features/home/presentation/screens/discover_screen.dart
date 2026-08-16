@@ -303,7 +303,11 @@ class _StoriesSection extends StatelessWidget {
                     _StoryItem(
                       name: promotion.title,
                       imageUrl: promotion.imageUrl ?? '',
-                      isSponsored: true,
+                      // Platformun kendi kartı da bu yuvada duruyor ama reklam
+                      // değil: "Sponsorlu" etiketi yalnızca birinin
+                      // yerleştirdiği tanıtımlara ait.
+                      isSponsored: !promotion.official,
+                      isOfficial: promotion.official,
                       onTap: () => onOpenPromotion(promotion),
                     ),
                   for (final story in stories)
@@ -331,13 +335,28 @@ class _StoryItem extends StatelessWidget {
     required this.imageUrl,
     required this.onTap,
     this.isSponsored = false,
+    this.isOfficial = false,
     this.isUnread = true,
   });
   final String name;
   final String imageUrl;
   final VoidCallback onTap;
   final bool isSponsored;
+
+  /// TurkSquare'in kendi kartı. Sponsorlu yuvada duruyor ama parası ödenmiş bir
+  /// tanıtım değil, o yüzden reklam etiketi almıyor.
+  final bool isOfficial;
   final bool isUnread;
+
+  /// Halkanın altındaki satır: reklamda "Sponsorlu", platformun kendi kartında
+  /// "TurkSquare", Story'de kişinin adı.
+  String get _caption => isSponsored
+      ? 'Sponsorlu'
+      : isOfficial
+      ? 'TurkSquare'
+      : name;
+
+  bool get _isPromotion => isSponsored || isOfficial;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -356,7 +375,7 @@ class _StoryItem extends StatelessWidget {
                 shape: BoxShape.circle,
                 gradient: isUnread
                     ? LinearGradient(
-                        colors: isSponsored
+                        colors: _isPromotion
                             ? const [Color(0xFF6355D8), Color(0xFF3B3383)]
                             : const [
                                 Color(0xFFFBBF24),
@@ -381,7 +400,7 @@ class _StoryItem extends StatelessWidget {
                     height: 52,
                     child: AppRemoteImage(
                       imageUrl: imageUrl,
-                      semanticLabel: isSponsored
+                      semanticLabel: _isPromotion
                           ? '$name tanıtımı'
                           : '$name hikayesi',
                     ),
@@ -391,18 +410,18 @@ class _StoryItem extends StatelessWidget {
             ),
             const SizedBox(height: 5),
             Text(
-              isSponsored ? 'Sponsorlu' : name,
+              _caption,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.bold,
-                color: isSponsored
+                color: _isPromotion
                     ? const Color(0xFF6355D8)
                     : const Color(0xFF334155),
               ),
             ),
-            if (isSponsored)
+            if (_isPromotion)
               Text(
                 name,
                 maxLines: 1,
@@ -804,7 +823,10 @@ class _HighlightsSection extends StatelessWidget {
                   _HighlightCard(
                     title: promotion.title,
                     subtitle: promotion.subtitle ?? promotion.audienceLabel,
-                    badge: 'Sponsorlu',
+                    // Rozet karta parayı kimin ödediğini söylüyor. Platformun
+                    // kendi kartına "Sponsorlu" yazmak olmayan bir reklam
+                    // ilişkisini varmış gibi göstermek olurdu.
+                    badge: promotion.official ? 'TurkSquare' : 'Sponsorlu',
                     imageUrl: promotion.imageUrl,
                     gradient: const [Color(0xFF334155), Color(0xFF0F172A)],
                     onTap: () => onOpenPromotion(promotion),

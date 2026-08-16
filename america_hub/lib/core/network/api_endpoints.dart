@@ -12,6 +12,8 @@ abstract final class ApiEndpoints {
   static const authRefresh = 'auth/refresh';
   static const authLogout = 'auth/logout';
   static const authOnboarding = 'auth/onboarding';
+  static const authAccountFreeze = 'auth/account/freeze';
+  static const authAccountDelete = 'auth/account/delete';
   static const authPasskeyRegistrationOptions =
       'auth/passkeys/registration/options';
   static const authPasskeyRegistrationVerify =
@@ -35,6 +37,11 @@ abstract final class ApiEndpoints {
   static String messagingConversationMessages(String conversationId) =>
       '/messages/conversations/$conversationId/messages';
   static const messagingGroups = '/messages/groups';
+  static String messagingGroup(String groupId) => '/messages/groups/$groupId';
+  static String messagingGroupMembers(String groupId) =>
+      '/messages/groups/$groupId/members';
+  static String messagingGroupMember(String groupId, String userId) =>
+      '/messages/groups/$groupId/members/$userId';
   static String messagingGroupJoin(String groupId) =>
       '/messages/groups/$groupId/join';
   static String messagingGroupLeave(String groupId) =>
@@ -62,8 +69,25 @@ abstract final class ApiEndpoints {
   static String communityProfile(String userId) => '/community/profiles/$userId';
   static String communityProfilePosts(String userId) =>
       '/community/profiles/$userId/posts';
+  static const communityUsernameAvailable =
+      '/community/profiles/username-available';
+  static String communityFollowers(String userId) =>
+      '/community/profiles/$userId/followers';
+  static String communityFollowing(String userId) =>
+      '/community/profiles/$userId/following';
+  // Takip et / takipten çık aynı adresin POST ve DELETE'i. Takipçiyi listeden
+  // çıkarmak ayrı bir adres: silinen satır karşı tarafın satırı, aynı işlemin
+  // tersi değil.
+  static String communityFollow(String userId) =>
+      '/community/members/$userId/follow';
+  static String communityFollower(String userId) =>
+      '/community/members/$userId/follower';
   static String communityPostArchive(String postId) =>
       '/community/posts/$postId/archive';
+  // Sabitleme ve yorumlara kapatma tek ucta: ikisi de paylaşımın sahibine ait
+  // ayarlar ve sunucuda aynı sahiplik denetiminden geçiyor.
+  static String communityPostSettings(String postId) =>
+      '/community/posts/$postId/settings';
   // Akış yorumları. Silme ucu paylaşımı değil yorumu adresliyor; sunucu yorumu
   // ya yazanın ya da paylaşım sahibinin kaldırabileceğini oradan çözüyor.
   static String communityPostComments(String postId) =>

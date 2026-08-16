@@ -39,6 +39,30 @@ class MockCommunityRepository
   String get viewerId => _viewer?.call()?.id ?? _fallbackOwnerId;
 
   final List<CommunityPost> _posts = [
+    // Panelden akışa çıkarılmış bir haber. Demo modda da duruyor çünkü kartın
+    // farkı gözle görülür: imzası Haber Bülteni, profili açılmıyor ve
+    // dokunulduğunda haberin kendisine gidiyor. Bağlandığı kimlik demo haber
+    // deposundaki gerçek bir haber - dokunuş boşa gitmiyor.
+    CommunityPost(
+      id: 'post-news-uscis',
+      ownerId: 'news-desk',
+      authorName: 'Haber Bülteni',
+      location: 'Amerika geneli',
+      timeLabel: '42 dk önce',
+      message:
+          'Otomatik uzatma süresi belirli kategorilerde 540 güne çıkarıldı. '
+          'Başvurusu beklemede olan üyeler için kritik olan tarihleri derledik.',
+      likes: 61,
+      comments: 14,
+      visibility: PostVisibility.public,
+      commentsPolicy: CommentsPolicy.everyone,
+      newsReference: const NewsPostReference(
+        articleId: 'news-uscis',
+        title:
+            'USCIS, çalışma izni uzatma sürelerini ve başvuru kriterlerini güncelledi',
+        category: 'gocmenlik',
+      ),
+    ),
     CommunityPost(
       id: 'post-1',
       ownerId: 'demo-elif',

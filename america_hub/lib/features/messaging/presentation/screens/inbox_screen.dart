@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/widgets/app_image_source.dart';
 import '../../application/direct_conversation_controller.dart';
 import '../../application/messaging_controller.dart';
 import '../../domain/entities/conversation.dart';
 import '../../domain/repositories/direct_message_repository.dart';
 import '../../domain/repositories/message_moderation_repository.dart';
+import '../../../community/application/media_upload_controller.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/domain/entities/friendship.dart';
 import 'conversation_screen.dart';
 import '../widgets/create_group_sheet.dart';
+import '../widgets/group_settings_sheet.dart';
 import '../widgets/join_requests_sheet.dart';
 import '../widgets/new_conversation_sheet.dart';
 
@@ -22,9 +25,14 @@ class InboxScreen extends StatefulWidget {
     required this.moderationRepository,
     required this.friendshipController,
     required this.directMessageRepository,
+    required this.mediaUploadController,
   });
 
   final MessagingController controller;
+
+  /// Grup fotoğrafı da akıştaki görsellerle aynı yükleme zincirinden geçiyor.
+  /// Grup kurma ve grup ayarları sayfalarının ikisi de bunu kullanıyor.
+  final MediaUploadController mediaUploadController;
 
   /// Passed straight through to the chat screen, which owns the thread it
   /// builds. The inbox never opens a thread itself.
@@ -651,7 +659,10 @@ class _InboxScreenState extends State<InboxScreen> {
                     isScrollControlled: true,
                     useSafeArea: true,
                     backgroundColor: Colors.transparent,
-                    builder: (_) => CreateGroupSheet(controller: widget.controller)),
+                    builder: (_) => CreateGroupSheet(
+                          controller: widget.controller,
+                          mediaUploadController: widget.mediaUploadController,
+                        )),
                 borderRadius: BorderRadius.circular(20),
                 child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 14),
@@ -721,76 +732,124 @@ class _InboxScreenState extends State<InboxScreen> {
         ),
       );
 
+  /// Gruplar listesindeki bir kart.
+  ///
+  /// Eskiden burada tek satır vardı: ad, şehir ve üye sayısı. Grubun ne için
+  /// kurulduğu hiçbir yerde yazmıyordu, yüklenen fotoğraf da hiç görünmüyordu -
+  /// her grup aynı mor rozete benziyordu. Katılmaya karar verecek kişinin
+  /// bakacağı şeyler artık kartın kendisinde.
   Widget _buildGroupTile(CommunityGroup group, bool isDarkMode) {
+    final avatar = appImageProvider(group.imageUrl);
+    final description = group.description?.trim() ?? '';
     final card = Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+          color: group.isInvited
+              ? AppColors.primary.withValues(alpha: .45)
+              : isDarkMode
+              ? const Color(0xFF334155)
+              : const Color(0xFFF1F5F9),
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFE5DEFF), Color(0xFFD9D6FE)],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  gradient: avatar == null
+                      ? const LinearGradient(
+                          colors: [Color(0xFFE5DEFF), Color(0xFFD9D6FE)],
+                        )
+                      : null,
+                  image: avatar == null
+                      ? null
+                      : DecorationImage(image: avatar, fit: BoxFit.cover),
+                  borderRadius: BorderRadius.circular(17),
+                ),
+                child: avatar == null
+                    ? const Icon(Icons.groups_rounded,
+                        color: AppColors.primary, size: 25)
+                    : null,
               ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(Icons.groups_outlined,
-                color: AppColors.primary, size: 24),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        group.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                    ),
-                    if (group.privacy == GroupPrivacy.private) ...[
-                      const SizedBox(width: 4),
-                      const Icon(Icons.lock_outline_rounded,
-                          size: 12, color: Color(0xFF94A3B8)),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    const Icon(Icons.location_on_rounded,
-                        size: 12, color: Color(0xFF6C5CE7)),
-                    const SizedBox(width: 2),
-                    Flexible(
-                      child: Text(
-                        '${group.city} • ${group.members} üye',
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isDarkMode
-                              ? const Color(0xFF94A3B8)
-                              : const Color(0xFF64748B),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            group.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
                         ),
-                      ),
+                        if (group.privacy == GroupPrivacy.private) ...[
+                          const SizedBox(width: 5),
+                          const Icon(Icons.lock_outline_rounded,
+                              size: 12, color: Color(0xFF94A3B8)),
+                        ],
+                        if (group.isOwner) ...[
+                          const SizedBox(width: 6),
+                          const _GroupBadge(label: 'Kurucu'),
+                        ] else if (group.isInvited) ...[
+                          const SizedBox(width: 6),
+                          const _GroupBadge(label: 'Davetli'),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on_rounded,
+                            size: 12, color: Color(0xFF6C5CE7)),
+                        const SizedBox(width: 2),
+                        Flexible(
+                          child: Text(
+                            '${group.city} • ${group.members} üye',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isDarkMode
+                                  ? const Color(0xFF94A3B8)
+                                  : const Color(0xFF64748B),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+              _buildGroupAction(group, isDarkMode),
+            ],
           ),
-          _buildGroupAction(group, isDarkMode),
+          if (description.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            Text(
+              description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: isDarkMode
+                    ? const Color(0xFFCBD5E1)
+                    : const Color(0xFF475569),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -822,14 +881,18 @@ class _InboxScreenState extends State<InboxScreen> {
     if (group.isJoined) {
       return PopupMenuButton<String>(
         icon: const Icon(Icons.more_horiz_rounded, color: Color(0xFF94A3B8)),
-        onSelected: (value) {
-          if (value == 'requests') {
-            _showJoinRequests(group);
-          } else {
-            _leaveGroup(group, withdraw: false);
-          }
+        onSelected: (value) => switch (value) {
+          'settings' => _openGroupSettings(group),
+          'requests' => _showJoinRequests(group),
+          _ => _leaveGroup(group, withdraw: false),
         },
         itemBuilder: (_) => [
+          // Kurucu olmayan da açabiliyor: içeride kimlerin olduğunu görmek
+          // grubun üyesi olmanın bir parçası, yönetmekten ayrı bir şey.
+          PopupMenuItem(
+            value: 'settings',
+            child: Text(group.isOwner ? 'Grup ayarları' : 'Grup bilgisi'),
+          ),
           if (group.isOwner && group.privacy == GroupPrivacy.private)
             const PopupMenuItem(
                 value: 'requests', child: Text('Katılım istekleri')),
@@ -843,17 +906,41 @@ class _InboxScreenState extends State<InboxScreen> {
     return ElevatedButton(
       onPressed: () => _joinGroup(group),
       style: ElevatedButton.styleFrom(
-        backgroundColor: isDarkMode
+        backgroundColor: group.isInvited
+            ? AppColors.primary
+            : isDarkMode
             ? const Color(0xFF6C5CE7).withValues(alpha: 0.2)
             : const Color(0xFFEEF2FF),
-        foregroundColor: const Color(0xFF6C5CE7),
+        foregroundColor:
+            group.isInvited ? Colors.white : const Color(0xFF6C5CE7),
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       ),
       child: Text(
-        group.privacy == GroupPrivacy.private ? 'İstek Gönder' : 'Katıl',
+        // Davetli birine "İstek Gönder" demek, onayın zaten verildiğini
+        // gizlemek olurdu.
+        group.isInvited
+            ? 'Daveti kabul et'
+            : group.privacy == GroupPrivacy.private
+            ? 'İstek Gönder'
+            : 'Katıl',
         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+      ),
+    );
+  }
+
+  void _openGroupSettings(CommunityGroup group) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => GroupSettingsSheet(
+        group: group,
+        controller: widget.controller,
+        mediaUploadController: widget.mediaUploadController,
+        friendshipController: widget.friendshipController,
       ),
     );
   }
@@ -885,6 +972,8 @@ class _InboxScreenState extends State<InboxScreen> {
       GroupMembershipStatus.joined => '${group.name} grubuna katıldın.',
       GroupMembershipStatus.requested =>
         'Katılım isteğin gönderildi. Grup yöneticisi onayladığında haber vereceğiz.',
+      GroupMembershipStatus.invited =>
+        'Davetin duruyor. Kabul etmek için tekrar dokun.',
       _ => widget.controller.errorMessage ?? 'Gruba katılınamadı.',
     });
   }
@@ -1086,3 +1175,32 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 }
 
+
+/// Kartın başlığındaki küçük etiket: "Kurucu" ya da "Davetli".
+///
+/// İkisi de üye sayısından okunamayan şeyler. Kurucu olduğu grubu terk
+/// edemeyeceğini, davetli olduğu gruba onay beklemeden girebileceğini menüyü
+/// açmadan görüyor.
+class _GroupBadge extends StatelessWidget {
+  const _GroupBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: .12),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w900,
+            letterSpacing: .5,
+            color: AppColors.primary,
+          ),
+        ),
+      );
+}

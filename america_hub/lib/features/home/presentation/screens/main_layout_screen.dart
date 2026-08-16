@@ -18,6 +18,7 @@ import '../../../marketplace/domain/entities/marketplace_listing.dart';
 import '../../../profile/application/friendship_controller.dart';
 import '../../../profile/application/profile_controller.dart';
 import '../../../journey/application/journey_controller.dart';
+import '../../../journey/domain/entities/journey_action.dart';
 import '../../../journey/presentation/screens/journey_screen.dart';
 import '../../../community/domain/repositories/content_moderation_repository.dart';
 import '../../../community/presentation/screens/community_screen.dart';
@@ -40,6 +41,10 @@ import '../../../promotions/domain/entities/promotion.dart';
 import '../../../promotions/presentation/widgets/promotion_detail_sheet.dart';
 import '../../../community/domain/entities/feed_extensions.dart';
 import '../../../community/presentation/screens/story_viewer_screen.dart';
+import '../../../community/presentation/widgets/story_composer_sheet.dart';
+import '../../../profile/presentation/screens/account_settings_screen.dart';
+import '../../../profile/presentation/screens/location_edit_screen.dart';
+import '../../../profile/presentation/screens/member_profile_screen.dart';
 import '../../../profile/presentation/screens/profile_screen.dart';
 import 'discover_screen.dart';
 import '../widgets/app_top_bar.dart';
@@ -163,6 +168,12 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
         promotionsController: widget.promotionsController,
         viewer: widget.authController.user,
         viewerRegion: () => widget.homeController.summary?.regionCode,
+        // Akıştaki Haber Bülteni kartı, ana sayfadaki haber şeridiyle aynı
+        // ekrana gidiyor: haber tek yerde okunuyor, ikinci bir kopyası yok.
+        onOpenArticle: _openArticle,
+        // Akıştaki bir ada dokunmak uzun süre hiçbir yere gitmiyordu; artık
+        // o üyenin profilini açıyor.
+        onOpenMember: _openMember,
       ),
     ),
     MarketplaceScreen(
@@ -180,13 +191,39 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       mediaUploadController: widget.mediaUploadController,
       postCommands: widget.postCommands,
       tabRequests: _profileTab,
+      commentsController: widget.commentsController,
+      contentModerationRepository: widget.contentModerationRepository,
+      onJourneyAction: _runJourneyAction,
     ),
   ];
+
+  /// Başka bir üyenin profili. Kendi profil sekmesinin yerine geçmiyor,
+  /// üstüne açılıyor: geri dönen üye akışta bıraktığı yere geliyor.
+  void _openMember(String userId) => openMemberProfile(
+    context,
+    userId: userId,
+    controller: widget.profileController,
+    friendshipController: widget.friendshipController,
+  );
 
   /// Profil sekmesinin hangi alt sekmesinin açılacağı. Yalnızca bildirimden
   /// gelindiğinde değişiyor; sayfalar bir kez kurulduğu için istek buradan
   /// iletiliyor.
   final ValueNotifier<int> _profileTab = ValueNotifier<int>(0);
+
+  /// Çeker menüdeki "Profil ve Hesap Ayarları". Profil sekmesinin yerine
+  /// geçmiyor, üstüne açılıyor: gizlilik, arşiv ve hesabı kapatma kararları
+  /// profilin sekmelerinde değil, ayrı bir sayfada durmalı.
+  void _openAccountSettings() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => AccountSettingsScreen(
+        profileController: widget.profileController,
+        authController: widget.authController,
+        onSignOut: widget.onSignOut,
+        onDeletePost: (post) => widget.postCommands.deletePost(post.id),
+      ),
+    ),
+  );
 
   /// The home screen's badge card promised a destination and never had one.
   /// It leads where the profile's badge counter leads: the Journey cabinet,
@@ -197,6 +234,61 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
       builder: (_) => JourneyScreen(
         controller: widget.journeyController,
         initialTab: JourneyTab.badges,
+        onTaskAction: _runJourneyAction,
+      ),
+    ),
+  );
+
+  /// Bir görev kartına dokunulduğunda işin yapıldığı ekranı açar.
+  ///
+  /// Görev listesi kabuğun içinde değil, onun üstündeki bir sayfada duruyor;
+  /// o yüzden önce Yolculuk ekranı kapanıyor. Kapanmasaydı sekme değişimi
+  /// arkada olur, üye hâlâ görev listesine bakıyor olurdu.
+  Future<void> _runJourneyAction(JourneyDestination destination) async {
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+    if (!mounted) return;
+    switch (destination) {
+      case JourneyDestination.location:
+        await _editLocation();
+      case JourneyDestination.profileEdit:
+        _profileTab.value = 0;
+        setState(() => _currentIndex = 3);
+      case JourneyDestination.composer:
+        _openComposer();
+      case JourneyDestination.feed:
+        setState(() => _currentIndex = 1);
+      case JourneyDestination.forum:
+        _openForum();
+      case JourneyDestination.messages:
+        _openMessages();
+      case JourneyDestination.storyComposer:
+        setState(() => _currentIndex = 1);
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          backgroundColor: Colors.transparent,
+          barrierColor: const Color(0xCC000000),
+          builder: (_) => StoryComposerSheet(
+            storyController: widget.storyController,
+            mediaUploadController: widget.mediaUploadController,
+            promotionsController: widget.promotionsController,
+          ),
+        );
+    }
+  }
+
+  /// "Haritaya İğne Koy" görevinin gittiği yer. Kayıt sırasındaki konum
+  /// adımının aynısı; kaydedince profil şehri de tazeleniyor.
+  Future<void> _editLocation() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => LocationEditScreen(
+        authController: widget.authController,
+        onSaved: () async {
+          await widget.profileController.load();
+          await widget.journeyController.load();
+        },
       ),
     ),
   );
@@ -964,16 +1056,16 @@ class _MainLayoutScreenState extends State<MainLayoutScreen>
 
                   const SizedBox(height: 4),
 
-                  // 6. PROFİL VE HESAP
+                  // 6. PROFİL VE HESAP AYARLARI
                   _buildDrawerItem(
-                    title: 'Profil ve Hesap',
-                    subtitle: 'Üyelik & kişisel veriler',
-                    icon: Icons.person_outline_rounded,
+                    title: 'Profil ve Hesap Ayarları',
+                    subtitle: 'Gizlilik, arşiv ve hesabın',
+                    icon: Icons.manage_accounts_outlined,
                     iconBg: Colors.white.withValues(alpha: 0.05),
                     iconColor: const Color(0xFF94A3B8),
                     onTap: () {
                       Navigator.pop(context);
-                      setState(() => _currentIndex = 3);
+                      _openAccountSettings();
                     },
                   ),
 

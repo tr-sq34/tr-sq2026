@@ -62,6 +62,12 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                   icon: (item['badge'] as Map<String, dynamic>)['icon'] as String? ?? '✦',
                 ),
           poll: _pollFrom(item['poll']),
+          newsReference: _newsFrom(item['newsReference']),
+          // Damga da saklanıyor: çevrimdışı açılan akışta "3dk" yazan bir kart,
+          // bir gün sonra hâlâ "3dk" demesin diye etiket değil an tutuluyor.
+          createdAt: item['createdAt'] == null
+              ? null
+              : DateTime.tryParse(item['createdAt'] as String),
         )).toList();
     return CursorPage(items: items, nextCursor: json['nextCursor'] as String?);
   }
@@ -122,8 +128,30 @@ class CommunityPageCodec implements CacheCodec<CursorPage<CommunityPost>> {
                       'options': item.poll!.options.map((option) => {'id': option.id, 'label': option.label, 'votes': option.votes}).toList(),
                       'selectedOptionIds': item.poll!.selectedOptionIds.toList(),
                     },
+              'createdAt': item.createdAt?.toIso8601String(),
+              'newsReference': item.newsReference == null
+                  ? null
+                  : {
+                      'articleId': item.newsReference!.articleId,
+                      'title': item.newsReference!.title,
+                      'category': item.newsReference!.category,
+                    },
             }).toList(),
       });
+}
+
+/// Çevrimdışı kopyada haber bağlantısı da duruyor. Aksi halde uçakta açılan
+/// akışta haber kartı sıradan bir paylaşıma dönüşürdü: imzası "Haber Bülteni"
+/// kalır ama dokunulduğunda hiçbir yere gitmezdi.
+NewsPostReference? _newsFrom(Object? raw) {
+  if (raw is! Map<String, dynamic>) return null;
+  final id = raw['articleId'] as String?;
+  if (id == null || id.isEmpty) return null;
+  return NewsPostReference(
+    articleId: id,
+    title: raw['title'] as String? ?? '',
+    category: raw['category'] as String?,
+  );
 }
 
 /// Çevrimdışı kopyada anket de duruyor. Aksi halde uçakta açılan akışta anketli

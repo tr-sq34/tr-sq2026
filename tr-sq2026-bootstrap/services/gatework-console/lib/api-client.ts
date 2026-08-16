@@ -18,7 +18,13 @@ export async function api<T>(url: string, init?: RequestInit): Promise<Envelope<
   try {
     response = await fetch(url, {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      // FormData kendi content-type'ini sinir dizesiyle birlikte uretiyor;
+      // uzerine "application/json" yazilirsa sunucu govdeyi cozemez ve dosya
+      // yuklemesi "okunamadi" diye doner.
+      headers:
+        init?.body instanceof FormData
+          ? (init.headers ?? {})
+          : { 'content-type': 'application/json', ...(init?.headers ?? {}) },
     });
   } catch {
     // A rejected fetch is the network, not the API: saying so stops the

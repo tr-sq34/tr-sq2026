@@ -91,7 +91,11 @@ class MockCommunityHomeRepository implements CommunityHomeRepository {
       // Arkadaşlık kayıtları Faz 3'te geliyor; o gelene kadar sayaç sıfır
       // duruyor — burada bir sayı üretmek üyeye olmayan bir çevre göstermek olur.
       connections: 0,
-      localPosts: posts.where((post) => post.ownerId != viewer).length,
+      // Haber kartları çevredeki paylaşım sayılmıyor: o cümle insanları
+      // sayıyor, bültenin haberlerini değil. Sunucu da aynı ayrımı yapıyor.
+      localPosts: posts
+          .where((post) => post.ownerId != viewer && !post.isNewsBulletin)
+          .length,
       activeStories: stories.where((story) => story.expiresAt.isAfter(now)).length,
       isNewMember: posts.every((post) => post.ownerId != viewer),
     );

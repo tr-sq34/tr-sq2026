@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../../core/pagination/cursor_data_source.dart';
 import '../../../core/pagination/cursor_page.dart';
 import '../../../core/pagination/paged_controller.dart';
@@ -24,6 +26,24 @@ class _FeedModeSource implements CursorDataSource<CommunityPost> {
       mode == FeedMode.forYou
           ? cached.fetchPage(cursor: cursor, limit: limit)
           : feed.fetchFeed(mode: mode, cursor: cursor, limit: limit);
+}
+
+/// Bir sekmenin en son okunmuş hali: listesi, kaldığı yer ve ne zaman okunduğu.
+class _RememberedFeed {
+  const _RememberedFeed({
+    required this.items,
+    required this.cursor,
+    required this.fetchedAt,
+  });
+
+  final List<CommunityPost> items;
+  final String? cursor;
+  final DateTime fetchedAt;
+
+  /// İki dakika: geri dönen üyeye eski listeyi göstermek bekletmekten iyi, ama
+  /// arkada tazelemeden bırakmak da yeni paylaşımları saklamak olurdu.
+  bool get isStale =>
+      DateTime.now().difference(fetchedAt) > const Duration(minutes: 2);
 }
 
 class CommunityFeedController extends PagedController<CommunityPost> {
@@ -53,9 +73,23 @@ class CommunityFeedController extends PagedController<CommunityPost> {
         _interactions = interactions,
         _polls = polls,
         _onMutationCommitted = onMutationCommitted,
-        super(dataSource: source, pageSize: 2);
+        // Sayfa başına iki paylaşım vardı. Akış her iki kartta bir sunucuya
+        // gidiyor, üye de kaydırdıkça bekliyordu.
+        super(dataSource: source, pageSize: 20);
 
   final _FeedModeSource _source;
+
+  /// Her sekmenin kendi listesi burada duruyor.
+  ///
+  /// Sekme sunucu tarafında olduğu için liste tek: geri dönen üye her seferinde
+  /// boş ekrana bakıp yeniden bekliyordu. Okunmuş bir sayfayı atmak, elde olanı
+  /// saklamak demek - sekme anında açılıyor, tazeliği arkada kontrol ediliyor.
+  final Map<FeedMode, _RememberedFeed> _memory = {};
+
+  /// Sıraya alınmış istekler. Hızlı sekme değiştiren üyede istekler üst üste
+  /// biniyordu; sırayla çalışmaları hangi cevabın hangi listeye ait olduğunu
+  /// tartışmasız yapıyor.
+  Future<void> _queue = Future<void>.value();
 
   /// Bildirimden gelen paylaşım listede olmayabilir: akış ilk sayfayı gösterir,
   /// yorum ise iki hafta önceki bir paylaşıma gelmiş olabilir. Sunucuya tek tek
@@ -69,7 +103,25 @@ class CommunityFeedController extends PagedController<CommunityPost> {
 
   FeedMode get mode => _source.mode;
 
-  Future<void> load() => loadInitial();
+  /// O sekmede en son ne okunduğu. Açık sekme için canlı liste, ötekiler için
+  /// hatırlanan liste: kaydırırken karşıya geçen sayfa boş gelmiyor.
+  List<CommunityPost> itemsFor(FeedMode mode) =>
+      mode == _source.mode ? items : (_memory[mode]?.items ?? const []);
+
+  /// O sekmede yükleme sürüyor mu. Boş liste iki ayrı şey olabiliyor: henüz
+  /// gelmedi ya da gerçekten boş. İkisine aynı ekranı göstermek, birincisini
+  /// bir yokluk gibi anlatmak olurdu.
+  bool isLoadingMode(FeedMode mode) =>
+      mode == _source.mode &&
+      (state == PagedLoadState.loading || state == PagedLoadState.refreshing) &&
+      items.isEmpty;
+
+  /// O sekme cevapsız mı kaldı. Yalnızca açık sekme için sorulabilir; kapalı
+  /// bir sekme hakkında söylenecek bir şey yok.
+  bool hasFailedMode(FeedMode mode) =>
+      mode == _source.mode && state == PagedLoadState.failure && items.isEmpty;
+
+  Future<void> load() => _run((mode) => loadInitial());
 
   /// Sekme değişince liste sunucudan yeniden geliyor.
   ///
@@ -80,11 +132,49 @@ class CommunityFeedController extends PagedController<CommunityPost> {
   /// sorunun yanlış cevabıydı.
   Future<void> setMode(FeedMode mode) async {
     if (_source.mode == mode) return;
+    _remember(_source.mode);
     _source.mode = mode;
+    final remembered = _memory[mode];
+    if (remembered != null) {
+      // Sekme anında açılıyor: elde olan liste geri konuyor, tazeliği arkadan
+      // kontrol ediliyor. Bekleyen bir liste varken boş ekran göstermek,
+      // okunmuş bir sayfayı saklamaktan başka bir şey değil.
+      restoreItems(remembered.items, cursor: remembered.cursor);
+      if (remembered.isStale) unawaited(_run((_) => refresh()));
+      return;
+    }
     // Önceki sekmenin gönderileri yeni sekmenin altında beklemesin: yanlış
     // listeyi bir an gostermek, boş bir liste göstermekten daha kafa karıştırıcı.
+    invalidate();
     replaceItems(const []);
-    await loadInitial();
+    await _run((_) => loadInitial());
+  }
+
+  /// Sekmeye ait isteği sıraya alır ve cevabı doğru sekmeye yazar.
+  ///
+  /// Sıraya alınmasının sebebi: [PagedController.loadInitial] süren bir yükleme
+  /// varken sessizce geri dönüyor. Hızlı sekme değiştiren üyede son sekmenin
+  /// isteği böyle düşüyordu ve o sekme hiç dolmuyordu.
+  Future<void> _run(Future<void> Function(FeedMode mode) work) {
+    final mode = _source.mode;
+    final next = _queue.then((_) async {
+      // Sıra bize gelene kadar sekme yine değiştiyse bu istek artık kimsenin
+      // beklemediği bir cevap.
+      if (_source.mode != mode) return;
+      await work(mode);
+      if (_source.mode == mode) _remember(mode);
+    });
+    _queue = next;
+    return next;
+  }
+
+  void _remember(FeedMode mode) {
+    if (items.isEmpty) return;
+    _memory[mode] = _RememberedFeed(
+      items: items,
+      cursor: nextCursor,
+      fetchedAt: DateTime.now(),
+    );
   }
 
   Future<void> toggleLike(String postId) async {

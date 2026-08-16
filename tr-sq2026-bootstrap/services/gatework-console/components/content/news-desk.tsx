@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useMemo, useState } from 'react';
-import { BadgeCheck, Clock, ImageOff, Newspaper } from 'lucide-react';
+import { BadgeCheck, Clock, ImageOff, Newspaper, Rss } from 'lucide-react';
 import { apiData, errorText, formatDateTime } from '@/lib/api-client';
 import { NEWS_CATEGORIES, NEWS_CATEGORY_LABELS, type NewsSummary, type SystemAccount } from '@/lib/content-labels';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,7 @@ import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { PhonePreview, previewParagraphs } from '@/components/ui/phone-preview';
 import { ReasonDialog } from '@/components/ui/reason-dialog';
 import { Switch } from '@/components/ui/switch';
+import { ImageUpload, type UploadedImage } from './image-upload';
 
 /**
  * Haber Merkezi: write on the left, see the article on the right, and below it
@@ -45,6 +46,7 @@ export function NewsDesk({
   const [error, setError] = useState<string | null>(loadFailure);
   const [notice, setNotice] = useState<string | null>(null);
   const [retracting, setRetracting] = useState<NewsSummary | null>(null);
+  const [feedToggling, setFeedToggling] = useState<NewsSummary | null>(null);
 
   const active = accounts.filter((row) => row.active);
   const [authorId, setAuthorId] = useState(active[0]?.id ?? '');
@@ -52,10 +54,17 @@ export function NewsDesk({
   const [summary, setSummary] = useState('');
   const [body, setBody] = useState('');
   const [category, setCategory] = useState('gundem');
-  const [headlineRank, setHeadlineRank] = useState('');
-  const [heroMediaId, setHeroMediaId] = useState('');
+  // Manşet sırası artık boş başlamıyor. Boş bırakıldığında haber ana sayfadaki
+  // şeride hiç girmiyordu; editör alanı görmeden yayınlıyor, sonra "haberi
+  // ekledim ama ana sayfada yok" diye geri geliyordu. Varsayılan 1: yeni haber
+  // şeridin başına geçer, istemeyen alanı boşaltır.
+  const [headlineRank, setHeadlineRank] = useState('1');
+  const [hero, setHero] = useState<UploadedImage | null>(null);
   const [regionCode, setRegionCode] = useState('');
   const [commentsEnabled, setCommentsEnabled] = useState(true);
+  // Açık başlıyor: yayınlanan bir haberin akışta da görünmesi beklenen davranış.
+  // İstemeyen kapatır, karar sonradan da listeden değiştirilebiliyor.
+  const [shareToFeed, setShareToFeed] = useState(true);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -79,17 +88,20 @@ export function NewsDesk({
           summary: summary.trim(),
           body: body.trim(),
           category,
-          heroMediaId: heroMediaId.trim() || undefined,
+          heroMediaId: hero?.mediaId,
           regionCode: regionCode.trim() || undefined,
           // Empty means "not on the home screen". The strip is short on
           // purpose, so a rank is a decision rather than a default.
           headlineRank: headlineRank ? Number(headlineRank) : undefined,
           commentsEnabled,
+          shareToFeed,
           reason: reason.trim(),
         }),
       });
-      setTitle(''); setSummary(''); setBody(''); setHeadlineRank(''); setHeroMediaId(''); setReason('');
-      setNotice('Haber yayınlandı ve aşağıdaki listeye düştü.');
+      setTitle(''); setSummary(''); setBody(''); setHeadlineRank('1'); setHero(null); setReason('');
+      setNotice(shareToFeed
+        ? 'Haber yayınlandı, akışta da paylaşıma çıktı ve aşağıdaki listeye düştü.'
+        : 'Haber yayınlandı ve aşağıdaki listeye düştü.');
       await reload();
     } catch (caught) {
       setError(errorText(caught, 'Haber yayınlanamadı.'));
@@ -138,6 +150,15 @@ export function NewsDesk({
             : <Badge tone="warning" dot>İleri tarihli</Badge>,
       },
       {
+        id: 'feed',
+        header: 'Akış',
+        accessorFn: (row) => (row.inFeed ? 1 : 0),
+        cell: ({ row }) =>
+          row.original.inFeed
+            ? <Badge tone="brand" dot>Akışta</Badge>
+            : <span className="text-xs text-ink-faint">—</span>,
+      },
+      {
         id: 'engagement',
         header: 'Etkileşim',
         accessorFn: (row) => row.commentCount + row.reactionCount,
@@ -159,7 +180,12 @@ export function NewsDesk({
         enableSorting: false,
         cell: ({ row }) =>
           canPublish ? (
-            <Button size="sm" variant="danger" onClick={() => setRetracting(row.original)}>Geri çek</Button>
+            <div className="flex justify-end gap-2 whitespace-nowrap">
+              <Button size="sm" onClick={() => setFeedToggling(row.original)}>
+                {row.original.inFeed ? 'Akıştan al' : 'Akışa çıkar'}
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => setRetracting(row.original)}>Geri çek</Button>
+            </div>
           ) : null,
       },
     ],
@@ -207,35 +233,44 @@ export function NewsDesk({
                   <Textarea required rows={14} maxLength={BODY_LIMIT} value={body} onChange={(event) => setBody(event.target.value)} />
                 </Field>
 
+                <Field
+                  label="Kapak görseli"
+                  hint="Listede ve haberin başında görünür. Yükledikten sonra güvenlik taraması bitene kadar yayınlama düğmesi beklemede kalır."
+                >
+                  <ImageUpload ownerId={authorId} value={hero} onChange={setHero} disabled={busy} />
+                </Field>
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Kategori">
                     <Select value={category} onChange={(event) => setCategory(event.target.value)}>
                       {NEWS_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </Select>
                   </Field>
-                  <Field label="Manşet sırası" hint="Boşsa ana sayfada çıkmaz.">
+                  <Field label="Manşet sırası" hint="1 en üstte. Boşaltırsan haber yalnızca Haber Merkezi listesinde kalır, ana sayfa şeridine girmez.">
                     <Input type="number" min={1} max={20} placeholder="1" value={headlineRank} onChange={(event) => setHeadlineRank(event.target.value)} />
                   </Field>
                   <Field label="Eyalet kodu" hint="Boş bırakırsan ülke geneli.">
                     <Input maxLength={2} placeholder="NJ" value={regionCode} onChange={(event) => setRegionCode(event.target.value.toUpperCase())} />
                   </Field>
-                  <Field
-                    label="Görsel medya kimliği"
-                    // Honest about the gap: the console has no upload path, so
-                    // this is still an id that comes from somewhere else.
-                    hint="Panelde görsel yükleme yok; medya kimliği medya hattından gelir."
-                  >
-                    <Input placeholder="Taranmış medya kimliği" value={heroMediaId} onChange={(event) => setHeroMediaId(event.target.value)} />
-                  </Field>
                 </div>
 
-                <div className="rounded-lg border border-hairline bg-surface-raised px-4">
-                  <Switch
-                    label="Yorumlara açık"
-                    hint="Kapatırsan haber okunur ama altına yorum yazılamaz."
-                    checked={commentsEnabled}
-                    onCheckedChange={setCommentsEnabled}
-                  />
+                <div className="grid gap-px overflow-hidden rounded-lg border border-hairline bg-hairline">
+                  <div className="bg-surface-raised px-4">
+                    <Switch
+                      label="Yorumlara açık"
+                      hint="Kapatırsan haber okunur ama altına yorum yazılamaz."
+                      checked={commentsEnabled}
+                      onCheckedChange={setCommentsEnabled}
+                    />
+                  </div>
+                  <div className="bg-surface-raised px-4">
+                    <Switch
+                      label="Akışta da paylaş"
+                      hint="Haber, Haber Bülteni imzasıyla akışa da düşer. Beğeni ve yorum tek yerde tutulur: akıştaki kartla haber aynı sayıları gösterir."
+                      checked={shareToFeed}
+                      onCheckedChange={setShareToFeed}
+                    />
+                  </div>
                 </div>
 
                 <Field label="İşlem nedeni" hint="Denetim kaydına aynen yazılır.">
@@ -258,7 +293,8 @@ export function NewsDesk({
               body={body}
               category={category}
               authorName={active.find((row) => row.id === authorId)?.displayName ?? 'Resmî hesap'}
-              hasHero={heroMediaId.trim().length > 0}
+              heroUrl={hero?.url ?? null}
+              shareToFeed={shareToFeed}
             />
           </PhonePreview>
         </div>
@@ -275,6 +311,26 @@ export function NewsDesk({
           isRowUrgent={(row) => !row.live}
         />
       </div>
+
+      <ReasonDialog
+        open={feedToggling !== null}
+        onOpenChange={(open) => { if (!open) setFeedToggling(null); }}
+        title={feedToggling?.inFeed ? 'Haber akıştan alınacak' : 'Haber akışa çıkarılacak'}
+        description={feedToggling?.inFeed
+          ? `"${feedToggling?.title ?? ''}" akıştaki kartı kaldırılır. Haber geri çekilmez: Haber Merkezi'nde okunmaya devam eder, beğenileri ve yorumları olduğu gibi kalır.`
+          : `"${feedToggling?.title ?? ''}" akışta Haber Bülteni imzasıyla paylaşılır. Kartın altındaki beğeni ve yorumlar haberin kendi beğeni ve yorumlarıdır.`}
+        confirmLabel={feedToggling?.inFeed ? 'Akıştan al' : 'Akışa çıkar'}
+        onConfirm={async (text) => {
+          if (!feedToggling) return;
+          const enabled = !feedToggling.inFeed;
+          await apiData(`/api/content/news/${feedToggling.id}/feed`, {
+            method: 'PUT',
+            body: JSON.stringify({ enabled, reason: text }),
+          });
+          await reload();
+          setNotice(enabled ? 'Haber akışta paylaşıma çıktı.' : 'Haber akıştan alındı.');
+        }}
+      />
 
       <ReasonDialog
         open={retracting !== null}
@@ -295,23 +351,25 @@ export function NewsDesk({
 }
 
 function ArticlePreview({
-  title, summary, body, category, authorName, hasHero,
+  title, summary, body, category, authorName, heroUrl, shareToFeed,
 }: {
   title: string;
   summary: string;
   body: string;
   category: string;
   authorName: string;
-  hasHero: boolean;
+  heroUrl: string | null;
+  shareToFeed: boolean;
 }) {
   const paragraphs = previewParagraphs(body);
   return (
     <div className="px-4">
-      <div className="flex h-36 items-center justify-center rounded-2xl bg-[#1a1828]">
-        {hasHero ? (
-          // The console cannot resolve a media id to a picture, so it shows the
-          // slot rather than inventing an image that may not exist.
-          <p className="px-4 text-center text-[11px] text-ink-faint">Görsel medya kimliğinden gelecek</p>
+      <div className="flex h-36 items-center justify-center overflow-hidden rounded-2xl bg-[#1a1828]">
+        {heroUrl ? (
+          // Taranmış görselin kendisi: panel artık uygulamanın göstereceği
+          // dosyayı gösteriyor, "buraya bir görsel gelecek" yazısını değil.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={heroUrl} alt="" className="h-full w-full object-cover" />
         ) : (
           <div className="text-center">
             <ImageOff size={20} className="mx-auto text-ink-faint" />
@@ -339,7 +397,7 @@ function ArticlePreview({
         <p className="mt-3 text-[13px] leading-relaxed break-words text-[#a5a1b5] italic">{summary.trim()}</p>
       )}
 
-      <div className="mt-3 grid gap-3 pb-4">
+      <div className="mt-3 grid gap-3">
         {paragraphs.length === 0 ? (
           <p className="text-[13px] text-ink-faint italic">Metin yazdıkça paragraflar burada belirir.</p>
         ) : (
@@ -348,6 +406,34 @@ function ArticlePreview({
           ))
         )}
       </div>
+
+      {/* Akıştaki kart aynı haberin başka bir yüzü, ayrı bir paylaşım değil.
+          Editörün iki ekranı da görmesi, "akışa çıkardım ama nasıl göründü"
+          sorusunu uygulamayı açmadan cevaplıyor. */}
+      {shareToFeed && (
+        <div className="mt-5 border-t border-white/10 pt-4 pb-4">
+          <p className="mb-2 flex items-center gap-1.5 text-[10px] font-medium tracking-wide text-ink-faint uppercase">
+            <Rss size={11} /> Akıştaki kartı
+          </p>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500/25 text-[11px] font-semibold text-brand-300">H</div>
+              <div className="min-w-0">
+                <p className="truncate text-[12px] font-semibold text-white">Haber Bülteni</p>
+                <p className="text-[10px] text-ink-faint">şimdi</p>
+              </div>
+            </div>
+            <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed break-words text-[#d9d6e6]">
+              {summary.trim() || 'Özet alanı akıştaki kartın metni olur.'}
+            </p>
+            {heroUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={heroUrl} alt="" className="mt-2 h-24 w-full rounded-xl object-cover" />
+            )}
+            <p className="mt-2 text-[10px] text-ink-faint">♡ 0 · 💬 0 — haberin kendi beğeni ve yorumları</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

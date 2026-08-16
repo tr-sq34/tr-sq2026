@@ -222,4 +222,25 @@ class ApiAuthRepository implements AuthRepository, PasskeyRepository {
         'originCity': draft.originCity!.trim(),
     },
   );
+
+  @override
+  Future<void> freezeAccount() =>
+      _client.post<void>(ApiEndpoints.authAccountFreeze);
+
+  @override
+  Future<DateTime> requestAccountDeletion({required String password}) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.authAccountDelete,
+      data: {'password': password},
+    );
+    final raw = (response.data?['data'] as Map<String, dynamic>?)?['purgeAt'];
+    final parsed = raw is String ? DateTime.tryParse(raw) : null;
+    // Sunucu tarihi anlaşılmaz geldiyse uydurulmuyor: silme talebi kabul
+    // edilmiş olsa da ekranda yanlış bir "şu tarihe kadar vazgeçebilirsin"
+    // yazmaktansa istisna atıp nedenini söylemek daha doğru.
+    if (parsed == null) {
+      throw const FormatException('Silme tarihi sunucudan okunamadı.');
+    }
+    return parsed.toLocal();
+  }
 }

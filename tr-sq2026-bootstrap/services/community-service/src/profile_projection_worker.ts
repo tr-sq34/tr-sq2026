@@ -10,7 +10,7 @@ const db = createDatabasePool();
 const sbClient = new ServiceBusClient(connectionString);
 const receiver = sbClient.createReceiver(queueName, { receiveMode: 'peekLock' });
 
-type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; primaryIntent?: string | null; bornInUs?: boolean; arrivedMonth?: number | null; arrivedYear?: number | null; originCountry?: string | null; originCity?: string | null; identityVerified?: boolean; auctionSellerEligible?: boolean } };
+type Event = { eventId: string; eventType: 'community.profile_upserted' | 'community.member_capabilities_upserted' | 'community.account_status_changed'; payload: { userId: string; displayName?: string; city?: string; countryCode?: string; regionCode?: string | null; interests?: string[]; primaryIntent?: string | null; bornInUs?: boolean; arrivedMonth?: number | null; arrivedYear?: number | null; originCountry?: string | null; originCity?: string | null; identityVerified?: boolean; auctionSellerEligible?: boolean; status?: 'active' | 'frozen' | 'deletion_pending' } };
 
 /// Identity already range-checks these, but a projection that trusts its
 /// producer stores whatever a replayed bad payload contains. Out-of-range values
@@ -28,7 +28,7 @@ const originCityOrNull = (value: string | null | undefined) => {
 };
 
 async function processEvent(event: Event) {
-  if (!['community.profile_upserted','community.member_capabilities_upserted'].includes(event.eventType)) return;
+  if (!['community.profile_upserted','community.member_capabilities_upserted','community.account_status_changed'].includes(event.eventType)) return;
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -74,6 +74,22 @@ async function processEvent(event: Event) {
       // Finishing onboarding is the first task on the journey map, and it is
       // the one moment we know the member picked a city.
       await awardBadge(client, input.userId, 'jfk_welcomed');
+    }
+    // Hesabin acilip kapanmasi. Projeksiyon satiri yoksa hicbir sey yapilmiyor:
+    // henuz kurulumu bitirmemis bir uyenin burada satiri olmaz ve olmayan bir
+    // satiri "kapali" diye yaratmak, hic var olmamis bir profili kapatilmis
+    // gibi gostermek olurdu.
+    if (inserted.rowCount && event.eventType === 'community.account_status_changed') {
+      const status = event.payload.status;
+      if (status !== 'active' && status !== 'frozen' && status !== 'deletion_pending') {
+        throw new Error('Invalid account status event');
+      }
+      await client.query(
+        status === 'active'
+          ? 'UPDATE community_profile_projection SET closed_at=NULL,closed_reason=NULL,updated_at=now() WHERE user_id=$1'
+          : 'UPDATE community_profile_projection SET closed_at=COALESCE(closed_at, now()),closed_reason=$2,updated_at=now() WHERE user_id=$1',
+        status === 'active' ? [event.payload.userId] : [event.payload.userId, status],
+      );
     }
     if (inserted.rowCount && event.eventType === 'community.member_capabilities_upserted') {
       await client.query(`INSERT INTO member_capabilities(user_id,identity_verified,auction_seller_eligible) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET identity_verified=EXCLUDED.identity_verified,auction_seller_eligible=EXCLUDED.auction_seller_eligible,updated_at=now()`, [event.payload.userId, event.payload.identityVerified === true, event.payload.auctionSellerEligible === true]);

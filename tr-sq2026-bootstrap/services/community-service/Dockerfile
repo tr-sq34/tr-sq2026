@@ -4,6 +4,9 @@ COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci
 COPY src ./src
 COPY migrations ./migrations
+# Acilis kartlarinin gorselleri: uye medyasi degil, servisin kendi sundugu dort
+# dosya. Imajda olmazlarsa serit cizilir ama kartlar bos kare olur.
+COPY assets ./assets
 RUN npm run build
 # The container runs in private subnets, but PostgreSQL TLS is still verified
 # against AWS' RDS trust store. The public CA bundle is copied into the final
@@ -24,6 +27,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
+COPY --from=build /app/assets ./assets
 COPY --from=build /app/certs ./certs
 USER node
 EXPOSE 8081
