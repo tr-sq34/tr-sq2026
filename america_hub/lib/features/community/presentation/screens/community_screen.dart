@@ -182,6 +182,15 @@ class _FeedState extends State<_Feed> {
   /// Üç sekme yan yana duran üç sayfa: parmakla sağa sola kaydırmak da
   /// sekmeye dokunmakla aynı şeyi yapıyor.
   final _pageController = PageController();
+
+  /// Story rayini, editoru ve sekme seridini tasiyan dis kaydirmaya ulasmak
+  /// icin.
+  ///
+  /// Sekme degistirmek bu kaydirmayi oldugu yerde birakiyordu: asagida bir
+  /// yerdeyken "Takip ettiklerin"e basan uye, yeni sekmenin bos alanina
+  /// dusuyor ve ekranda hicbir sey degismemis gibi goruyordu. Sekme
+  /// degistirmek yeni bir listeye gecmek demek; yeni liste de bastan baslar.
+  final _feedKey = GlobalKey<NestedScrollViewState>();
   _FeedFilter _filter = _FeedFilter.forYou;
   /// Akıştaki kutu da alt bardaki ➕ da artık aynı editörü açıyor: iki ayrı
   /// düzenleyici, iki ayrı eksik demekti (tabakada anket sahteydi, tam ekran
@@ -304,10 +313,22 @@ class _FeedState extends State<_Feed> {
     super.dispose();
   }
 
+  /// Yeni sekmenin basina don.
+  void _showTopOfFeed() {
+    final outer = _feedKey.currentState?.outerController;
+    if (outer == null || !outer.hasClients || outer.offset <= 0) return;
+    outer.animateTo(
+      0,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
   void _selectFilter(_FeedFilter value) {
     if (value == _filter) return;
     setState(() => _filter = value);
     unawaited(widget.controller.setMode(value.mode));
+    _showTopOfFeed();
     if (!_pageController.hasClients) return;
     _pageController.animateToPage(
       value.index,
@@ -338,6 +359,7 @@ class _FeedState extends State<_Feed> {
           // sekme şeridi ise tepede kalıyor: yatay kaydırırken hangi
           // sekmede olduğunu görmek gerekiyor.
           child: NestedScrollView(
+            key: _feedKey,
             headerSliverBuilder: (context, _) => [
               SliverToBoxAdapter(
                 child: _StoryRail(
@@ -367,6 +389,7 @@ class _FeedState extends State<_Feed> {
                 final filter = _FeedFilter.values[value];
                 setState(() => _filter = filter);
                 unawaited(widget.controller.setMode(filter.mode));
+                _showTopOfFeed();
               },
               children: [
                 for (final filter in _FeedFilter.values) _feedPage(filter),
@@ -704,8 +727,11 @@ class _ReferenceFeedFilters extends StatelessWidget {
   final _FeedFilter selected;
   final ValueChanged<_FeedFilter> onSelected;
 
-  /// Şerit yatay kayıyor: üç etiket, büyük yazı tipi seçen bir cihazda ekrana
-  /// sığmıyor ve sabit bir satırda taşma çizgisine dönüşüyordu.
+  /// Üç sekme de ekranın içinde: şerit yatay kayıyordu ve dar bir telefonda
+  /// üçüncü sekme ("Takip ettiklerin") sağ kenarın dışında kalıyordu. Ekranın
+  /// dışına düşen bir düğmeye basılamaz; üyenin "basınca bir şey çıkmıyor"
+  /// dediği şey buydu. Üç eşit sütun her genişlikte görünür kalıyor, büyük yazı
+  /// tipi seçen cihazda etiket taşmak yerine küçülüyor.
   @override
   Widget build(BuildContext context) => Container(
     height: _feedFilterStripHeight,
@@ -713,29 +739,25 @@ class _ReferenceFeedFilters extends StatelessWidget {
       color: Colors.white,
       border: Border(bottom: BorderSide(color: Color(0xFFEFEFF3))),
     ),
-    // ListView değil: tembel liste görünmeyen sekmeyi hiç kurmuyor, dar bir
-    // ekranda üçüncü sekme ağaçta bile olmuyordu. Üç öğe için hepsini kurmanın
-    // maliyeti yok.
-    child: SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      // Sol boşluk kartlarınkiyle aynı: şerit kartların hizasında başlıyor.
-      padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
-      child: Row(
-        children: [
-          for (final filter in _FeedFilter.values) ...[
-            _ReferenceFilter(
+    // Sol boşluk kartlarınkiyle aynı: şerit kartların hizasında başlıyor.
+    padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+    child: Row(
+      children: [
+        for (final filter in _FeedFilter.values) ...[
+          Expanded(
+            child: _ReferenceFilter(
               label: filter.label,
               icon: filter.icon,
               active: selected == filter,
               onTap: () => onSelected(filter),
             ),
-            if (filter != _FeedFilter.values.last) const SizedBox(width: 8),
-          ],
-          // Sağda bir filtre düğmesi vardı, hiçbir şey yapmıyordu; sekmeler
-          // zaten filtrenin kendisi. Boş bir düğme, çalıştığını sanıp basan
-          // üyeye yalan söylüyor.
+          ),
+          if (filter != _FeedFilter.values.last) const SizedBox(width: 8),
         ],
-      ),
+        // Sağda bir filtre düğmesi vardı, hiçbir şey yapmıyordu; sekmeler
+        // zaten filtrenin kendisi. Boş bir düğme, çalıştığını sanıp basan
+        // üyeye yalan söylüyor.
+      ],
     ),
   );
 }
@@ -760,30 +782,35 @@ class _ReferenceFilter extends StatelessWidget {
     borderRadius: BorderRadius.circular(17),
     child: Container(
       height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: active ? const Color(0xFF6B54E8) : const Color(0xFFF1F1F4),
         borderRadius: BorderRadius.circular(17),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 14,
-            color: active ? Colors.white : const Color(0xFF706C78),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
+      // Sütun dar kalırsa etiket taşmıyor, küçülüyor: kesilen bir sekme adı
+      // hangi sekme olduğunu söylemiyor.
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 14,
               color: active ? Colors.white : const Color(0xFF706C78),
-              fontWeight: FontWeight.w700,
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: active ? Colors.white : const Color(0xFF706C78),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     ),
   );
