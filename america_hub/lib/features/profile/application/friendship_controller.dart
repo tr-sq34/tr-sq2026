@@ -162,6 +162,19 @@ class FriendshipController extends ChangeNotifier {
     return true;
   }
 
+  /// Bir üyeyle arasındaki bekleyen istek.
+  ///
+  /// Profil ekranı isteğe yanıt verebilmek için kimliğini bilmek zorunda ve
+  /// elindeki tek şey üyenin kimliği. `null` dönmesi "istek yok" demek değil,
+  /// "liste okunmamış ya da okunamamış" da olabilir; çağıran taraf ikisini
+  /// ayırt edebilsin diye [hasLoaded] ayrı duruyor.
+  FriendRequest? requestWith(String userId) {
+    for (final request in requests) {
+      if (request.userId == userId) return request;
+    }
+    return null;
+  }
+
   FriendRequest? _findRequest(String requestId) {
     for (final request in requests) {
       if (request.id == requestId) return request;

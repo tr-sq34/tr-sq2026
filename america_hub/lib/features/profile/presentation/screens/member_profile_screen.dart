@@ -395,21 +395,25 @@ class _Actions extends StatelessWidget {
             animation: friendshipController!,
             builder: (context, _) {
               final status = friendshipController!.statusOf(profile.id);
+              // Bu üç düğme uzun süre kapalıydı: durumu söylüyor, hiçbir şey
+              // yapmıyorlardı. "Sana istek gönderdi" yazan bir düğmeye basıp
+              // isteği kabul edememek en kötüsüydü — üyeyi zile geri
+              // gönderiyordu. Depoda dört yöntem de zaten vardı.
               return switch (status) {
                 FriendshipStatus.friends => OutlinedButton.icon(
-                  onPressed: null,
+                  onPressed: () => _openFriendMenu(context),
                   icon: const Icon(Icons.people_rounded, size: 18),
                   label: const Text('Arkadaşsınız'),
                 ),
                 FriendshipStatus.pendingOutgoing => OutlinedButton.icon(
-                  onPressed: null,
+                  onPressed: () => _withdrawRequest(context),
                   icon: const Icon(Icons.hourglass_bottom_rounded, size: 18),
                   label: const Text('İstek gönderildi'),
                 ),
-                FriendshipStatus.pendingIncoming => OutlinedButton.icon(
-                  onPressed: null,
+                FriendshipStatus.pendingIncoming => FilledButton.icon(
+                  onPressed: () => _answerRequest(context),
                   icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
-                  label: const Text('Sana istek gönderdi'),
+                  label: const Text('İsteği yanıtla'),
                 ),
                 FriendshipStatus.blocked => const SizedBox.shrink(),
                 FriendshipStatus.none => OutlinedButton.icon(
@@ -432,6 +436,194 @@ class _Actions extends StatelessWidget {
       ],
     ],
   );
+
+  /// Bekleyen isteğin kimliği.
+  ///
+  /// Profil ekranı yalnızca durumu okuyor; kimlik istek listesinde duruyor.
+  /// Liste okunmamışsa bir kez okunuyor, yine bulunamazsa üyeye sessiz bir
+  /// hiçbir şey değil, ne olduğu söyleniyor.
+  Future<FriendRequest?> _pendingRequest() async {
+    final controller = friendshipController!;
+    final known = controller.requestWith(profile.id);
+    if (known != null) return known;
+    await controller.load();
+    return controller.requestWith(profile.id);
+  }
+
+  Future<void> _answerRequest(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final request = await _pendingRequest();
+    if (!context.mounted) return;
+    if (request == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'İstek bilgisi okunamadı. Bağlantını kontrol edip tekrar dene.',
+          ),
+        ),
+      );
+      return;
+    }
+    final accepted = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Text(
+                '${profile.displayName} sana arkadaşlık isteği gönderdi.',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.check_rounded, color: AppColors.primary),
+              title: const Text('Kabul et'),
+              onTap: () => Navigator.of(sheetContext).pop(true),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.close_rounded,
+                color: AppColors.textMuted,
+              ),
+              title: const Text('Reddet'),
+              // Reddedilen istek karşı tarafa bildirilmiyor; ekranda da öyle
+              // yazıyor ki üye "haber gider mi" diye tereddüt etmesin.
+              subtitle: const Text(
+                'Karşı tarafa bildirilmez.',
+                style: TextStyle(fontSize: 11.5),
+              ),
+              onTap: () => Navigator.of(sheetContext).pop(false),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (accepted == null) return;
+    final done = await friendshipController!.respond(request.id, accepted);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          !done
+              ? friendshipController!.errorMessage ?? 'İstek yanıtlanamadı.'
+              : accepted
+              ? '${profile.displayName} ile arkadaş oldunuz.'
+              : 'İstek reddedildi.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _withdrawRequest(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final request = await _pendingRequest();
+    if (!context.mounted) return;
+    if (request == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'İstek bilgisi okunamadı. Bağlantını kontrol edip tekrar dene.',
+          ),
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('İsteği geri çek'),
+        content: Text(
+          '${profile.displayName} kişisine gönderdiğin arkadaşlık isteği geri '
+          'alınsın mı? Dilediğin zaman yeniden gönderebilirsin.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Geri çek'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final done = await friendshipController!.cancelRequest(request.id);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          done
+              ? 'İstek geri çekildi.'
+              : friendshipController!.errorMessage ?? 'İstek geri çekilemedi.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFriendMenu(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final remove = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Text(
+                '${profile.displayName} ile arkadaşsınız.',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.person_remove_outlined,
+                color: Color(0xFFB45309),
+              ),
+              title: const Text('Arkadaşlıktan çıkar'),
+              subtitle: const Text(
+                'Takip durumun değişmez, karşı tarafa bildirilmez.',
+                style: TextStyle(fontSize: 11.5),
+              ),
+              onTap: () => Navigator.of(sheetContext).pop(true),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (remove != true || !context.mounted) return;
+    final done = await friendshipController!.unfriend(profile.id);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          done
+              ? '${profile.displayName} arkadaş listenden çıkarıldı.'
+              : friendshipController!.errorMessage ??
+                    'Arkadaşlık kaldırılamadı.',
+        ),
+      ),
+    );
+  }
 
   Future<void> _sendRequest(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);

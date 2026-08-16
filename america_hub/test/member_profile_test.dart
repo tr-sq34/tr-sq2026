@@ -1,4 +1,7 @@
+import 'package:america_hub/features/profile/application/friendship_controller.dart';
 import 'package:america_hub/features/profile/application/profile_controller.dart';
+import 'package:america_hub/features/profile/domain/entities/friendship.dart';
+import 'package:america_hub/features/profile/domain/repositories/friendship_repository.dart';
 import 'package:america_hub/features/profile/domain/entities/user_profile.dart';
 import 'package:america_hub/features/profile/domain/repositories/profile_repository.dart';
 import 'package:america_hub/features/profile/presentation/screens/member_profile_screen.dart';
@@ -123,18 +126,152 @@ void main() {
     final save = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(save.onPressed, isNull);
   });
+
+  // Aşağıdaki üç düğme profilde durumu söylüyor ama kapalıydı. En kötüsü
+  // "Sana istek gönderdi"ydi: üye isteği görüyor, profilden kabul edemiyordu.
+  testWidgets('gelen arkadaşlık isteği profilden kabul ediliyor', (tester) async {
+    final friends = _FakeFriendship(FriendshipStatus.pendingIncoming);
+    await _pumpMember(tester, _FakeProfiles(_profile()), friends: friends);
+
+    await tester.tap(find.text('İsteği yanıtla'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kabul et'));
+    await tester.pumpAndSettle();
+
+    expect(friends.calls, contains('respond:request-1:true'));
+    expect(find.text('Elif Demir ile arkadaş oldunuz.'), findsOneWidget);
+  });
+
+  testWidgets('gönderilmiş istek profilden geri çekiliyor', (tester) async {
+    final friends = _FakeFriendship(FriendshipStatus.pendingOutgoing);
+    await _pumpMember(tester, _FakeProfiles(_profile()), friends: friends);
+
+    await tester.tap(find.text('İstek gönderildi'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Geri çek'));
+    await tester.pumpAndSettle();
+
+    expect(friends.calls, contains('cancel:request-1'));
+    expect(find.text('İstek geri çekildi.'), findsOneWidget);
+  });
+
+  testWidgets('arkadaşlık profilden kaldırılabiliyor', (tester) async {
+    final friends = _FakeFriendship(FriendshipStatus.friends);
+    await _pumpMember(tester, _FakeProfiles(_profile()), friends: friends);
+
+    await tester.tap(find.text('Arkadaşsınız'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Arkadaşlıktan çıkar'));
+    await tester.pumpAndSettle();
+
+    expect(friends.calls, contains('unfriend:member-elif'));
+    expect(find.text('Elif Demir arkadaş listenden çıkarıldı.'), findsOneWidget);
+  });
+
+  testWidgets('istek listesi okunamazsa düğme sessizce hiçbir şey yapmıyor', (
+    tester,
+  ) async {
+    final friends = _FakeFriendship(
+      FriendshipStatus.pendingIncoming,
+      failLists: true,
+    );
+    await _pumpMember(tester, _FakeProfiles(_profile()), friends: friends);
+
+    await tester.tap(find.text('İsteği yanıtla'));
+    await tester.pumpAndSettle();
+
+    // Kimliği bilinmeyen bir isteğe yanıt gönderilemez; sebebi yazılıyor.
+    expect(
+      find.text('İstek bilgisi okunamadı. Bağlantını kontrol edip tekrar dene.'),
+      findsOneWidget,
+    );
+    expect(friends.calls.where((call) => call.startsWith('respond')), isEmpty);
+  });
 }
 
-Future<void> _pumpMember(WidgetTester tester, _FakeProfiles repository) async {
+Future<void> _pumpMember(
+  WidgetTester tester,
+  _FakeProfiles repository, {
+  _FakeFriendship? friends,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: MemberProfileScreen(
         userId: 'member-elif',
         controller: ProfileController(repository: repository),
+        friendshipController: friends == null
+            ? null
+            : FriendshipController(repository: friends),
       ),
     ),
   );
   await tester.pumpAndSettle();
+}
+
+/// Sunucu yerine bellek. Yalnızca bu ekranın ihtiyacı olan kadarı: bir durum,
+/// bir bekleyen istek ve çağrıların kaydı.
+class _FakeFriendship implements FriendshipRepository {
+  _FakeFriendship(this._status, {this.failLists = false});
+
+  FriendshipStatus _status;
+  final bool failLists;
+  final List<String> calls = [];
+
+  @override
+  Future<FriendshipStatus> getStatus(String userId) async => _status;
+
+  @override
+  Future<FriendshipStatus> sendRequest(String userId) async {
+    calls.add('send:$userId');
+    return _status = FriendshipStatus.pendingOutgoing;
+  }
+
+  @override
+  Future<FriendshipStatus> respond(String requestId, bool accepted) async {
+    calls.add('respond:$requestId:$accepted');
+    return _status = accepted ? FriendshipStatus.friends : FriendshipStatus.none;
+  }
+
+  @override
+  Future<void> cancelRequest(String requestId) async {
+    calls.add('cancel:$requestId');
+    _status = FriendshipStatus.none;
+  }
+
+  @override
+  Future<void> unfriend(String userId) async {
+    calls.add('unfriend:$userId');
+    _status = FriendshipStatus.none;
+  }
+
+  @override
+  Future<void> block(String userId) async => calls.add('block:$userId');
+
+  @override
+  Future<List<FriendRequest>> getRequests() async {
+    if (failLists) throw Exception('offline');
+    if (_status != FriendshipStatus.pendingIncoming &&
+        _status != FriendshipStatus.pendingOutgoing) {
+      return const [];
+    }
+    return [
+      FriendRequest(
+        id: 'request-1',
+        userId: 'member-elif',
+        displayName: 'Elif Demir',
+        createdAt: DateTime(2026, 8, 13),
+        isIncoming: _status == FriendshipStatus.pendingIncoming,
+      ),
+    ];
+  }
+
+  @override
+  Future<List<FriendSummary>> getFriends([String? userId]) async {
+    if (failLists) throw Exception('offline');
+    return _status == FriendshipStatus.friends
+        ? const [FriendSummary(userId: 'member-elif', displayName: 'Elif Demir')]
+        : const [];
+  }
 }
 
 UserProfile _profile({
