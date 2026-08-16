@@ -46,4 +46,53 @@ void main() {
     // Şerit hâlâ orada: kaldırılan yalnızca ölü düğme.
     expect(find.text('Takip ettiklerin'), findsOneWidget);
   });
+
+  // Aşağıdayken sekme değiştiren üye, yeni sekmenin ortasında bir yere
+  // düşüyordu: Story rayı da editör de ekranın dışında kalıyor, kısa bir liste
+  // de boş alan olarak görünüyordu. Ekranda hiçbir şey değişmemiş gibi
+  // duruyordu - üyenin bildirdiği "basınca bir şey çıkmıyor" tam olarak buydu.
+  testWidgets('sekme degistirmek akisi basa alir', (tester) async {
+    await pumpShell(tester);
+    await tapTab(tester, 'Akış');
+    await tester.pump();
+
+    final feed = tester.state<NestedScrollViewState>(
+      find.byType(NestedScrollView).first,
+    );
+    await tester.dragFrom(const Offset(4, 520), const Offset(0, -240));
+    for (var frame = 0; frame < 5; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(feed.outerController.offset, greaterThan(0));
+
+    await tester.tap(find.text('Takip ettiklerin'));
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(feed.outerController.offset, 0);
+  });
+
+  // Şerit yatay kayan bir satırdı ve üçüncü sekme dar bir telefonda ekranın
+  // sağ kenarının dışında kalıyordu: görünmeyen düğmeye basılamıyor, basmayı
+  // deneyen üye de hiçbir şey olmadığını görüyordu.
+  testWidgets('uc sekme de ekranin icinde duruyor', (tester) async {
+    await pumpShell(tester);
+    await tapTab(tester, 'Akış');
+    await tester.pump();
+
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    for (final label in ['Senin İçin', 'Yakınındakiler', 'Takip ettiklerin']) {
+      final box = tester.getRect(find.text(label));
+      expect(box.left, greaterThanOrEqualTo(0), reason: '$label soldan taşıyor');
+      expect(box.right, lessThanOrEqualTo(screen), reason: '$label sağdan taşıyor');
+    }
+
+    // Görünür olması yetmez, dokunuşun da varması gerekiyor.
+    await tester.tap(find.text('Takip ettiklerin'));
+    for (var frame = 0; frame < 8; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(_chipColor(tester, 'Takip ettiklerin'), activeChip);
+  });
 }
