@@ -77,6 +77,11 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   void initState() {
     super.initState();
     _text.addListener(() => setState(() {}));
+    // Yükleme durumu ekranda görünmüyordu: küçük resim seçilir seçilmez
+    // yerleşiyor, arkada yükleme başarısız olsa bile aynı duruyordu. Üye
+    // fotoğrafı eklediğini görüyor, "Paylaş" diyor, akışta yalnızca yazı
+    // çıkıyordu.
+    widget.mediaUploadController.addListener(_onUploadsChanged);
     switch (widget.preset) {
       case PostComposerPreset.poll:
         _enablePoll();
@@ -93,11 +98,16 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
 
   @override
   void dispose() {
+    widget.mediaUploadController.removeListener(_onUploadsChanged);
     for (final option in _pollOptions) {
       option.dispose();
     }
     _text.dispose();
     super.dispose();
+  }
+
+  void _onUploadsChanged() {
+    if (mounted) setState(() {});
   }
 
   String get _hint => switch (widget.preset) {
@@ -158,12 +168,25 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
             localId: file.name,
             type: PostMediaType.image,
             fileName: file.name,
-            mimeType: 'image/jpeg',
+            mimeType: _mimeTypeOf(file),
             sizeBytes: bytes.length,
           ),
         ),
       );
     }
+  }
+
+  /// Seçilen dosyanın gerçek türü.
+  ///
+  /// Burada `image/jpeg` yazılı duruyordu. Galeriden gelen her dosya JPEG
+  /// değil; ekran görüntüleri PNG ve seçicinin sıkıştırması PNG'de çalışmıyor,
+  /// yani baytlar PNG kalıyor. Sunucuya "JPEG" diye beyan edilen bir PNG,
+  /// taramayı yapan tarafta beyan ettiğinden başka bir dosya demek.
+  String _mimeTypeOf(XFile file) {
+    final name = (file.mimeType ?? file.name).toLowerCase();
+    if (name.endsWith('.png') || name == 'image/png') return 'image/png';
+    if (name.endsWith('.webp') || name == 'image/webp') return 'image/webp';
+    return 'image/jpeg';
   }
 
   Future<void> _chooseLocation() async {
@@ -333,22 +356,55 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     );
   }
 
+  /// Paylaşımın neden şu an gönderilemeyeceği; gönderilebiliyorsa null.
+  ///
+  /// Eskiden burada bir yedek yol vardı: sunucuya yüklenmiş görsel yoksa
+  /// telefondaki dosya yolları `PostMedia` olarak drafta konuyordu. Sunucuya
+  /// giden istek yalnızca gerçek medya kimliklerini taşıdığı için o yol hiçbir
+  /// zaman bir görsel göndermedi; yalnızca "görsel eklendi" hissi verdi ve
+  /// paylaşım sessizce yazıya dönüştü. Yükleme bitmediyse ya da başarısızsa
+  /// paylaşımı durdurup nedenini söylemek, görseli düşürmekten iyidir.
+  String? _uploadBlocker() {
+    final progress = widget.mediaUploadController.progressById;
+    for (final item in _media) {
+      final state = progress[item.id];
+      if (state == null) {
+        return 'Görselin yüklemesi hiç başlamadı. Görseli kaldırıp tekrar ekler misin?';
+      }
+      switch (state.status) {
+        case MediaUploadStatus.pending:
+        case MediaUploadStatus.uploading:
+          return 'Görsel hâlâ yükleniyor. Bitmesini bekleyip paylaşabilirsin.';
+        case MediaUploadStatus.failed:
+        case MediaUploadStatus.rejected:
+          return state.errorMessage ?? 'Görsel yüklenemedi.';
+        case MediaUploadStatus.ready:
+          if (state.media == null) {
+            return 'Görselin sunucudaki adresi alınamadı; paylaşım görselsiz '
+                'gitmesin diye durduruldu.';
+          }
+      }
+    }
+    return null;
+  }
+
   Future<void> _publish() async {
+    if (_uploadBlocker() case final blocker?) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(blocker)));
+      return;
+    }
+    final progress = widget.mediaUploadController.progressById;
     final draft = CreatePostDraft(
       message: _text.text,
       visibility: _visibility,
       commentsPolicy: _comments,
-      media: widget.mediaUploadController.readyMedia.isEmpty
-          ? [
-              for (final item in _media)
-                PostMedia(
-                  id: item.id,
-                  type: item.type,
-                  url: item.path,
-                  previewBytes: item.bytes,
-                ),
-            ]
-          : widget.mediaUploadController.readyMedia,
+      // Sıra, üyenin seçtiği sıra: `readyMedia` bir Map'in değerlerinden
+      // geliyor ve o sırayı korumak zorunda değil.
+      media: [
+        for (final item in _media) ?progress[item.id]?.media,
+      ],
       taggedUsers: List.unmodifiable(_taggedUsers),
       location: _location,
       purpose: _purpose,
@@ -475,6 +531,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                     fit: BoxFit.cover,
                   ),
                 ),
+                _uploadOverlay(item),
                 Positioned(
                   top: 4,
                   right: 4,
@@ -500,6 +557,78 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
       ],
     ),
   );
+
+  /// Küçük resmin üzerindeki yükleme durumu.
+  ///
+  /// Hazır olan görselde hiçbir şey çizilmiyor: görüntünün kendisi zaten
+  /// "tamam" diyor. Yüklenirken oran, başarısızken nedeni ve tek dokunuşluk
+  /// bir "tekrar dene" var - çünkü başarısız yüklemenin çözümü paylaşımı
+  /// tekrar denemek değil, yüklemeyi tekrar denemek.
+  Widget _uploadOverlay(_PickedMedia item) {
+    final state = widget.mediaUploadController.progressById[item.id];
+    if (state == null || state.status == MediaUploadStatus.ready) {
+      return const SizedBox.shrink();
+    }
+    final failed =
+        state.status == MediaUploadStatus.failed ||
+        state.status == MediaUploadStatus.rejected;
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: failed
+            ? () {
+                widget.mediaUploadController.retry(item.id);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      state.errorMessage ?? 'Görsel yüklenemedi.',
+                    ),
+                  ),
+                );
+              }
+            : null,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: failed ? .55 : .35),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Center(
+            child: failed
+                ? const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.error_outline_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Yüklenemedi\nTekrar dene',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          height: 1.2,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  )
+                : SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: CircularProgressIndicator(
+                      value: state.fraction <= 0 ? null : state.fraction,
+                      strokeWidth: 3,
+                      color: Colors.white,
+                      backgroundColor: Colors.white24,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _pollEditor() => Container(
     margin: const EdgeInsets.only(top: 12),
